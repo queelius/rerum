@@ -51,3 +51,6 @@ Thumbs.db
 
 # Project specific
 .benchmarks/
+
+# MkDocs
+site/
