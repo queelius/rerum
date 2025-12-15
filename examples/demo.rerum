@@ -1,0 +1,20 @@
+#!/usr/bin/env rerum
+# RERUM Demo Script
+
+# Set prelude for constant folding
+:prelude full
+
+# Load algebra rules
+:load examples/algebra.rules
+
+# Define some additional rules inline
+@square: (square ?x) => (* :x :x)
+@double: (double ?x) => (+ :x :x)
+
+# Test expressions
+(+ x 0)
+(* y 1)
+(+ 2 3)
+(square 5)
+(double 7)
+(+ (* 2 3) (* 4 5))

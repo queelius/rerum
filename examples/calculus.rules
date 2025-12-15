@@ -1,0 +1,41 @@
+# Calculus Rules - Differentiation
+# dd represents d/d (derivative operator)
+
+[basic-derivatives]
+# Constants and variables
+@dd-const[100] "Derivative of constant is 0": (dd ?c:const ?v:var) => 0
+@dd-var-same[100] "d/dx(x) = 1": (dd ?x:var ?x) => 1
+@dd-var-diff[90] "d/dx(y) = 0 when y != x": (dd ?y:var ?x:var) => 0
+
+[linear-rules]
+# Sum and difference rules
+@dd-sum "Sum rule": (dd (+ ?f ?g) ?v:var) => (+ (dd :f :v) (dd :g :v))
+@dd-diff "Difference rule": (dd (- ?f ?g) ?v:var) => (- (dd :f :v) (dd :g :v))
+
+# Constant multiple rule
+@dd-const-mult "Constant multiple": (dd (* ?c:const ?f) ?v:var) => (* :c (dd :f :v))
+@dd-mult-const: (dd (* ?f ?c:const) ?v:var) => (* :c (dd :f :v))
+
+[product-rule]
+# Product rule: d/dx(f*g) = f'*g + f*g'
+@dd-product "Product rule": (dd (* ?f ?g) ?v:var) => (+ (* (dd :f :v) :g) (* :f (dd :g :v)))
+
+[quotient-rule]
+# Quotient rule: d/dx(f/g) = (f'*g - f*g') / g^2
+@dd-quotient "Quotient rule": (dd (/ ?f ?g) ?v:var) => (/ (- (* (dd :f :v) :g) (* :f (dd :g :v))) (^ :g 2))
+
+[chain-rule]
+# Power rule with chain rule: d/dx(f^n) = n*f^(n-1)*f'
+@dd-power "Power rule": (dd (^ ?f ?n:const) ?v:var) => (* :n (* (^ :f (- :n 1)) (dd :f :v)))
+
+# Exponential: d/dx(e^f) = e^f * f'
+@dd-exp "Exponential rule": (dd (exp ?f) ?v:var) => (* (exp :f) (dd :f :v))
+
+# Natural log: d/dx(ln f) = f'/f
+@dd-log "Logarithm rule": (dd (ln ?f) ?v:var) => (/ (dd :f :v) :f)
+
+[trig-derivatives]
+# Trigonometric derivatives
+@dd-sin: (dd (sin ?f) ?v:var) => (* (cos :f) (dd :f :v))
+@dd-cos: (dd (cos ?f) ?v:var) => (* (- (sin :f)) (dd :f :v))
+@dd-tan: (dd (tan ?f) ?v:var) => (* (^ (sec :f) 2) (dd :f :v))

@@ -1,0 +1,39 @@
+# Algebraic Simplification Rules
+# Organized by groups with priorities and guards
+
+[identity]
+# Identity rules - high priority to fire first
+@add-zero[100] "x + 0 = x": (+ ?x 0) => :x
+@add-zero-left[100]: (+ 0 ?x) => :x
+@mul-one[100] "x * 1 = x": (* ?x 1) => :x
+@mul-one-left[100]: (* 1 ?x) => :x
+@sub-zero[100]: (- ?x 0) => :x
+@div-one[100]: (/ ?x 1) => :x
+@pow-one[100]: (^ ?x 1) => :x
+@pow-zero[100]: (^ ?x 0) => 1
+
+[annihilator]
+# Annihilator rules - high priority
+@mul-zero[100] "x * 0 = 0": (* ?x 0) => 0
+@mul-zero-left[100]: (* 0 ?x) => 0
+
+[double]
+# Self-interaction rules
+@add-same[50]: (+ ?x ?x) => (* 2 :x)
+@sub-same[50]: (- ?x ?x) => 0
+@div-same[50]: (/ ?x ?x) => 1
+
+[constant-folding]
+# Constant folding - requires ARITHMETIC_PRELUDE
+# Uses guards to ensure operands are constants
+@fold-add: (+ ?a ?b) => (! + :a :b) when (! and (! const? :a) (! const? :b))
+@fold-sub: (- ?a ?b) => (! - :a :b) when (! and (! const? :a) (! const? :b))
+@fold-mul: (* ?a ?b) => (! * :a :b) when (! and (! const? :a) (! const? :b))
+@fold-div: (/ ?a ?b) => (! / :a :b) when (! and (! const? :a) (! const? :b))
+@fold-pow: (^ ?a ?b) => (! ^ :a :b) when (! and (! const? :a) (! const? :b))
+
+[negation]
+# Negation simplification
+@neg-neg: (- (- ?x)) => :x
+@neg-zero: (- 0) => 0
+@sub-to-add: (- ?x (- ?y)) => (+ :x :y)

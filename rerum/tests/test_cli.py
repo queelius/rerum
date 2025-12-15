@@ -1,0 +1,238 @@
+"""Tests for CLI module."""
+
+import subprocess
+import sys
+from pathlib import Path
+import pytest
+
+from rerum.cli import RerumREPL, ScriptRunner, load_custom_prelude, BUILTIN_PRELUDES
+
+
+class TestBuiltinPreludes:
+    """Tests for built-in prelude names."""
+
+    def test_builtin_prelude_names(self):
+        """All expected built-in preludes exist."""
+        expected = {"none", "minimal", "arithmetic", "math", "predicate", "full"}
+        assert set(BUILTIN_PRELUDES.keys()) == expected
+
+
+class TestREPLCommands:
+    """Tests for REPL command handling."""
+
+    def test_help_command(self):
+        """Help command returns help text."""
+        repl = RerumREPL()
+        result = repl.handle_command(":help")
+        assert "help" in result.lower()
+        assert "load" in result.lower()
+
+    def test_prelude_command(self):
+        """Prelude command sets prelude."""
+        repl = RerumREPL()
+        result = repl.handle_command(":prelude arithmetic")
+        assert "arithmetic" in result.lower()
+        assert repl.prelude is not None
+
+    def test_unknown_prelude(self):
+        """Unknown prelude returns error."""
+        repl = RerumREPL()
+        result = repl.handle_command(":prelude nonexistent")
+        assert "Unknown" in result
+
+    def test_trace_command(self):
+        """Trace command toggles tracing."""
+        repl = RerumREPL()
+        assert repl.trace == False
+
+        result = repl.handle_command(":trace on")
+        assert repl.trace == True
+        assert "enabled" in result.lower()
+
+        result = repl.handle_command(":trace off")
+        assert repl.trace == False
+        assert "disabled" in result.lower()
+
+    def test_trace_toggle(self):
+        """Trace command without arg toggles."""
+        repl = RerumREPL()
+        repl.handle_command(":trace")
+        assert repl.trace == True
+        repl.handle_command(":trace")
+        assert repl.trace == False
+
+    def test_strategy_command(self):
+        """Strategy command sets strategy."""
+        repl = RerumREPL()
+        result = repl.handle_command(":strategy bottomup")
+        assert repl.strategy == "bottomup"
+        assert "bottomup" in result.lower()
+
+    def test_unknown_strategy(self):
+        """Unknown strategy returns error."""
+        repl = RerumREPL()
+        result = repl.handle_command(":strategy invalid")
+        assert "Unknown" in result
+
+    def test_clear_command(self):
+        """Clear command removes all rules."""
+        repl = RerumREPL()
+        repl.process_line("@test: (f ?x) => :x")
+        assert len(repl.engine) == 1
+
+        repl.handle_command(":clear")
+        assert len(repl.engine) == 0
+
+    def test_rules_command_empty(self):
+        """Rules command with no rules."""
+        repl = RerumREPL()
+        result = repl.handle_command(":rules")
+        assert "No rules" in result
+
+    def test_rules_command_with_rules(self):
+        """Rules command lists rules."""
+        repl = RerumREPL()
+        repl.process_line("@test: (f ?x) => :x")
+        result = repl.handle_command(":rules")
+        assert "test" in result
+
+    def test_quit_command(self):
+        """Quit command sets running to False."""
+        repl = RerumREPL()
+        assert repl.running == True
+        repl.handle_command(":quit")
+        assert repl.running == False
+
+    def test_groups_command_empty(self):
+        """Groups command with no groups."""
+        repl = RerumREPL()
+        result = repl.handle_command(":groups")
+        assert "No groups" in result
+
+    def test_enable_disable_group(self):
+        """Enable/disable group commands work."""
+        repl = RerumREPL()
+        repl.handle_command(":disable testgroup")
+        assert "testgroup" in repl.engine._disabled_groups
+
+        repl.handle_command(":enable testgroup")
+        assert "testgroup" not in repl.engine._disabled_groups
+
+
+class TestREPLProcessLine:
+    """Tests for REPL line processing."""
+
+    def test_empty_line(self):
+        """Empty line returns None."""
+        repl = RerumREPL()
+        assert repl.process_line("") is None
+        assert repl.process_line("   ") is None
+
+    def test_comment_line(self):
+        """Comment line returns None."""
+        repl = RerumREPL()
+        assert repl.process_line("# comment") is None
+
+    def test_rule_definition(self):
+        """Rule definition adds rule."""
+        repl = RerumREPL()
+        result = repl.process_line("@add-zero: (+ ?x 0) => :x")
+        assert "Added" in result
+        assert len(repl.engine) == 1
+
+    def test_expression_evaluation(self):
+        """Expression is evaluated."""
+        repl = RerumREPL()
+        repl.process_line("@add-zero: (+ ?x 0) => :x")
+        result = repl.process_line("(+ y 0)")
+        assert result == "y"
+
+    def test_expression_unchanged(self):
+        """Expression that doesn't match returns unchanged."""
+        repl = RerumREPL()
+        result = repl.process_line("(f x)")
+        assert result == "(f x)"
+
+
+class TestScriptRunner:
+    """Tests for script execution."""
+
+    def test_run_expression(self):
+        """Run single expression."""
+        runner = ScriptRunner()
+        runner.repl.process_line("@add-zero: (+ ?x 0) => :x")
+
+        # Capture output by checking return code
+        # (expression output goes to stdout)
+        code = runner.run_expression("(+ y 0)")
+        assert code == 0
+
+
+class TestCLIIntegration:
+    """Integration tests using subprocess."""
+
+    def test_help_flag(self):
+        """--help flag works."""
+        result = subprocess.run(
+            [sys.executable, "-m", "rerum.cli", "--help"],
+            capture_output=True, text=True
+        )
+        assert result.returncode == 0
+        assert "RERUM" in result.stdout
+
+    def test_version_flag(self):
+        """--version flag works."""
+        result = subprocess.run(
+            [sys.executable, "-m", "rerum.cli", "--version"],
+            capture_output=True, text=True
+        )
+        assert result.returncode == 0
+        assert "0.1.0" in result.stdout
+
+    def test_expression_mode(self):
+        """Expression mode evaluates expression."""
+        result = subprocess.run(
+            [sys.executable, "-m", "rerum.cli", "-e", "(+ 1 2)"],
+            capture_output=True, text=True
+        )
+        assert result.returncode == 0
+        # Without rules, expression is unchanged
+        assert "(+ 1 2)" in result.stdout
+
+    def test_expression_with_prelude(self):
+        """Expression with prelude evaluates."""
+        result = subprocess.run(
+            [sys.executable, "-m", "rerum.cli", "-p", "full", "-e",
+             "@fold: (+ ?a ?b) => (! + :a :b) when (! and (! const? :a) (! const? :b))"],
+            capture_output=True, text=True
+        )
+        # Just defining a rule should work
+        assert result.returncode == 0
+
+    def test_pipe_mode(self):
+        """Pipe mode processes stdin."""
+        result = subprocess.run(
+            [sys.executable, "-m", "rerum.cli", "-q"],
+            input="(f x)\n(g y)\n",
+            capture_output=True, text=True
+        )
+        assert result.returncode == 0
+        assert "(f x)" in result.stdout
+        assert "(g y)" in result.stdout
+
+
+class TestCustomPreludeLoading:
+    """Tests for custom prelude loading."""
+
+    def test_load_nonexistent_prelude(self):
+        """Loading nonexistent prelude returns None."""
+        result = load_custom_prelude("/nonexistent/path.py")
+        assert result is None
+
+    def test_load_builtin_prelude_names(self):
+        """Built-in names should not trigger file search."""
+        repl = RerumREPL()
+        assert repl.set_prelude("full") == True
+        assert repl.set_prelude("arithmetic") == True
+        assert repl.set_prelude("none") == True
+

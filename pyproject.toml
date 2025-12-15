@@ -1,0 +1,73 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "rerum"
+version = "0.1.0"
+description = "RERUM - Rewriting Expressions via Rules Using Morphisms"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+authors = [
+    { name = "spinoza" },
+]
+keywords = [
+    "symbolic",
+    "rewriting",
+    "pattern-matching",
+    "term-rewriting",
+    "s-expressions",
+    "dsl",
+    "symbolic-computation",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Mathematics",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+]
+
+[project.scripts]
+rerum = "rerum.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/spinoza/rerum"
+Documentation = "https://github.com/spinoza/rerum#readme"
+Repository = "https://github.com/spinoza/rerum"
+
+[tool.hatch.build.targets.wheel]
+packages = ["rerum"]
+
+[tool.pytest.ini_options]
+testpaths = ["rerum/tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v"
+
+[tool.coverage.run]
+source = ["rerum"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+]

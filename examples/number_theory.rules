@@ -1,0 +1,31 @@
+# Number Theory Rules
+# Requires custom_prelude.py
+
+[computation]
+# These rules enable computation of number theory functions
+@eval-gcd: (gcd ?a ?b) => (! gcd :a :b) when (! and (! const? :a) (! const? :b))
+@eval-lcm: (lcm ?a ?b) => (! lcm :a :b) when (! and (! const? :a) (! const? :b))
+@eval-mod: (mod ?a ?b) => (! mod :a :b) when (! and (! const? :a) (! const? :b))
+@eval-factorial: (factorial ?n) => (! factorial :n) when (! const? :n)
+@eval-floor: (floor ?x) => (! floor :x) when (! const? :x)
+@eval-ceil: (ceil ?x) => (! ceil :x) when (! const? :x)
+
+[predicates]
+# Predicate evaluation
+@eval-even: (even? ?x) => (! even? :x) when (! const? :x)
+@eval-odd: (odd? ?x) => (! odd? :x) when (! const? :x)
+@eval-positive: (positive? ?x) => (! positive? :x) when (! const? :x)
+@eval-negative: (negative? ?x) => (! negative? :x) when (! const? :x)
+@eval-zero: (zero? ?x) => (! zero? :x) when (! const? :x)
+
+[identities]
+# Mathematical identities
+@gcd-same: (gcd ?x ?x) => :x
+@gcd-one: (gcd ?x 1) => 1
+@gcd-one-left: (gcd 1 ?x) => 1
+@lcm-same: (lcm ?x ?x) => :x
+@lcm-one: (lcm ?x 1) => :x
+@lcm-one-left: (lcm 1 ?x) => :x
+@mod-same: (mod ?x ?x) => 0
+@factorial-zero: (factorial 0) => 1
+@factorial-one: (factorial 1) => 1
