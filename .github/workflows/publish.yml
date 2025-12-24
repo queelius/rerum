@@ -48,25 +48,8 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
-        # Uses trusted publishing - no API token needed
-        # Configure at: https://pypi.org/manage/project/rerum/settings/publishing/
-
-  publish-testpypi:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: testpypi
-      url: https://test.pypi.org/project/rerum/
-
-    steps:
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
         with:
-          name: dist
-          path: dist/
-
-      - name: Publish to TestPyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          repository-url: https://test.pypi.org/legacy/
-        # Configure at: https://test.pypi.org/manage/project/rerum/settings/publishing/
+          # Uses trusted publishing if configured, otherwise falls back to API token
+          password: ${{ secrets.PYPI_API_TOKEN }}
+        # For trusted publishing, configure at:
+        # https://pypi.org/manage/account/publishing/
