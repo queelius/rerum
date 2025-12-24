@@ -268,3 +268,182 @@ class TestIntegration:
             assert bindings["b"] == "y"
         else:
             pytest.fail("Should have matched")
+
+
+class TestExport:
+    """Tests for RuleEngine export methods: to_dsl, to_json, to_dict."""
+
+    def test_to_dsl_basic(self):
+        """to_dsl() exports simple rules correctly."""
+        engine = RuleEngine.from_dsl('''
+            @add-zero: (+ ?x 0) => :x
+            @mul-one: (* ?x 1) => :x
+        ''')
+
+        dsl = engine.to_dsl()
+        assert "@add-zero: (+ ?x 0) => :x" in dsl
+        assert "@mul-one: (* ?x 1) => :x" in dsl
+
+    def test_to_dsl_with_priority(self):
+        """to_dsl() includes priority when non-zero."""
+        engine = RuleEngine.from_dsl('''
+            @high[100]: (+ ?x 0) => :x
+            @low[10]: (* ?x 1) => :x
+        ''')
+
+        dsl = engine.to_dsl()
+        assert "@high[100]:" in dsl
+        assert "@low[10]:" in dsl
+
+    def test_to_dsl_with_condition(self):
+        """to_dsl() includes when clause for conditional rules."""
+        engine = RuleEngine.from_dsl('''
+            @fold: (+ ?a ?b) => (! + :a :b) when (! and (! const? :a) (! const? :b))
+        ''')
+
+        dsl = engine.to_dsl()
+        assert "when" in dsl
+        assert "(! and (! const? :a) (! const? :b))" in dsl
+
+    def test_to_dsl_with_groups(self):
+        """to_dsl() organizes rules by groups."""
+        engine = RuleEngine.from_dsl('''
+            [algebra]
+            @add-zero: (+ ?x 0) => :x
+
+            [calculus]
+            @dd-const: (dd ?c:const ?v) => 0
+        ''')
+
+        dsl = engine.to_dsl()
+        assert "[algebra]" in dsl
+        assert "[calculus]" in dsl
+
+    def test_to_dsl_with_name(self):
+        """to_dsl() includes name as comment header."""
+        engine = RuleEngine.from_dsl("@rule: (f ?x) => :x")
+
+        dsl = engine.to_dsl(name="My Ruleset")
+        assert "# My Ruleset" in dsl
+
+    def test_to_json_basic(self):
+        """to_json() exports rules in JSON format."""
+        import json
+        engine = RuleEngine.from_dsl('''
+            @add-zero: (+ ?x 0) => :x
+        ''')
+
+        json_str = engine.to_json()
+        data = json.loads(json_str)
+
+        assert "rules" in data
+        assert len(data["rules"]) == 1
+        assert data["rules"][0]["name"] == "add-zero"
+        assert data["rules"][0]["pattern"] == ["+", ["?", "x"], 0]
+        assert data["rules"][0]["skeleton"] == [":", "x"]
+
+    def test_to_json_with_metadata(self):
+        """to_json() includes name and description."""
+        import json
+        engine = RuleEngine.from_dsl("@rule: (f ?x) => :x")
+
+        json_str = engine.to_json(name="TestRules", description="A test ruleset")
+        data = json.loads(json_str)
+
+        assert data["name"] == "TestRules"
+        assert data["description"] == "A test ruleset"
+
+    def test_to_json_with_priority_and_condition(self):
+        """to_json() includes priority and condition."""
+        import json
+        engine = (RuleEngine()
+            .with_prelude(ARITHMETIC_PRELUDE)
+            .load_dsl('''
+                @fold[100]: (+ ?a ?b) => (! + :a :b) when (! and (! const? :a) (! const? :b))
+            '''))
+
+        json_str = engine.to_json()
+        data = json.loads(json_str)
+
+        rule = data["rules"][0]
+        assert rule["priority"] == 100
+        assert "condition" in rule
+
+    def test_to_json_compact(self):
+        """to_json() supports compact output."""
+        engine = RuleEngine.from_dsl("@rule: (f ?x) => :x")
+
+        json_str = engine.to_json(indent=None)
+        assert "\n" not in json_str  # No newlines in compact JSON
+
+    def test_to_dict_basic(self):
+        """to_dict() returns a dictionary."""
+        engine = RuleEngine.from_dsl("@add-zero: (+ ?x 0) => :x")
+
+        d = engine.to_dict()
+        assert isinstance(d, dict)
+        assert "rules" in d
+        assert len(d["rules"]) == 1
+
+    def test_to_dict_complete_fields(self):
+        """to_dict() includes all rule fields."""
+        engine = RuleEngine.from_dsl('''
+            [mygroup]
+            @myrule[50] "A description": (+ ?x 0) => :x when (! const? :x)
+        ''')
+
+        d = engine.to_dict()
+        rule = d["rules"][0]
+
+        assert rule["name"] == "myrule"
+        assert rule["description"] == "A description"
+        assert rule["priority"] == 50
+        assert rule["tags"] == ["mygroup"]
+        assert "condition" in rule
+
+    def test_roundtrip_json(self):
+        """Rules can be exported to JSON and reimported."""
+        import json
+        original = RuleEngine.from_dsl('''
+            [algebra]
+            @add-zero[100]: (+ ?x 0) => :x
+            @mul-one[50]: (* ?x 1) => :x
+        ''')
+
+        # Export to JSON
+        json_str = original.to_json()
+
+        # Reimport
+        restored = RuleEngine()
+        data = json.loads(json_str)
+        from rerum.engine import load_rules_from_json
+        parsed = load_rules_from_json(json_str)
+        for meta, rule in parsed:
+            restored._rules.append(rule)
+            restored._metadata.append(meta)
+            if meta.name:
+                restored._rule_names[meta.name] = len(restored._rules) - 1
+
+        # Verify structure
+        assert len(restored) == len(original)
+        assert "add-zero" in restored
+        assert "mul-one" in restored
+
+        # Verify priority preserved
+        _, meta1 = restored["add-zero"]
+        assert meta1.priority == 100
+
+        # Verify tags preserved
+        assert "algebra" in meta1.tags
+
+    def test_list_rules_format(self):
+        """list_rules() returns DSL-formatted strings."""
+        engine = RuleEngine.from_dsl('''
+            @add-zero[100] "Adding zero": (+ ?x 0) => :x when (! expr? :x)
+        ''')
+
+        rules = engine.list_rules()
+        assert len(rules) == 1
+        assert "@add-zero[100]" in rules[0]
+        assert '"Adding zero"' in rules[0]
+        assert "when" in rules[0]

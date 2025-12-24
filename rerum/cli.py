@@ -115,6 +115,119 @@ def load_custom_prelude(name_or_path: str) -> Optional[FoldFuncsType]:
     return None
 
 
+class RerumCompleter:
+    """Tab completer for RERUM REPL."""
+
+    # Commands that can be completed
+    COMMANDS = [
+        ":help", ":quit", ":exit", ":q",
+        ":load", ":rules", ":clear",
+        ":prelude", ":trace", ":strategy",
+        ":groups", ":enable", ":disable",
+    ]
+
+    STRATEGIES = ["exhaustive", "once", "bottomup", "topdown"]
+    TRACE_OPTIONS = ["on", "off"]
+
+    def __init__(self, repl: 'RerumREPL'):
+        self.repl = repl
+
+    def complete(self, text: str, state: int) -> Optional[str]:
+        """Return the next possible completion for 'text'."""
+        if state == 0:
+            # Build completion list on first call
+            line = readline.get_line_buffer() if HAS_READLINE else ""
+            self.matches = self._get_matches(text, line)
+
+        try:
+            return self.matches[state]
+        except IndexError:
+            return None
+
+    def _get_matches(self, text: str, line: str) -> list:
+        """Get list of matches for the current input."""
+        line = line.lstrip()
+
+        # After :prelude, complete prelude names (check before general command completion)
+        if line.startswith(":prelude "):
+            prelude_names = list(BUILTIN_PRELUDES.keys())
+            return [p for p in prelude_names if p.startswith(text)]
+
+        # After :strategy, complete strategy names
+        if line.startswith(":strategy "):
+            return [s for s in self.STRATEGIES if s.startswith(text)]
+
+        # After :trace, complete on/off
+        if line.startswith(":trace "):
+            return [t for t in self.TRACE_OPTIONS if t.startswith(text)]
+
+        # After :enable or :disable, complete group names
+        if line.startswith(":enable ") or line.startswith(":disable "):
+            groups = list(self.repl.engine.groups())
+            return [g for g in groups if g.startswith(text)]
+
+        # After :load, complete file paths
+        if line.startswith(":load "):
+            return self._complete_path(text)
+
+        # Command completion (only if text starts with : or line is just starting a command)
+        if text.startswith(":") or (line.startswith(":") and " " not in line):
+            return [c for c in self.COMMANDS if c.startswith(text)]
+
+        # In expression context, complete rule names for reference
+        if text.startswith("@"):
+            rule_names = ["@" + name for name in self.repl.engine._rule_names.keys()]
+            return [r for r in rule_names if r.startswith(text)]
+
+        return []
+
+    def _complete_path(self, text: str) -> list:
+        """Complete file paths."""
+        import glob
+
+        # Handle empty text
+        if not text:
+            text = "./"
+
+        # Add wildcard for glob matching
+        pattern = text + "*"
+
+        matches = []
+        for path in glob.glob(pattern):
+            if Path(path).is_dir():
+                matches.append(path + "/")
+            else:
+                matches.append(path)
+
+        return matches
+
+
+def count_parens(text: str) -> int:
+    """Count unbalanced parentheses. Returns >0 if more open than close."""
+    depth = 0
+    in_string = False
+    escape = False
+
+    for c in text:
+        if escape:
+            escape = False
+            continue
+        if c == '\\':
+            escape = True
+            continue
+        if c == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if c == '(':
+            depth += 1
+        elif c == ')':
+            depth -= 1
+
+    return depth
+
+
 class RerumREPL:
     """Interactive REPL for rerum."""
 
@@ -124,8 +237,9 @@ class RerumREPL:
         self.trace = False
         self.strategy = "exhaustive"
         self.running = True
+        self.multi_line_buffer = ""
 
-        # Set up readline history
+        # Set up readline history and completion
         if HAS_READLINE:
             self.history_file = Path.home() / ".rerum_history"
             try:
@@ -133,6 +247,14 @@ class RerumREPL:
             except FileNotFoundError:
                 pass
             readline.set_history_length(1000)
+
+            # Set up tab completion
+            self.completer = RerumCompleter(self)
+            readline.set_completer(self.completer.complete)
+            readline.parse_and_bind("tab: complete")
+
+            # Configure completion delimiters (don't break on colons for commands)
+            readline.set_completer_delims(" \t\n")
 
     def save_history(self):
         """Save readline history."""
@@ -331,19 +453,55 @@ Syntax:
         """Run the REPL loop."""
         print("RERUM - Rewriting Expressions via Rules Using Morphisms")
         print("Type :help for help, :quit to exit")
+        print("Multi-line input: expressions with unbalanced parens continue on next line")
         print()
 
         while self.running:
             try:
-                line = input("rerum> ")
-                result = self.process_line(line)
+                # Determine prompt based on whether we're in multi-line mode
+                if self.multi_line_buffer:
+                    prompt = "...... "
+                else:
+                    prompt = "rerum> "
+
+                line = input(prompt)
+
+                # Handle multi-line input
+                if self.multi_line_buffer:
+                    self.multi_line_buffer += "\n" + line
+                else:
+                    self.multi_line_buffer = line
+
+                # Check if we have balanced parentheses
+                paren_count = count_parens(self.multi_line_buffer)
+
+                if paren_count > 0:
+                    # More open parens than close - continue reading
+                    continue
+                elif paren_count < 0:
+                    # More close parens than open - syntax error
+                    print("Error: Unbalanced parentheses (too many closing)")
+                    self.multi_line_buffer = ""
+                    continue
+
+                # Process the complete input
+                complete_input = self.multi_line_buffer
+                self.multi_line_buffer = ""
+
+                result = self.process_line(complete_input)
                 if result:
                     print(result)
+
             except EOFError:
                 print()
                 break
             except KeyboardInterrupt:
-                print()
+                # Cancel multi-line input on Ctrl+C
+                if self.multi_line_buffer:
+                    print("\nInput cancelled")
+                    self.multi_line_buffer = ""
+                else:
+                    print()
                 continue
 
         self.save_history()

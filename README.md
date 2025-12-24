@@ -1,5 +1,10 @@
 # RERUM
 
+[![PyPI version](https://badge.fury.io/py/rerum.svg)](https://badge.fury.io/py/rerum)
+[![CI](https://github.com/queelius/rerum/actions/workflows/ci.yml/badge.svg)](https://github.com/queelius/rerum/actions/workflows/ci.yml)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 **Rewriting Expressions via Rules Using Morphisms**
 
 A pattern matching and term rewriting library for symbolic computation in Python.

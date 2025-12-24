@@ -437,19 +437,31 @@ def parse_rule_line(line: str) -> Optional[Tuple[RuleMetadata, ExprType, ExprTyp
     return (metadata, pattern, skeleton)
 
 
-def load_rules_from_dsl(text: str) -> List[Tuple[RuleMetadata, List]]:
+def load_rules_from_dsl(
+    text: str,
+    base_path: Optional[Path] = None,
+    _included_files: Optional[set] = None
+) -> List[Tuple[RuleMetadata, List]]:
     """
     Load rules from DSL text.
 
-    Supports named groups with [groupname] syntax:
+    Supports:
+    - Named groups: [groupname]
+    - File includes: :include path/to/file.rules
+
+    Example:
         [algebra]
         @add-zero: (+ ?x 0) => :x
 
-        [calculus]
-        @dd-const: (dd ?c:const ?v) => 0
+        :include calculus.rules
+
+        [simplify]
+        @fold: (* ?a ?b) => (! * :a :b)
 
     Args:
         text: DSL text containing rules
+        base_path: Base path for resolving relative :include paths
+        _included_files: Internal tracking for circular include detection
 
     Returns:
         List of (metadata, [pattern, skeleton]) tuples
@@ -457,12 +469,46 @@ def load_rules_from_dsl(text: str) -> List[Tuple[RuleMetadata, List]]:
     rules = []
     current_group = None
 
+    # Track included files to prevent circular includes
+    if _included_files is None:
+        _included_files = set()
+
     for line in text.split('\n'):
         line_stripped = line.strip()
 
         # Check for group declaration: [groupname]
         if line_stripped.startswith('[') and line_stripped.endswith(']'):
             current_group = line_stripped[1:-1].strip()
+            continue
+
+        # Check for include directive: :include path
+        if line_stripped.startswith(':include '):
+            include_path_str = line_stripped[9:].strip()
+            if include_path_str:
+                # Resolve relative to base_path if provided
+                if base_path:
+                    include_path = base_path / include_path_str
+                else:
+                    include_path = Path(include_path_str)
+
+                # Resolve to absolute path for cycle detection
+                abs_path = include_path.resolve()
+                if abs_path in _included_files:
+                    raise ValueError(f"Circular include detected: {include_path}")
+
+                if include_path.exists():
+                    _included_files.add(abs_path)
+                    included_rules = load_rules_from_file(
+                        include_path,
+                        _included_files=_included_files
+                    )
+                    # Apply current group to included rules that don't have tags
+                    for meta, rule in included_rules:
+                        if current_group and not meta.tags:
+                            meta.tags.append(current_group)
+                    rules.extend(included_rules)
+                else:
+                    raise FileNotFoundError(f"Include file not found: {include_path}")
             continue
 
         result = parse_rule_line(line)
@@ -475,12 +521,19 @@ def load_rules_from_dsl(text: str) -> List[Tuple[RuleMetadata, List]]:
     return rules
 
 
-def load_rules_from_file(path: Union[str, Path]) -> List[Tuple[RuleMetadata, List]]:
+def load_rules_from_file(
+    path: Union[str, Path],
+    _included_files: Optional[set] = None
+) -> List[Tuple[RuleMetadata, List]]:
     """
     Load rules from a .rules or .json file.
 
+    Supports :include directives for DSL files, resolving paths
+    relative to the containing file.
+
     Args:
         path: Path to the rules file
+        _included_files: Internal tracking for circular include detection
 
     Returns:
         List of (metadata, [pattern, skeleton]) tuples
@@ -491,7 +544,12 @@ def load_rules_from_file(path: Union[str, Path]) -> List[Tuple[RuleMetadata, Lis
     if path.suffix == '.json':
         return load_rules_from_json(text)
     else:
-        return load_rules_from_dsl(text)
+        # Pass the parent directory as base_path for resolving includes
+        return load_rules_from_dsl(
+            text,
+            base_path=path.parent,
+            _included_files=_included_files
+        )
 
 
 def load_rules_from_json(text: str) -> List[Tuple[RuleMetadata, List]]:
@@ -503,7 +561,15 @@ def load_rules_from_json(text: str) -> List[Tuple[RuleMetadata, List]]:
             "name": "ruleset-name",
             "description": "optional ruleset description",
             "rules": [
-                {"name": "rule-name", "description": "...", "pattern": [...], "skeleton": [...]},
+                {
+                    "name": "rule-name",
+                    "description": "...",
+                    "pattern": [...],
+                    "skeleton": [...],
+                    "priority": 100,  # optional
+                    "condition": [...],  # optional guard expression
+                    "tags": ["group1"]  # optional
+                },
                 or just [pattern, skeleton]
             ]
         }
@@ -516,7 +582,9 @@ def load_rules_from_json(text: str) -> List[Tuple[RuleMetadata, List]]:
             metadata = RuleMetadata(
                 name=rule.get('name'),
                 description=rule.get('description'),
-                tags=rule.get('tags')
+                tags=rule.get('tags'),
+                priority=rule.get('priority', 0),
+                condition=rule.get('condition')
             )
             pattern = rule['pattern']
             skeleton = rule['skeleton']
@@ -1281,13 +1349,148 @@ class RuleEngine:
             pattern, skeleton = rule
             pattern_str = format_sexpr(pattern)
             skeleton_str = format_sexpr(skeleton)
-            if meta.name and meta.description:
-                result.append(f"@{meta.name} \"{meta.description}\": {pattern_str} => {skeleton_str}")
-            elif meta.name:
-                result.append(f"@{meta.name}: {pattern_str} => {skeleton_str}")
+
+            # Build rule name with optional priority
+            if meta.name:
+                if meta.priority != 0:
+                    name_part = f"@{meta.name}[{meta.priority}]"
+                else:
+                    name_part = f"@{meta.name}"
+                if meta.description:
+                    name_part += f" \"{meta.description}\""
+                name_part += ": "
             else:
-                result.append(f"{pattern_str} => {skeleton_str}")
+                name_part = ""
+
+            # Build rule body
+            rule_str = f"{name_part}{pattern_str} => {skeleton_str}"
+
+            # Add condition if present
+            if meta.condition:
+                rule_str += f" when {format_sexpr(meta.condition)}"
+
+            result.append(rule_str)
         return result
+
+    def to_dsl(self, name: Optional[str] = None) -> str:
+        """
+        Export rules to DSL format string.
+
+        Args:
+            name: Optional name to include as a comment header
+
+        Returns:
+            DSL-formatted string with all rules, organized by groups.
+        """
+        lines = []
+        if name:
+            lines.append(f"# {name}")
+            lines.append("")
+
+        # Group rules by their first tag (group)
+        current_group = None
+        for rule, meta in zip(self._rules, self._metadata):
+            # Check if we need a new group header
+            rule_group = meta.tags[0] if meta.tags else None
+            if rule_group != current_group:
+                if rule_group:
+                    if lines and lines[-1] != "":
+                        lines.append("")
+                    lines.append(f"[{rule_group}]")
+                current_group = rule_group
+
+            # Format the rule
+            pattern, skeleton = rule
+            pattern_str = format_sexpr(pattern)
+            skeleton_str = format_sexpr(skeleton)
+
+            if meta.name:
+                if meta.priority != 0:
+                    name_part = f"@{meta.name}[{meta.priority}]"
+                else:
+                    name_part = f"@{meta.name}"
+                if meta.description:
+                    name_part += f" \"{meta.description}\""
+                name_part += ": "
+            else:
+                name_part = ""
+
+            rule_str = f"{name_part}{pattern_str} => {skeleton_str}"
+            if meta.condition:
+                rule_str += f" when {format_sexpr(meta.condition)}"
+
+            lines.append(rule_str)
+
+        return "\n".join(lines)
+
+    def to_json(self, name: Optional[str] = None, description: Optional[str] = None,
+                indent: Optional[int] = 2) -> str:
+        """
+        Export rules to JSON format string.
+
+        Args:
+            name: Optional ruleset name
+            description: Optional ruleset description
+            indent: JSON indentation (None for compact)
+
+        Returns:
+            JSON-formatted string compatible with load_rules_from_json().
+        """
+        rules_list = []
+        for rule, meta in zip(self._rules, self._metadata):
+            pattern, skeleton = rule
+            rule_dict = {
+                "pattern": pattern,
+                "skeleton": skeleton,
+            }
+            if meta.name:
+                rule_dict["name"] = meta.name
+            if meta.description:
+                rule_dict["description"] = meta.description
+            if meta.priority != 0:
+                rule_dict["priority"] = meta.priority
+            if meta.condition:
+                rule_dict["condition"] = meta.condition
+            if meta.tags:
+                rule_dict["tags"] = meta.tags
+
+            rules_list.append(rule_dict)
+
+        result = {"rules": rules_list}
+        if name:
+            result["name"] = name
+        if description:
+            result["description"] = description
+
+        return json.dumps(result, indent=indent)
+
+    def to_dict(self) -> Dict:
+        """
+        Export rules to a dictionary.
+
+        Returns:
+            Dictionary compatible with JSON serialization.
+        """
+        rules_list = []
+        for rule, meta in zip(self._rules, self._metadata):
+            pattern, skeleton = rule
+            rule_dict = {
+                "pattern": pattern,
+                "skeleton": skeleton,
+            }
+            if meta.name:
+                rule_dict["name"] = meta.name
+            if meta.description:
+                rule_dict["description"] = meta.description
+            if meta.priority != 0:
+                rule_dict["priority"] = meta.priority
+            if meta.condition:
+                rule_dict["condition"] = meta.condition
+            if meta.tags:
+                rule_dict["tags"] = meta.tags
+            rules_list.append(rule_dict)
+
+        return {"rules": rules_list}
 
     def __len__(self) -> int:
         return len(self._rules)

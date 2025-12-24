@@ -236,3 +236,133 @@ class TestCustomPreludeLoading:
         assert repl.set_prelude("arithmetic") == True
         assert repl.set_prelude("none") == True
 
+
+class TestMultiLineInput:
+    """Tests for multi-line input parsing."""
+
+    def test_count_parens_balanced(self):
+        """Balanced parens return 0."""
+        from rerum.cli import count_parens
+        assert count_parens("(+ x 1)") == 0
+        assert count_parens("(+ (+ x 1) 2)") == 0
+        assert count_parens("x") == 0
+
+    def test_count_parens_unbalanced_open(self):
+        """More open parens return positive count."""
+        from rerum.cli import count_parens
+        assert count_parens("(+ x") == 1
+        assert count_parens("(+ (+ x") == 2
+        assert count_parens("(") == 1
+
+    def test_count_parens_unbalanced_close(self):
+        """More close parens return negative count."""
+        from rerum.cli import count_parens
+        assert count_parens("(+ x))") == -1
+        assert count_parens(")") == -1
+
+    def test_count_parens_ignores_strings(self):
+        """Parens inside strings are ignored."""
+        from rerum.cli import count_parens
+        # Quotes inside expressions would be in string literals
+        assert count_parens('(f ")" x)') == 0
+        assert count_parens('(f "(" x)') == 0
+
+    def test_repl_multi_line_buffer(self):
+        """REPL has multi-line buffer initialized."""
+        repl = RerumREPL()
+        assert repl.multi_line_buffer == ""
+
+
+class TestTabCompletion:
+    """Tests for tab completion."""
+
+    def test_completer_commands(self):
+        """Completer suggests commands."""
+        from rerum.cli import RerumCompleter
+        repl = RerumREPL()
+        completer = RerumCompleter(repl)
+
+        matches = completer._get_matches(":", ":")
+        assert ":help" in matches
+        assert ":quit" in matches
+        assert ":load" in matches
+
+    def test_completer_partial_command(self):
+        """Completer handles partial command."""
+        from rerum.cli import RerumCompleter
+        repl = RerumREPL()
+        completer = RerumCompleter(repl)
+
+        matches = completer._get_matches(":h", ":h")
+        assert ":help" in matches
+        assert ":quit" not in matches
+
+    def test_completer_prelude_names(self):
+        """Completer suggests prelude names after :prelude."""
+        from rerum.cli import RerumCompleter
+        repl = RerumREPL()
+        completer = RerumCompleter(repl)
+
+        matches = completer._get_matches("", ":prelude ")
+        assert "full" in matches
+        assert "arithmetic" in matches
+        assert "none" in matches
+
+    def test_completer_strategy_names(self):
+        """Completer suggests strategies after :strategy."""
+        from rerum.cli import RerumCompleter
+        repl = RerumREPL()
+        completer = RerumCompleter(repl)
+
+        matches = completer._get_matches("", ":strategy ")
+        assert "exhaustive" in matches
+        assert "once" in matches
+        assert "bottomup" in matches
+        assert "topdown" in matches
+
+    def test_completer_groups(self):
+        """Completer suggests groups after :enable/:disable."""
+        from rerum.cli import RerumCompleter
+        repl = RerumREPL()
+
+        # Add some rules with groups
+        repl.engine.load_dsl('''
+            [algebra]
+            @add-zero: (+ ?x 0) => :x
+
+            [calculus]
+            @dd-const: (dd ?c:const ?v) => 0
+        ''')
+
+        completer = RerumCompleter(repl)
+
+        matches = completer._get_matches("", ":enable ")
+        assert "algebra" in matches
+        assert "calculus" in matches
+
+    def test_completer_rule_names(self):
+        """Completer suggests rule names starting with @."""
+        from rerum.cli import RerumCompleter
+        repl = RerumREPL()
+
+        repl.engine.load_dsl('''
+            @add-zero: (+ ?x 0) => :x
+            @mul-one: (* ?x 1) => :x
+        ''')
+
+        completer = RerumCompleter(repl)
+
+        matches = completer._get_matches("@", "@")
+        assert "@add-zero" in matches
+        assert "@mul-one" in matches
+
+    def test_completer_trace_options(self):
+        """Completer suggests on/off after :trace."""
+        from rerum.cli import RerumCompleter
+        repl = RerumREPL()
+        completer = RerumCompleter(repl)
+
+        matches = completer._get_matches("", ":trace ")
+        assert "on" in matches
+        assert "off" in matches
+

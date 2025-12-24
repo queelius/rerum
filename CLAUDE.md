@@ -9,101 +9,72 @@ RERUM (Rewriting Expressions via Rules Using Morphisms) is a pattern matching an
 ## Build and Test Commands
 
 ```bash
-# Install with dev dependencies
-pip install -e ".[dev]"
-
-# Run all tests
-pytest
-
-# Run tests with coverage
-pytest --cov=rerum --cov-report=term-missing
-
-# Run a single test file
-pytest rerum/tests/test_rewriter.py
-
-# Run a specific test
-pytest rerum/tests/test_rewriter.py::test_function_name -v
+pip install -e ".[dev]"                    # Install with dev dependencies
+pip install -e ".[docs]"                   # Install with docs dependencies
+pytest                                      # Run all tests
+pytest --cov=rerum --cov-report=term-missing  # With coverage
+pytest rerum/tests/test_guards.py -v       # Single test file
+pytest rerum/tests/test_guards.py::TestGuardParsing::test_parse_when_clause -v  # Single test
+mkdocs serve                               # Local docs server
+mkdocs build                               # Build docs to site/
 ```
 
 ## Architecture
 
-The library has two main modules:
+### Core Modules
 
-### rewriter.py - Core Pattern Matching Engine
+**rewriter.py** - Low-level pattern matching engine
 - `match(pattern, expr, bindings)` - Pattern matching with binding extraction
-- `instantiate(skeleton, bindings, fold_funcs)` - Skeleton instantiation with optional compute evaluation
+- `instantiate(skeleton, bindings, fold_funcs)` - Skeleton instantiation with `(! ...)` compute evaluation
 - `rewriter(rules, fold_funcs)` - Factory that creates a simplifier function
-- Pattern syntax uses lists: `["?", "x"]` for any expr, `["?c", "x"]` for constants, `["?v", "x"]` for variables
-- Preludes (`ARITHMETIC_PRELUDE`, `MATH_PRELUDE`, etc.) define operations for the `(! op ...)` compute form
+- Preludes: `ARITHMETIC_PRELUDE`, `MATH_PRELUDE`, `PREDICATE_PRELUDE`, `FULL_PRELUDE`
 
-### engine.py - DSL Parser and Rule Engine
-- `RuleEngine` - High-level API for loading and applying rules
-- `parse_sexpr(s)` / `format_sexpr(expr)` - S-expression parsing/formatting
-- `parse_rule_line(line)` - Parses DSL rule syntax: `@name: (pattern) => (skeleton)`
-- DSL pattern syntax: `?x` or `?x:expr`, `?x:const`, `?x:var`, `?x:free(v)`, `?x...`
-- DSL skeleton syntax: `:x` for substitution, `:x...` for splice, `(! op args)` for compute
+**engine.py** - High-level DSL and rule engine
+- `RuleEngine` - Main API: load rules, apply strategies, manage groups
+- `RuleMetadata` - Rule name, description, priority, condition (guard)
+- `RewriteTrace` / `RewriteStep` - Tracing infrastructure
+- `parse_sexpr()` / `format_sexpr()` - S-expression I/O
+- `E` - Expression builder singleton
 
-## Key Design Patterns
+**cli.py** - Command-line interface
+- `RerumREPL` - Interactive REPL with readline support
+- `ScriptRunner` - Executes `.rerum` scripts
+- Supports pipe mode, expression mode, custom prelude loading
 
-- **Separation of rules and preludes**: Rules are pure data (serializable as DSL/JSON); preludes are Python code that defines what operations actually do. Rules can only invoke operations explicitly enabled in the prelude.
-- **Bindings as dict-like wrapper**: `Bindings` class provides dict-like access (`bindings["x"]`); `NoMatch` singleton is falsy for pattern-match failure.
-- **Recursive simplification**: The rewriter applies rules exhaustively, recursing into subexpressions until no rule matches.
-- **Fluent API**: Methods like `.with_prelude()`, `.load_dsl()` return `self` for chaining.
+### Key Design Patterns
 
-## Fluent API
+- **Rules vs Preludes**: Rules are pure data (DSL/JSON serializable); preludes are Python code defining what `(! op ...)` operations do. Security boundary: rules can only invoke prelude-enabled operations.
+- **Fluent API**: Methods return `self` for chaining: `.with_prelude()`, `.load_dsl()`, `.disable_group()`
+- **Bindings**: `Bindings` class wraps raw bindings with dict-like access; `NoMatch` singleton is falsy
+- **Strategies**: exhaustive (default), once, bottomup, topdown - control rule application order
 
-```python
-from rerum import RuleEngine, E, ARITHMETIC_PRELUDE, Bindings, NoMatch
+### DSL Features
 
-# Build engines with method chaining
-engine = (RuleEngine()
-    .with_prelude(ARITHMETIC_PRELUDE)
-    .load_dsl('''
-        @add-zero: (+ ?x 0) => :x
-        @fold: (+ ?a:const ?b:const) => (! + :a :b)
-    '''))
-
-# Expression builder E - generic, doesn't privilege any operators
-expr = E("(+ (* x 1) 0)")           # Parse s-expression string
-expr = E.op("+", "x", E.op("*", 2, "y"))  # Build programmatically
-x, y = E.vars("x", "y")             # Create variable symbols
-
-# Pattern matching with walrus operator
-if bindings := engine.match("(+ ?a ?b)", expr):
-    print(bindings["a"], bindings["b"])
-else:
-    print("no match")
-
-# Single-step rewriting
-result, meta = engine.apply_once(expr)
-if meta:
-    print(f"Applied rule: {meta.name}")
-
-# Find all rules that could fire
-for meta, bindings in engine.rules_matching(expr):
-    print(f"{meta.name} would bind {dict(bindings)}")
-
-# Rewriting strategies
-engine(expr)                      # default: exhaustive
-engine(expr, strategy="once")     # single rule application
-engine(expr, strategy="bottomup") # children before parent
-engine(expr, strategy="topdown")  # parent before children
-
-# Phased rewriting with >> operator
-expand = RuleEngine.from_dsl("@sq: (square ?x) => (* :x :x)")
-simplify = RuleEngine.from_dsl("@fold: (* ?a:const ?b:const) => (! * :a :b)")
-    .with_prelude(ARITHMETIC_PRELUDE)
-pipeline = expand >> simplify
-pipeline(E("(square 5)"))  # => 25
-
-# Union with | operator
-both = expand | simplify
+```
+@name: (pattern) => (skeleton)                    # Basic rule
+@name[100]: (pattern) => (skeleton)               # With priority (higher fires first)
+@name: (pattern) => (skeleton) when (condition)   # With guard
+[groupname]                                        # Start a named group
 ```
 
-## Expression Representation
+Pattern syntax: `?x`, `?x:const`, `?x:var`, `?x:free(v)`, `?x...`
+Skeleton syntax: `:x`, `:x...`, `(! op args...)`
 
-Expressions are Python nested lists in prefix notation:
+### Expression Representation
+
+Expressions are nested Python lists in prefix notation:
 ```python
 ["+", "x", ["*", 2, "y"]]  # represents: x + 2*y
 ```
-Atoms are strings (variables) or numbers (constants). This matches s-expression semantics.
+Atoms are strings (variables) or numbers (constants).
+
+## CLI Usage
+
+```bash
+rerum                              # Start REPL
+rerum script.rerum                 # Run script
+rerum -r rules.rules -p full -e "(+ x 0)"  # One-shot evaluation
+echo "(+ x 0)" | rerum -r rules.rules -q   # Pipe mode
+```
+
+REPL commands: `:help`, `:load FILE`, `:rules`, `:clear`, `:prelude NAME`, `:trace on/off`, `:strategy NAME`, `:groups`, `:enable GROUP`, `:disable GROUP`, `:quit`
