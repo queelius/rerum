@@ -47,7 +47,7 @@ from typing import List, Tuple, Optional, Dict, Union
 
 from .rewriter import (
     rewriter, match as _match_internal, instantiate, ExprType,
-    FoldFuncsType, ARITHMETIC_PRELUDE, Bindings, NoMatch, wrap_bindings,
+    FoldFuncsType, ARITHMETIC_PRELUDE, Bindings, NoMatch, _NoMatch, wrap_bindings,
 )
 
 
@@ -923,7 +923,7 @@ class RuleEngine:
                 return True
             return not any(g in self._disabled_groups for g in metadata.tags)
 
-    def match(self, pattern: Union[str, ExprType], expr: ExprType) -> Union[Bindings, NoMatch]:
+    def match(self, pattern: Union[str, ExprType], expr: ExprType) -> Union[Bindings, _NoMatch]:
         """
         Match a pattern against an expression.
 
