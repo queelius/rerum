@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "rerum"
-version = "0.1.0"
+version = "0.2.0"
 description = "RERUM - Rewriting Expressions via Rules Using Morphisms"
 readme = "README.md"
 license = "MIT"
