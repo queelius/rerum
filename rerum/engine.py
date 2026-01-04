@@ -8,12 +8,18 @@ supporting both a custom DSL format and JSON.
 
 DSL Format (.rules files):
     # Comment
-    @rule-name: (pattern) => (skeleton)
+    @rule-name: (pattern) => (skeleton)              # Unidirectional
+    @rule-name: (pattern) <=> (skeleton)             # Bidirectional (creates 2 rules)
     @rule-name "Description text": (pattern) => (skeleton)
 
     Examples:
     @add-zero: (+ ?x 0) => :x
     @dd-sum "Derivative of sum": (dd (+ ?f ?g) ?v:var) => (+ (dd :f :v) (dd :g :v))
+
+    Bidirectional rules create two rules:
+    @commute: (+ ?x ?y) <=> (+ :y :x)
+    # Creates: @commute-fwd: (+ ?x ?y) => (+ :y :x)
+    #          @commute-rev: (+ ?y ?x) => (+ :x :y)
 
 Pattern syntax:
     ?x or ?x:expr      - match any expression, bind to x
@@ -41,9 +47,11 @@ Tracing:
 """
 
 import json
+import random
 import re
+from collections import deque
 from pathlib import Path
-from typing import List, Tuple, Optional, Dict, Union
+from typing import List, Tuple, Optional, Dict, Union, Iterator, Set, Callable
 
 from .rewriter import (
     rewriter, match as _match_internal, instantiate, ExprType,
@@ -317,12 +325,15 @@ class RuleMetadata:
 
     def __init__(self, name: Optional[str] = None, description: Optional[str] = None,
                  tags: Optional[List[str]] = None, condition: Optional[ExprType] = None,
-                 priority: int = 0):
+                 priority: int = 0, bidirectional: bool = False,
+                 direction: Optional[str] = None):
         self.name = name
         self.description = description
         self.tags = tags or []
         self.condition = condition  # Optional guard condition
         self.priority = priority  # Higher priority fires first (default: 0)
+        self.bidirectional = bidirectional  # True if from a <=> rule
+        self.direction = direction  # 'fwd' or 'rev' for bidirectional rules
 
     def __repr__(self) -> str:
         base = ""
@@ -341,19 +352,191 @@ class RuleMetadata:
         return base
 
 
-def parse_rule_line(line: str) -> Optional[Tuple[RuleMetadata, ExprType, ExprType]]:
+def _expr_to_tuple(expr: ExprType) -> tuple:
     """
-    Parse a single rule line.
+    Convert an expression to a hashable tuple form.
+
+    Used for deduplication in equivalence enumeration.
+
+    Examples:
+        ["+", "x", 1] -> ("+", "x", 1)
+        ["+", ["*", "a", "b"], "c"] -> ("+", ("*", "a", "b"), "c")
+    """
+    if isinstance(expr, list):
+        return tuple(_expr_to_tuple(e) for e in expr)
+    return expr
+
+
+# ============================================================
+# Cost Functions for Optimization
+# ============================================================
+
+def expr_size(expr: ExprType) -> int:
+    """
+    Count total number of nodes in an expression.
+
+    Atoms count as 1, compound expressions count their elements recursively.
+
+    Examples:
+        expr_size("x") -> 1
+        expr_size(["+", "x", 1]) -> 3
+        expr_size(["+", ["*", "a", "b"], "c"]) -> 5
+    """
+    if isinstance(expr, list):
+        return sum(expr_size(e) for e in expr)
+    return 1
+
+
+def expr_depth(expr: ExprType) -> int:
+    """
+    Compute maximum nesting depth of an expression.
+
+    Atoms have depth 0, compound expressions have depth 1 + max child depth.
+
+    Examples:
+        expr_depth("x") -> 0
+        expr_depth(["+", "x", 1]) -> 1
+        expr_depth(["+", ["*", "a", "b"], "c"]) -> 2
+    """
+    if isinstance(expr, list):
+        if len(expr) == 0:
+            return 1
+        return 1 + max(expr_depth(e) for e in expr)
+    return 0
+
+
+def expr_ops(expr: ExprType) -> int:
+    """
+    Count number of operations (compound expressions) in an expression.
+
+    Atoms have 0 ops, each compound expression adds 1.
+
+    Examples:
+        expr_ops("x") -> 0
+        expr_ops(["+", "x", 1]) -> 1
+        expr_ops(["+", ["*", "a", "b"], "c"]) -> 2
+    """
+    if isinstance(expr, list):
+        return 1 + sum(expr_ops(e) for e in expr)
+    return 0
+
+
+def expr_atoms(expr: ExprType) -> int:
+    """
+    Count number of atoms (leaf operands) in an expression.
+
+    Operators are not counted, only leaf operands.
+
+    Examples:
+        expr_atoms("x") -> 1
+        expr_atoms(["+", "x", 1]) -> 2
+        expr_atoms(["+", ["*", "a", "b"], "c"]) -> 3
+    """
+    if isinstance(expr, list):
+        # Skip operator (first element), only count operands
+        return sum(expr_atoms(e) for e in expr[1:])
+    return 1
+
+
+def make_op_cost_fn(op_costs: Dict[str, float], default: float = 1.0) -> Callable[[ExprType], float]:
+    """
+    Create a cost function based on operator costs.
+
+    Args:
+        op_costs: Dictionary mapping operator names to costs
+        default: Default cost for operators not in the dictionary
+
+    Returns:
+        A cost function that sums operator costs
+
+    Example:
+        cost_fn = make_op_cost_fn({"+": 1, "*": 2, "/": 5, "^": 10})
+        cost_fn(["+", ["*", "a", "b"], "c"])  # 1 + 2 = 3
+    """
+    def cost_fn(expr: ExprType) -> float:
+        if isinstance(expr, list) and len(expr) > 0:
+            op = expr[0]
+            op_cost = op_costs.get(op, default) if isinstance(op, str) else default
+            return op_cost + sum(cost_fn(e) for e in expr[1:])
+        return 0
+    return cost_fn
+
+
+# Built-in metrics dictionary
+COST_METRICS: Dict[str, Callable[[ExprType], float]] = {
+    "size": expr_size,
+    "depth": expr_depth,
+    "ops": expr_ops,
+    "atoms": expr_atoms,
+}
+
+
+def _convert_skeleton_to_pattern(expr: ExprType) -> ExprType:
+    """
+    Convert a skeleton expression to a pattern expression.
+
+    Transforms substitution markers to pattern variables:
+    - (: x) -> (? x)
+    - (:... x) -> (?... x)
+    """
+    if isinstance(expr, list):
+        if len(expr) == 2:
+            if expr[0] == ":":
+                return ["?", expr[1]]
+            elif expr[0] == ":...":
+                return ["?...", expr[1]]
+        # Recurse for compound expressions
+        return [_convert_skeleton_to_pattern(e) for e in expr]
+    return expr
+
+
+def _convert_pattern_to_skeleton(expr: ExprType) -> ExprType:
+    """
+    Convert a pattern expression to a skeleton expression.
+
+    Transforms pattern variables to substitution markers:
+    - (? x) -> (: x)
+    - (?c x) -> (: x)  (type constraints dropped)
+    - (?v x) -> (: x)  (type constraints dropped)
+    - (?free x v) -> (: x)  (free constraints dropped)
+    - (?... x) -> (:... x)
+    """
+    if isinstance(expr, list):
+        if len(expr) == 2:
+            if expr[0] == "?":
+                return [":", expr[1]]
+            elif expr[0] == "?c":
+                return [":", expr[1]]
+            elif expr[0] == "?v":
+                return [":", expr[1]]
+            elif expr[0] == "?...":
+                return [":...", expr[1]]
+        elif len(expr) == 3:
+            if expr[0] == "?free":
+                return [":", expr[1]]
+            elif expr[0] == "?...":
+                # Rest pattern with type constraint: ["?...", "name", "const"]
+                return [":...", expr[1]]
+        # Recurse for compound expressions
+        return [_convert_pattern_to_skeleton(e) for e in expr]
+    return expr
+
+
+def parse_rule_line(line: str) -> Optional[List[Tuple[RuleMetadata, ExprType, ExprType]]]:
+    """
+    Parse a single rule line, potentially returning multiple rules.
 
     Formats:
-        @name: pattern => skeleton
+        @name: pattern => skeleton           # Unidirectional rule
+        @name: pattern <=> skeleton          # Bidirectional rule (creates 2 rules)
         @name[priority]: pattern => skeleton
         @name "description": pattern => skeleton
         @name[priority] "description": pattern => skeleton
         @name: pattern => skeleton when condition
         pattern => skeleton
 
-    Returns: (metadata, pattern, skeleton) or None if not a rule
+    Returns: List of (metadata, pattern, skeleton) tuples, or None if not a rule.
+             Bidirectional rules (<=>)  return two rules: forward (-fwd) and reverse (-rev).
     """
     line = line.strip()
 
@@ -362,42 +545,51 @@ def parse_rule_line(line: str) -> Optional[Tuple[RuleMetadata, ExprType, ExprTyp
         return None
 
     # Extract name, optional priority, and optional description if present
-    metadata = RuleMetadata()
+    base_name = None
+    description = None
+    priority = 0
+
     if line.startswith('@'):
         # Try format: @name[priority] "description": ...
         match_obj = re.match(r'@([\w-]+)\[(\d+)\]\s+"([^"]+)":\s*(.+)', line)
         if match_obj:
-            metadata.name = match_obj.group(1)
-            metadata.priority = int(match_obj.group(2))
-            metadata.description = match_obj.group(3)
+            base_name = match_obj.group(1)
+            priority = int(match_obj.group(2))
+            description = match_obj.group(3)
             line = match_obj.group(4)
         else:
             # Try format: @name[priority]: ...
             match_obj = re.match(r'@([\w-]+)\[(\d+)\]:\s*(.+)', line)
             if match_obj:
-                metadata.name = match_obj.group(1)
-                metadata.priority = int(match_obj.group(2))
+                base_name = match_obj.group(1)
+                priority = int(match_obj.group(2))
                 line = match_obj.group(3)
             else:
                 # Try format: @name "description": ...
                 match_obj = re.match(r'@([\w-]+)\s+"([^"]+)":\s*(.+)', line)
                 if match_obj:
-                    metadata.name = match_obj.group(1)
-                    metadata.description = match_obj.group(2)
+                    base_name = match_obj.group(1)
+                    description = match_obj.group(2)
                     line = match_obj.group(3)
                 else:
                     # Try format: @name: ...
                     match_obj = re.match(r'@([\w-]+):\s*(.+)', line)
                     if match_obj:
-                        metadata.name = match_obj.group(1)
+                        base_name = match_obj.group(1)
                         line = match_obj.group(2)
 
-    # Must have =>
-    if '=>' not in line:
+    # Determine if bidirectional (<=>)  or unidirectional (=>)
+    is_bidirectional = '<=>' in line
+
+    if is_bidirectional:
+        # Split on <=>
+        parts = line.split('<=>', 1)
+    elif '=>' in line:
+        # Split on =>
+        parts = line.split('=>', 1)
+    else:
         return None
 
-    # Split on =>
-    parts = line.split('=>', 1)
     pattern_str = parts[0].strip()
     rest = parts[1].strip()
 
@@ -426,7 +618,6 @@ def parse_rule_line(line: str) -> Optional[Tuple[RuleMetadata, ExprType, ExprTyp
         skeleton_str = rest[:when_pos].strip()
         condition_str = rest[when_pos + 4:].strip()
         condition = parse_sexpr(condition_str)
-        metadata.condition = condition
 
     pattern = parse_sexpr(pattern_str)
     skeleton = parse_sexpr(skeleton_str)
@@ -434,7 +625,43 @@ def parse_rule_line(line: str) -> Optional[Tuple[RuleMetadata, ExprType, ExprTyp
     if pattern is None or skeleton is None:
         return None
 
-    return (metadata, pattern, skeleton)
+    if is_bidirectional:
+        # Create forward and reverse rules
+        fwd_metadata = RuleMetadata(
+            name=f"{base_name}-fwd" if base_name else None,
+            description=f"{description} (forward)" if description else None,
+            priority=priority,
+            condition=condition,
+            bidirectional=True,
+            direction='fwd'
+        )
+        rev_metadata = RuleMetadata(
+            name=f"{base_name}-rev" if base_name else None,
+            description=f"{description} (reverse)" if description else None,
+            priority=priority,
+            condition=condition,
+            bidirectional=True,
+            direction='rev'
+        )
+
+        # Forward: pattern => skeleton (as written)
+        fwd_rule = (fwd_metadata, pattern, skeleton)
+
+        # Reverse: convert skeleton to pattern, pattern to skeleton
+        rev_pattern = _convert_skeleton_to_pattern(skeleton)
+        rev_skeleton = _convert_pattern_to_skeleton(pattern)
+        rev_rule = (rev_metadata, rev_pattern, rev_skeleton)
+
+        return [fwd_rule, rev_rule]
+    else:
+        # Single unidirectional rule
+        metadata = RuleMetadata(
+            name=base_name,
+            description=description,
+            priority=priority,
+            condition=condition
+        )
+        return [(metadata, pattern, skeleton)]
 
 
 def load_rules_from_dsl(
@@ -511,13 +738,13 @@ def load_rules_from_dsl(
                     raise FileNotFoundError(f"Include file not found: {include_path}")
             continue
 
-        result = parse_rule_line(line)
-        if result:
-            metadata, pattern, skeleton = result
-            # Add current group to tags if set
-            if current_group and current_group not in metadata.tags:
-                metadata.tags.append(current_group)
-            rules.append((metadata, [pattern, skeleton]))
+        results = parse_rule_line(line)
+        if results:
+            for metadata, pattern, skeleton in results:
+                # Add current group to tags if set
+                if current_group and current_group not in metadata.tags:
+                    metadata.tags.append(current_group)
+                rules.append((metadata, [pattern, skeleton]))
     return rules
 
 
@@ -726,6 +953,169 @@ class RewriteTrace:
         most_used = max(counts.items(), key=lambda x: x[1])
         return (f"{len(self.steps)} steps using {len(counts)} unique rules. "
                 f"Most used: {most_used[0]} ({most_used[1]}x)")
+
+
+class EqualityProof:
+    """
+    Proof that two expressions are equivalent.
+
+    Contains the common form found and the paths from each expression
+    to that common form.
+
+    Attributes:
+        expr_a: First expression
+        expr_b: Second expression
+        common: The common equivalent form found
+        depth_a: Number of rewrite steps from expr_a to common
+        depth_b: Number of rewrite steps from expr_b to common
+        path_a: List of expressions from expr_a to common (if traced)
+        path_b: List of expressions from expr_b to common (if traced)
+    """
+
+    def __init__(
+        self,
+        expr_a: ExprType,
+        expr_b: ExprType,
+        common: ExprType,
+        depth_a: int,
+        depth_b: int,
+        path_a: Optional[List[ExprType]] = None,
+        path_b: Optional[List[ExprType]] = None
+    ):
+        self.expr_a = expr_a
+        self.expr_b = expr_b
+        self.common = common
+        self.depth_a = depth_a
+        self.depth_b = depth_b
+        self.path_a = path_a
+        self.path_b = path_b
+
+    @property
+    def total_depth(self) -> int:
+        """Total rewrite steps in the proof."""
+        return self.depth_a + self.depth_b
+
+    def __repr__(self) -> str:
+        a_str = format_sexpr(self.expr_a)
+        b_str = format_sexpr(self.expr_b)
+        c_str = format_sexpr(self.common)
+        return (f"EqualityProof({a_str} ≡ {b_str} via {c_str}, "
+                f"depth={self.depth_a}+{self.depth_b})")
+
+    def __bool__(self) -> bool:
+        """Proofs are always truthy (existence means equality proved)."""
+        return True
+
+    def format(self, style: str = "brief") -> str:
+        """
+        Format the proof for display.
+
+        Args:
+            style: "brief" (default), "paths", or "full"
+        """
+        a_str = format_sexpr(self.expr_a)
+        b_str = format_sexpr(self.expr_b)
+        c_str = format_sexpr(self.common)
+
+        if style == "brief":
+            return f"{a_str} ≡ {b_str} (via {c_str})"
+
+        elif style == "paths":
+            lines = [f"{a_str} ≡ {b_str}"]
+            lines.append(f"Common form: {c_str}")
+            lines.append(f"Distance from A: {self.depth_a} steps")
+            lines.append(f"Distance from B: {self.depth_b} steps")
+            return "\n".join(lines)
+
+        else:  # full
+            lines = [f"Proof: {a_str} ≡ {b_str}"]
+            lines.append(f"Common form: {c_str}")
+
+            if self.path_a:
+                lines.append(f"\nPath from A ({self.depth_a} steps):")
+                for i, expr in enumerate(self.path_a):
+                    lines.append(f"  {i}. {format_sexpr(expr)}")
+
+            if self.path_b:
+                lines.append(f"\nPath from B ({self.depth_b} steps):")
+                for i, expr in enumerate(self.path_b):
+                    lines.append(f"  {i}. {format_sexpr(expr)}")
+
+            return "\n".join(lines)
+
+    def to_dict(self) -> Dict:
+        """Convert to dictionary for serialization."""
+        result = {
+            "expr_a": self.expr_a,
+            "expr_b": self.expr_b,
+            "common": self.common,
+            "depth_a": self.depth_a,
+            "depth_b": self.depth_b,
+            "total_depth": self.total_depth,
+        }
+        if self.path_a:
+            result["path_a"] = self.path_a
+        if self.path_b:
+            result["path_b"] = self.path_b
+        return result
+
+
+class OptimizationResult:
+    """
+    Result of expression optimization.
+
+    Attributes:
+        expr: The optimized expression
+        cost: Cost of the optimized expression
+        original: The original expression
+        original_cost: Cost of the original expression
+        expressions_checked: Number of expressions evaluated
+    """
+
+    def __init__(
+        self,
+        expr: ExprType,
+        cost: float,
+        original: ExprType,
+        original_cost: float,
+        expressions_checked: int = 0
+    ):
+        self.expr = expr
+        self.cost = cost
+        self.original = original
+        self.original_cost = original_cost
+        self.expressions_checked = expressions_checked
+
+    @property
+    def improvement(self) -> float:
+        """Cost reduction (original_cost - cost)."""
+        return self.original_cost - self.cost
+
+    @property
+    def improvement_ratio(self) -> float:
+        """Ratio of improvement (1.0 = no change, 0.5 = halved cost)."""
+        if self.original_cost == 0:
+            return 1.0 if self.cost == 0 else float('inf')
+        return self.cost / self.original_cost
+
+    def __repr__(self) -> str:
+        expr_str = format_sexpr(self.expr)
+        return f"OptimizationResult({expr_str}, cost={self.cost}, checked={self.expressions_checked})"
+
+    def __bool__(self) -> bool:
+        """True if any improvement was made."""
+        return self.cost < self.original_cost
+
+    def to_dict(self) -> Dict:
+        """Convert to dictionary for serialization."""
+        return {
+            "expr": self.expr,
+            "cost": self.cost,
+            "original": self.original,
+            "original_cost": self.original_cost,
+            "improvement": self.improvement,
+            "expressions_checked": self.expressions_checked,
+        }
 
 
 class RuleEngine:
@@ -1561,6 +1951,639 @@ class RuleEngine:
                 self._rule_names[meta.name] = len(self._rules) - 1
         self._simplifier = None
         return self
+
+    # ============================================================
+    # Equivalence Enumeration
+    # ============================================================
+
+    def _all_single_rewrites(
+        self,
+        expr: ExprType,
+        bidirectional_only: bool = True,
+        groups: Optional[List[str]] = None
+    ) -> List[ExprType]:
+        """
+        Find all expressions reachable by applying exactly one rule.
+
+        Tries every rule at every position in the expression tree.
+
+        Args:
+            expr: Expression to rewrite
+            bidirectional_only: If True, only use rules from <=> declarations
+            groups: If specified, only use rules from these groups
+
+        Returns:
+            List of all distinct one-step rewrites
+        """
+        results = []
+        seen: Set[tuple] = set()
+
+        def add_if_new(new_expr: ExprType) -> None:
+            key = _expr_to_tuple(new_expr)
+            if key not in seen:
+                seen.add(key)
+                results.append(new_expr)
+
+        # Try rules at top level
+        for rule_idx, rule in enumerate(self._rules):
+            metadata = self._metadata[rule_idx]
+
+            # Filter by bidirectional flag
+            if bidirectional_only and not metadata.bidirectional:
+                continue
+
+            # Filter by groups
+            if not self._is_rule_active(metadata, groups):
+                continue
+
+            pattern, skeleton = rule
+            bindings = _match_internal(pattern, expr, [])
+            if bindings != "failed":
+                # Check condition if present
+                if not self._check_condition(metadata.condition, bindings):
+                    continue
+                result = instantiate(skeleton, bindings, self._fold_funcs)
+                if result != expr:
+                    add_if_new(result)
+
+        # Recursively try rules in subexpressions
+        if isinstance(expr, list) and len(expr) > 0:
+            for i, child in enumerate(expr):
+                child_rewrites = self._all_single_rewrites(
+                    child, bidirectional_only, groups
+                )
+                for new_child in child_rewrites:
+                    new_expr = expr[:i] + [new_child] + expr[i+1:]
+                    add_if_new(new_expr)
+
+        return results
+
+    def equivalents(
+        self,
+        expr: ExprType,
+        max_depth: int = 10,
+        max_count: Optional[int] = None,
+        strategy: str = "bfs",
+        include_unidirectional: bool = False,
+        groups: Optional[List[str]] = None
+    ) -> Iterator[ExprType]:
+        """
+        Enumerate all expressions equivalent to the given expression.
+
+        Uses bidirectional rules (<=> declarations) to explore the equivalence
+        class. Yields expressions in order of increasing distance from the
+        original (when using BFS strategy).
+
+        Args:
+            expr: Starting expression
+            max_depth: Maximum number of rewrite steps from original (default: 10)
+            max_count: Maximum number of equivalents to yield (default: None = unlimited)
+            strategy: Exploration strategy - "bfs" (breadth-first) or "dfs" (depth-first)
+            include_unidirectional: If True, also use => rules (not just <=>)
+            groups: If specified, only use rules from these groups
+
+        Yields:
+            Equivalent expressions, starting with the original
+
+        Example:
+            engine = RuleEngine.from_dsl('''
+                @commute: (+ ?x ?y) <=> (+ :y :x)
+                @assoc: (+ (+ ?x ?y) ?z) <=> (+ :x (+ :y :z))
+            ''')
+
+            for equiv in engine.equivalents(["+", "a", "b"], max_depth=2):
+                print(format_sexpr(equiv))
+            # Output:
+            # (+ a b)
+            # (+ b a)
+        """
+        if strategy not in ("bfs", "dfs"):
+            raise ValueError(f"Unknown strategy: {strategy}. Valid: bfs, dfs")
+
+        bidirectional_only = not include_unidirectional
+
+        # Track visited expressions
+        visited: Set[tuple] = set()
+        start_key = _expr_to_tuple(expr)
+        visited.add(start_key)
+
+        # Count of yielded expressions
+        count = 0
+
+        # Yield the starting expression
+        yield expr
+        count += 1
+        if max_count is not None and count >= max_count:
+            return
+
+        # Initialize queue/stack with (expression, depth)
+        if strategy == "bfs":
+            frontier: deque = deque([(expr, 0)])
+        else:  # dfs
+            frontier: List = [(expr, 0)]
+
+        while frontier:
+            if strategy == "bfs":
+                current, depth = frontier.popleft()
+            else:
+                current, depth = frontier.pop()
+
+            if depth >= max_depth:
+                continue
+
+            # Find all single-step rewrites
+            rewrites = self._all_single_rewrites(
+                current, bidirectional_only, groups
+            )
+
+            for new_expr in rewrites:
+                key = _expr_to_tuple(new_expr)
+                if key not in visited:
+                    visited.add(key)
+                    yield new_expr
+                    count += 1
+
+                    if max_count is not None and count >= max_count:
+                        return
+
+                    # Add to frontier for further exploration
+                    if strategy == "bfs":
+                        frontier.append((new_expr, depth + 1))
+                    else:
+                        frontier.append((new_expr, depth + 1))
+
+    def enumerate_equivalents(
+        self,
+        expr: ExprType,
+        max_depth: int = 10,
+        max_count: Optional[int] = 1000,
+        **kwargs
+    ) -> List[ExprType]:
+        """
+        Return a list of all equivalent expressions.
+
+        Convenience wrapper around equivalents() that collects all results.
+
+        Args:
+            expr: Starting expression
+            max_depth: Maximum rewrite steps (default: 10)
+            max_count: Maximum results (default: 1000)
+            **kwargs: Additional arguments passed to equivalents()
+
+        Returns:
+            List of equivalent expressions
+        """
+        return list(self.equivalents(
+            expr, max_depth=max_depth, max_count=max_count, **kwargs
+        ))
+
+    def prove_equal(
+        self,
+        expr_a: ExprType,
+        expr_b: ExprType,
+        max_depth: int = 10,
+        trace: bool = False,
+        include_unidirectional: bool = False,
+        groups: Optional[List[str]] = None
+    ) -> Optional[EqualityProof]:
+        """
+        Prove two expressions are equivalent by finding a common form.
+
+        Uses bidirectional BFS: expands from both expressions simultaneously
+        and checks for intersection. This is more efficient than enumerating
+        entire equivalence classes.
+
+        Args:
+            expr_a: First expression
+            expr_b: Second expression
+            max_depth: Maximum rewrite steps from either expression (default: 10)
+            trace: If True, include full paths in the proof
+            include_unidirectional: If True, also use => rules (not just <=>)
+            groups: If specified, only use rules from these groups
+
+        Returns:
+            EqualityProof if expressions are equivalent, None otherwise
+
+        Example:
+            engine = RuleEngine.from_dsl('''
+                @commute: (+ ?x ?y) <=> (+ :y :x)
+            ''')
+
+            proof = engine.prove_equal(["+", "a", "b"], ["+", "b", "a"])
+            if proof:
+                print(f"Equal! Common form: {format_sexpr(proof.common)}")
+        """
+        bidirectional_only = not include_unidirectional
+
+        # Convert to hashable for set operations
+        key_a = _expr_to_tuple(expr_a)
+        key_b = _expr_to_tuple(expr_b)
+
+        # Quick check: are they already equal?
+        if key_a == key_b:
+            path = [expr_a] if trace else None
+            return EqualityProof(
+                expr_a=expr_a,
+                expr_b=expr_b,
+                common=expr_a,
+                depth_a=0,
+                depth_b=0,
+                path_a=path,
+                path_b=path
+            )
+
+        # Track visited expressions from each side
+        # Maps: hashable_key -> (original_expr, depth, parent_key)
+        visited_a: Dict[tuple, Tuple[ExprType, int, Optional[tuple]]] = {
+            key_a: (expr_a, 0, None)
+        }
+        visited_b: Dict[tuple, Tuple[ExprType, int, Optional[tuple]]] = {
+            key_b: (expr_b, 0, None)
+        }
+
+        # BFS frontiers: (expression, depth)
+        frontier_a: deque = deque([(expr_a, 0)])
+        frontier_b: deque = deque([(expr_b, 0)])
+
+        def reconstruct_path(
+            visited: Dict[tuple, Tuple[ExprType, int, Optional[tuple]]],
+            target_key: tuple
+        ) -> List[ExprType]:
+            """Reconstruct path from start to target."""
+            path = []
+            current_key = target_key
+            while current_key is not None:
+                expr, depth, parent_key = visited[current_key]
+                path.append(expr)
+                current_key = parent_key
+            path.reverse()
+            return path
+
+        def check_intersection() -> Optional[EqualityProof]:
+            """Check if visited sets intersect."""
+            for key in visited_a:
+                if key in visited_b:
+                    expr_common, depth_a, _ = visited_a[key]
+                    _, depth_b, _ = visited_b[key]
+
+                    if trace:
+                        path_a = reconstruct_path(visited_a, key)
+                        path_b = reconstruct_path(visited_b, key)
+                    else:
+                        path_a = None
+                        path_b = None
+
+                    return EqualityProof(
+                        expr_a=expr_a,
+                        expr_b=expr_b,
+                        common=expr_common,
+                        depth_a=depth_a,
+                        depth_b=depth_b,
+                        path_a=path_a,
+                        path_b=path_b
+                    )
+            return None
+
+        # Alternate expanding from A and B
+        while frontier_a or frontier_b:
+            # Expand from A
+            if frontier_a:
+                current, depth = frontier_a.popleft()
+                if depth < max_depth:
+                    current_key = _expr_to_tuple(current)
+                    rewrites = self._all_single_rewrites(
+                        current, bidirectional_only, groups
+                    )
+                    for new_expr in rewrites:
+                        new_key = _expr_to_tuple(new_expr)
+                        if new_key not in visited_a:
+                            visited_a[new_key] = (new_expr, depth + 1, current_key)
+                            frontier_a.append((new_expr, depth + 1))
+
+                            # Check for intersection
+                            if new_key in visited_b:
+                                _, depth_b, _ = visited_b[new_key]
+                                if trace:
+                                    path_a = reconstruct_path(visited_a, new_key)
+                                    path_b = reconstruct_path(visited_b, new_key)
+                                else:
+                                    path_a = None
+                                    path_b = None
+
+                                return EqualityProof(
+                                    expr_a=expr_a,
+                                    expr_b=expr_b,
+                                    common=new_expr,
+                                    depth_a=depth + 1,
+                                    depth_b=depth_b,
+                                    path_a=path_a,
+                                    path_b=path_b
+                                )
+
+            # Expand from B
+            if frontier_b:
+                current, depth = frontier_b.popleft()
+                if depth < max_depth:
+                    current_key = _expr_to_tuple(current)
+                    rewrites = self._all_single_rewrites(
+                        current, bidirectional_only, groups
+                    )
+                    for new_expr in rewrites:
+                        new_key = _expr_to_tuple(new_expr)
+                        if new_key not in visited_b:
+                            visited_b[new_key] = (new_expr, depth + 1, current_key)
+                            frontier_b.append((new_expr, depth + 1))
+
+                            # Check for intersection
+                            if new_key in visited_a:
+                                _, depth_a_val, _ = visited_a[new_key]
+                                if trace:
+                                    path_a = reconstruct_path(visited_a, new_key)
+                                    path_b = reconstruct_path(visited_b, new_key)
+                                else:
+                                    path_a = None
+                                    path_b = None
+
+                                return EqualityProof(
+                                    expr_a=expr_a,
+                                    expr_b=expr_b,
+                                    common=new_expr,
+                                    depth_a=depth_a_val,
+                                    depth_b=depth + 1,
+                                    path_a=path_a,
+                                    path_b=path_b
+                                )
+
+        # No common form found within depth limit
+        return None
+
+    def are_equal(
+        self,
+        expr_a: ExprType,
+        expr_b: ExprType,
+        max_depth: int = 10,
+        **kwargs
+    ) -> bool:
+        """
+        Check if two expressions are equivalent.
+
+        Convenience method that returns a boolean instead of a proof.
+
+        Args:
+            expr_a: First expression
+            expr_b: Second expression
+            max_depth: Maximum rewrite steps (default: 10)
+            **kwargs: Additional arguments passed to prove_equal()
+
+        Returns:
+            True if expressions are equivalent, False otherwise
+
+        Example:
+            if engine.are_equal(["+", "a", "b"], ["+", "b", "a"]):
+                print("Expressions are equal!")
+        """
+        return self.prove_equal(expr_a, expr_b, max_depth=max_depth, **kwargs) is not None
+
+    # ============================================================
+    # Cost Optimization
+    # ============================================================
+
+    def minimize(
+        self,
+        expr: ExprType,
+        cost: Optional[Callable[[ExprType], float]] = None,
+        metric: Optional[str] = None,
+        op_costs: Optional[Dict[str, float]] = None,
+        max_depth: int = 10,
+        max_count: Optional[int] = 10000,
+        include_unidirectional: bool = False,
+        groups: Optional[List[str]] = None
+    ) -> OptimizationResult:
+        """
+        Find the minimum-cost equivalent expression.
+
+        Explores the equivalence class and returns the expression with lowest cost.
+        Cost can be specified via a custom function, a built-in metric, or operator costs.
+
+        Args:
+            expr: Expression to optimize
+            cost: Custom cost function (expr -> float)
+            metric: Built-in metric: "size", "depth", "ops", or "atoms"
+            op_costs: Dictionary of operator costs (e.g., {"+": 1, "*": 2, "^": 10})
+            max_depth: Maximum rewrite steps from original (default: 10)
+            max_count: Maximum expressions to evaluate (default: 10000)
+            include_unidirectional: If True, also use => rules
+            groups: If specified, only use rules from these groups
+
+        Returns:
+            OptimizationResult with the best expression found
+
+        Example:
+            # Minimize by size
+            result = engine.minimize(expr, metric="size")
+            print(f"Best: {format_sexpr(result.expr)}, cost: {result.cost}")
+
+            # Custom cost function
+            result = engine.minimize(expr, cost=lambda e: expr_depth(e) * 2 + expr_ops(e))
+
+            # Operator costs
+            result = engine.minimize(expr, op_costs={"+": 1, "*": 2, "/": 5, "^": 10})
+        """
+        # Determine cost function
+        if cost is not None:
+            cost_fn = cost
+        elif metric is not None:
+            if metric not in COST_METRICS:
+                raise ValueError(f"Unknown metric: {metric}. Valid: {list(COST_METRICS.keys())}")
+            cost_fn = COST_METRICS[metric]
+        elif op_costs is not None:
+            cost_fn = make_op_cost_fn(op_costs)
+        else:
+            # Default to size
+            cost_fn = expr_size
+
+        # Track best found
+        best_expr = expr
+        best_cost = cost_fn(expr)
+        original_cost = best_cost
+        count = 0
+
+        # Explore equivalents
+        for equiv in self.equivalents(
+            expr,
+            max_depth=max_depth,
+            max_count=max_count,
+            include_unidirectional=include_unidirectional,
+            groups=groups
+        ):
+            count += 1
+            equiv_cost = cost_fn(equiv)
+            if equiv_cost < best_cost:
+                best_expr = equiv
+                best_cost = equiv_cost
+
+        return OptimizationResult(
+            expr=best_expr,
+            cost=best_cost,
+            original=expr,
+            original_cost=original_cost,
+            expressions_checked=count
+        )
+
+    # ============================================================
+    # Random Sampling
+    # ============================================================
+
+    def random_equivalent(
+        self,
+        expr: ExprType,
+        steps: int = 10,
+        include_unidirectional: bool = False,
+        groups: Optional[List[str]] = None,
+        rng: Optional[random.Random] = None
+    ) -> ExprType:
+        """
+        Generate a random equivalent expression via random walk.
+
+        Performs a random walk through the rewrite space, applying
+        randomly chosen rules at each step.
+
+        Args:
+            expr: Starting expression
+            steps: Number of random rewrite steps (default: 10)
+            include_unidirectional: If True, also use => rules
+            groups: If specified, only use rules from these groups
+            rng: Optional random.Random instance for reproducibility
+
+        Returns:
+            A randomly chosen equivalent expression
+
+        Example:
+            # Get a random equivalent
+            rand_expr = engine.random_equivalent(expr, steps=10)
+
+            # Reproducible randomness
+            rng = random.Random(42)
+            rand_expr = engine.random_equivalent(expr, rng=rng)
+        """
+        if rng is None:
+            rng = random.Random()
+
+        bidirectional_only = not include_unidirectional
+        current = expr
+
+        for _ in range(steps):
+            rewrites = self._all_single_rewrites(current, bidirectional_only, groups)
+            if not rewrites:
+                break
+            current = rng.choice(rewrites)
+
+        return current
+
+    def sample_equivalents(
+        self,
+        expr: ExprType,
+        n: int = 10,
+        steps: int = 10,
+        unique: bool = True,
+        max_attempts: int = 100,
+        include_unidirectional: bool = False,
+        groups: Optional[List[str]] = None,
+        rng: Optional[random.Random] = None
+    ) -> List[ExprType]:
+        """
+        Sample multiple random equivalent expressions.
+
+        Args:
+            expr: Starting expression
+            n: Number of samples to generate (default: 10)
+            steps: Random walk steps per sample (default: 10)
+            unique: If True, return only unique expressions (default: True)
+            max_attempts: Maximum attempts to find unique samples (default: 100)
+            include_unidirectional: If True, also use => rules
+            groups: If specified, only use rules from these groups
+            rng: Optional random.Random instance for reproducibility
+
+        Returns:
+            List of sampled equivalent expressions
+
+        Example:
+            samples = engine.sample_equivalents(expr, n=5, steps=10)
+            for s in samples:
+                print(format_sexpr(s))
+        """
+        if rng is None:
+            rng = random.Random()
+
+        if unique:
+            seen: Set[tuple] = set()
+            samples: List[ExprType] = []
+            attempts = 0
+
+            while len(samples) < n and attempts < max_attempts:
+                attempts += 1
+                sample = self.random_equivalent(
+                    expr, steps=steps,
+                    include_unidirectional=include_unidirectional,
+                    groups=groups, rng=rng
+                )
+                key = _expr_to_tuple(sample)
+                if key not in seen:
+                    seen.add(key)
+                    samples.append(sample)
+
+            return samples
+        else:
+            return [
+                self.random_equivalent(
+                    expr, steps=steps,
+                    include_unidirectional=include_unidirectional,
+                    groups=groups, rng=rng
+                )
+                for _ in range(n)
+            ]
+
+    def random_walk(
+        self,
+        expr: ExprType,
+        max_steps: int = 100,
+        include_unidirectional: bool = False,
+        groups: Optional[List[str]] = None,
+        rng: Optional[random.Random] = None
+    ) -> Iterator[ExprType]:
+        """
+        Generate a lazy random walk through the equivalence class.
+
+        Yields expressions along a random path through the rewrite space.
+        Useful for exploring large equivalence classes without enumerating all.
+
+        Args:
+            expr: Starting expression
+            max_steps: Maximum steps to take (default: 100)
+            include_unidirectional: If True, also use => rules
+            groups: If specified, only use rules from these groups
+            rng: Optional random.Random instance for reproducibility
+
+        Yields:
+            Expressions along the random walk, starting with the original
+
+        Example:
+            for i, equiv in enumerate(engine.random_walk(expr, max_steps=20)):
+                print(f"Step {i}: {format_sexpr(equiv)}")
+        """
+        if rng is None:
+            rng = random.Random()
+
+        bidirectional_only = not include_unidirectional
+        current = expr
+        yield current
+
+        for _ in range(max_steps):
+            rewrites = self._all_single_rewrites(current, bidirectional_only, groups)
+            if not rewrites:
+                break
+            current = rng.choice(rewrites)
+            yield current
 
     def __rshift__(self, other: 'RuleEngine') -> 'SequencedEngine':
         """

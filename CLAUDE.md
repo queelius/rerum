@@ -52,6 +52,7 @@ mkdocs build                               # Build docs to site/
 
 ```
 @name: (pattern) => (skeleton)                    # Basic rule
+@name: (pattern) <=> (skeleton)                   # Bidirectional (creates -fwd and -rev)
 @name[100]: (pattern) => (skeleton)               # With priority (higher fires first)
 @name: (pattern) => (skeleton) when (condition)   # With guard
 [groupname]                                        # Start a named group
@@ -59,6 +60,48 @@ mkdocs build                               # Build docs to site/
 
 Pattern syntax: `?x`, `?x:const`, `?x:var`, `?x:free(v)`, `?x...`
 Skeleton syntax: `:x`, `:x...`, `(! op args...)`
+
+Bidirectional rules (`<=>`) create two rules automatically:
+```
+@commute: (+ ?x ?y) <=> (+ :y :x)
+# Creates: @commute-fwd: (+ ?x ?y) => (+ :y :x)
+#          @commute-rev: (+ ?y ?x) => (+ :x :y)
+```
+
+### Equivalence Enumeration
+
+Use `equivalents()` to explore all equivalent forms of an expression:
+```python
+engine = RuleEngine.from_dsl('''
+    @commute: (+ ?x ?y) <=> (+ :y :x)
+    @assoc: (+ (+ ?x ?y) ?z) <=> (+ :x (+ :y :z))
+''')
+
+# Enumerate equivalent forms (lazy generator)
+for expr in engine.equivalents(["+", ["+", "a", "b"], "c"], max_depth=3):
+    print(format_sexpr(expr))
+
+# Or collect all at once
+all_forms = engine.enumerate_equivalents(expr, max_count=100)
+```
+
+### Proving Equality
+
+Use `prove_equal()` to prove two expressions are equivalent:
+```python
+proof = engine.prove_equal(expr_a, expr_b, max_depth=10)
+if proof:
+    print(f"Equal via: {format_sexpr(proof.common)}")
+    print(f"Distance: {proof.depth_a} + {proof.depth_b} steps")
+
+# Simple boolean check
+if engine.are_equal(expr_a, expr_b):
+    print("Expressions are equivalent!")
+
+# With full trace
+proof = engine.prove_equal(a, b, trace=True)
+print(proof.format("full"))  # Shows paths from both expressions
+```
 
 ### Expression Representation
 
