@@ -1092,11 +1092,18 @@ class OptimizationResult:
         return self.original_cost - self.cost
 
     @property
-    def improvement_ratio(self) -> float:
-        """Ratio of improvement (1.0 = no change, 0.5 = halved cost)."""
+    def cost_ratio(self) -> float:
+        """Retained cost as a ratio of the original (1.0 = no change, 0.5 = halved cost)."""
         if self.original_cost == 0:
             return 1.0 if self.cost == 0 else float('inf')
         return self.cost / self.original_cost
+
+    @property
+    def improvement_ratio(self) -> float:
+        """Fractional improvement (0.0 = none, 0.5 = halved, 1.0 = eliminated)."""
+        if self.original_cost == 0:
+            return 0.0 if self.cost == 0 else float('-inf')
+        return 1.0 - (self.cost / self.original_cost)
 
     def __repr__(self) -> str:
         expr_str = format_sexpr(self.expr)
@@ -1399,12 +1406,12 @@ class RuleEngine:
             if not self._is_rule_active(metadata, groups):
                 continue
             pattern, skeleton = rule
-            bindings = _match_internal(pattern, expr, [])
-            if bindings != "failed":
+            raw_bindings = _match_internal(pattern, expr, [])
+            if wrap_bindings(raw_bindings):
                 # Check condition if present
-                if not self._check_condition(metadata.condition, bindings):
+                if not self._check_condition(metadata.condition, raw_bindings):
                     continue
-                result = instantiate(skeleton, bindings, self._fold_funcs)
+                result = instantiate(skeleton, raw_bindings, self._fold_funcs)
                 return result, metadata
 
         return expr, None
@@ -1438,7 +1445,7 @@ class RuleEngine:
                 continue
             pattern, skeleton = rule
             raw_bindings = _match_internal(pattern, expr, [])
-            if raw_bindings != "failed":
+            if wrap_bindings(raw_bindings):
                 # Check condition if requested
                 if check_conditions and not self._check_condition(metadata.condition, raw_bindings):
                     continue
@@ -1534,11 +1541,11 @@ class RuleEngine:
                 if not self._is_rule_active(metadata, groups):
                     continue
                 pattern, skeleton = rule
-                bindings = _match_internal(pattern, current, [])
-                if bindings != "failed":
-                    if not self._check_condition(metadata.condition, bindings):
+                raw_bindings = _match_internal(pattern, current, [])
+                if wrap_bindings(raw_bindings):
+                    if not self._check_condition(metadata.condition, raw_bindings):
                         continue
-                    new_expr = instantiate(skeleton, bindings, self._fold_funcs)
+                    new_expr = instantiate(skeleton, raw_bindings, self._fold_funcs)
                     if new_expr != current:
                         current = new_expr
                         changed = True
@@ -1587,12 +1594,12 @@ class RuleEngine:
             if not self._is_rule_active(metadata, groups):
                 continue
             pattern, skeleton = rule
-            bindings = _match_internal(pattern, current, [])
-            if bindings != "failed":
+            raw_bindings = _match_internal(pattern, current, [])
+            if wrap_bindings(raw_bindings):
                 # Check condition if present
-                if not self._check_condition(metadata.condition, bindings):
+                if not self._check_condition(metadata.condition, raw_bindings):
                     continue
-                result = instantiate(skeleton, bindings, self._fold_funcs)
+                result = instantiate(skeleton, raw_bindings, self._fold_funcs)
                 if result != current:
                     return result
 
@@ -1617,12 +1624,12 @@ class RuleEngine:
             if not self._is_rule_active(metadata, groups):
                 continue
             pattern, skeleton = rule
-            bindings = _match_internal(pattern, current, [])
-            if bindings != "failed":
+            raw_bindings = _match_internal(pattern, current, [])
+            if wrap_bindings(raw_bindings):
                 # Check condition if present
-                if not self._check_condition(metadata.condition, bindings):
+                if not self._check_condition(metadata.condition, raw_bindings):
                     continue
-                result = instantiate(skeleton, bindings, self._fold_funcs)
+                result = instantiate(skeleton, raw_bindings, self._fold_funcs)
                 if result != current:
                     return result  # Return immediately - will be called again
 
@@ -1649,12 +1656,12 @@ class RuleEngine:
                 if not self._is_rule_active(metadata, groups):
                     continue
                 pattern, skeleton = rule
-                bindings = _match_internal(pattern, current, [])
-                if bindings != "failed":
+                raw_bindings = _match_internal(pattern, current, [])
+                if wrap_bindings(raw_bindings):
                     # Check condition if present
-                    if not self._check_condition(metadata.condition, bindings):
+                    if not self._check_condition(metadata.condition, raw_bindings):
                         continue
-                    new_expr = instantiate(skeleton, bindings, self._fold_funcs)
+                    new_expr = instantiate(skeleton, raw_bindings, self._fold_funcs)
                     if new_expr != current:
                         step = RewriteStep(
                             rule_index=rule_idx,
@@ -1997,12 +2004,12 @@ class RuleEngine:
                 continue
 
             pattern, skeleton = rule
-            bindings = _match_internal(pattern, expr, [])
-            if bindings != "failed":
+            raw_bindings = _match_internal(pattern, expr, [])
+            if wrap_bindings(raw_bindings):
                 # Check condition if present
-                if not self._check_condition(metadata.condition, bindings):
+                if not self._check_condition(metadata.condition, raw_bindings):
                     continue
-                result = instantiate(skeleton, bindings, self._fold_funcs)
+                result = instantiate(skeleton, raw_bindings, self._fold_funcs)
                 if result != expr:
                     add_if_new(result)
 
@@ -2106,11 +2113,10 @@ class RuleEngine:
                     if max_count is not None and count >= max_count:
                         return
 
-                    # Add to frontier for further exploration
-                    if strategy == "bfs":
-                        frontier.append((new_expr, depth + 1))
-                    else:
-                        frontier.append((new_expr, depth + 1))
+                    # Add to frontier for further exploration.
+                    # BFS vs DFS only differs on the pop side (popleft vs pop);
+                    # the append side is symmetric for both structures.
+                    frontier.append((new_expr, depth + 1))
 
     def enumerate_equivalents(
         self,
@@ -2218,31 +2224,6 @@ class RuleEngine:
                 current_key = parent_key
             path.reverse()
             return path
-
-        def check_intersection() -> Optional[EqualityProof]:
-            """Check if visited sets intersect."""
-            for key in visited_a:
-                if key in visited_b:
-                    expr_common, depth_a, _ = visited_a[key]
-                    _, depth_b, _ = visited_b[key]
-
-                    if trace:
-                        path_a = reconstruct_path(visited_a, key)
-                        path_b = reconstruct_path(visited_b, key)
-                    else:
-                        path_a = None
-                        path_b = None
-
-                    return EqualityProof(
-                        expr_a=expr_a,
-                        expr_b=expr_b,
-                        common=expr_common,
-                        depth_a=depth_a,
-                        depth_b=depth_b,
-                        path_a=path_a,
-                        path_b=path_b
-                    )
-            return None
 
         # Alternate expanding from A and B
         while frontier_a or frontier_b:

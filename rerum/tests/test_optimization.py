@@ -131,14 +131,28 @@ class TestOptimizationResultClass:
         result = OptimizationResult(
             expr="a", cost=2, original="b", original_cost=4
         )
+        # cost_ratio is retained cost (2/4 = 0.5);
+        # improvement_ratio is fractional improvement (1 - 2/4 = 0.5)
+        assert result.cost_ratio == 0.5
         assert result.improvement_ratio == 0.5
+
+    def test_improvement_ratio_no_improvement(self):
+        """No-improvement case: cost_ratio is 1.0, improvement_ratio is 0.0."""
+        result = OptimizationResult(
+            expr="a", cost=4, original="a", original_cost=4
+        )
+        assert result.cost_ratio == 1.0
+        assert result.improvement_ratio == 0.0
 
     def test_improvement_ratio_zero_original(self):
         """improvement_ratio handles zero original cost."""
         result = OptimizationResult(
             expr="a", cost=0, original="b", original_cost=0
         )
-        assert result.improvement_ratio == 1.0
+        # cost_ratio: 1.0 (nothing to retain, nothing there);
+        # improvement_ratio: 0.0 (no improvement possible from 0).
+        assert result.cost_ratio == 1.0
+        assert result.improvement_ratio == 0.0
 
     def test_bool_improved(self):
         """Bool is True when improved."""

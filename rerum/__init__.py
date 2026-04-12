@@ -36,7 +36,7 @@ Example Rules File (algebra.rules):
     @dd-var: (dd ?x:var ?x) => 1
 """
 
-__version__ = "0.1.0"
+__version__ = "0.4.0"
 __author__ = "spinoza"
 
 # Core rewriter components
@@ -77,6 +77,8 @@ from .engine import (
     RuleMetadata,
     RewriteStep,
     RewriteTrace,
+    EqualityProof,
+    OptimizationResult,
     E,
     parse_sexpr,
     format_sexpr,
@@ -84,6 +86,13 @@ from .engine import (
     load_rules_from_dsl,
     load_rules_from_file,
     load_rules_from_json,
+    # Cost functions
+    expr_size,
+    expr_depth,
+    expr_ops,
+    expr_atoms,
+    make_op_cost_fn,
+    COST_METRICS,
 )
 
 # Public API
@@ -125,6 +134,8 @@ __all__ = [
     "RuleMetadata",
     "RewriteStep",
     "RewriteTrace",
+    "EqualityProof",
+    "OptimizationResult",
     # Expression builder
     "E",
     # DSL utilities
@@ -134,4 +145,11 @@ __all__ = [
     "load_rules_from_dsl",
     "load_rules_from_file",
     "load_rules_from_json",
+    # Cost functions
+    "expr_size",
+    "expr_depth",
+    "expr_ops",
+    "expr_atoms",
+    "make_op_cost_fn",
+    "COST_METRICS",
 ]

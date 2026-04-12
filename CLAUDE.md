@@ -33,8 +33,11 @@ mkdocs build                               # Build docs to site/
 - `RuleEngine` - Main API: load rules, apply strategies, manage groups
 - `RuleMetadata` - Rule name, description, priority, condition (guard)
 - `RewriteTrace` / `RewriteStep` - Tracing infrastructure
+- `EqualityProof` - Result of `prove_equal()` with paths and formatting
+- `OptimizationResult` - Result of `minimize()` with improvement metrics
 - `parse_sexpr()` / `format_sexpr()` - S-expression I/O
 - `E` - Expression builder singleton
+- Cost functions: `expr_size`, `expr_depth`, `expr_ops`, `expr_atoms`, `make_op_cost_fn`
 
 **cli.py** - Command-line interface
 - `RerumREPL` - Interactive REPL with readline support
@@ -101,6 +104,49 @@ if engine.are_equal(expr_a, expr_b):
 # With full trace
 proof = engine.prove_equal(a, b, trace=True)
 print(proof.format("full"))  # Shows paths from both expressions
+```
+
+### Cost Optimization
+
+Use `minimize()` to find the minimal-cost equivalent expression:
+```python
+from rerum import expr_size, expr_depth, make_op_cost_fn
+
+# Using built-in metrics
+result = engine.minimize(expr, metric="size")  # or "depth", "ops", "atoms"
+
+# Using custom cost function
+result = engine.minimize(expr, cost=lambda e: expr_size(e) + 2*expr_depth(e))
+
+# Using operator costs
+result = engine.minimize(expr, op_costs={"+": 1, "*": 2, "/": 5})
+
+if result:  # True if improvement found
+    print(f"Reduced from {result.original_cost} to {result.cost}")
+    print(f"Improvement: {result.improvement_ratio:.1%}")  # fractional improvement
+    print(f"Retained:    {result.cost_ratio:.1%}")         # ratio of original kept
+```
+
+### Random Sampling
+
+Stochastic exploration of equivalence classes:
+```python
+import random
+
+# Get a random equivalent (random walk)
+equiv = engine.random_equivalent(expr, steps=10)
+
+# Sample multiple equivalents
+samples = engine.sample_equivalents(expr, n=5, unique=True)
+
+# Reproducible with RNG
+rng = random.Random(42)
+samples = engine.sample_equivalents(expr, n=5, rng=rng)
+
+# Lazy generator for exploration
+for equiv in engine.random_walk(expr, max_steps=100, rng=rng):
+    if some_condition(equiv):
+        break
 ```
 
 ### Expression Representation
