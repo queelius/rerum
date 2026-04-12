@@ -4,9 +4,6 @@ on:
   release:
     types: [published]
 
-permissions:
-  id-token: write  # Required for trusted publishing
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -35,9 +32,14 @@ jobs:
   publish-pypi:
     needs: build
     runs-on: ubuntu-latest
-    environment:
-      name: pypi
-      url: https://pypi.org/project/rerum/
+    # No `environment:` block on purpose. With an environment declared,
+    # pypa/gh-action-pypi-publish tries trusted publishing via OIDC first
+    # and fails unless the publisher is configured on PyPI. Using the
+    # repo-level PYPI_API_TOKEN keeps publishing working without
+    # PyPI-side setup. To switch to trusted publishing: (1) configure
+    # the publisher at https://pypi.org/manage/account/publishing/,
+    # (2) restore the `environment:` block and `permissions: id-token: write`,
+    # (3) drop the `password:` input.
 
     steps:
       - name: Download build artifacts
@@ -49,7 +51,4 @@ jobs:
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          # Uses trusted publishing if configured, otherwise falls back to API token
           password: ${{ secrets.PYPI_API_TOKEN }}
-        # For trusted publishing, configure at:
-        # https://pypi.org/manage/account/publishing/
