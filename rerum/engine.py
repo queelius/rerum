@@ -2148,6 +2148,7 @@ class RuleEngine:
         expr_a: ExprType,
         expr_b: ExprType,
         max_depth: int = 10,
+        max_expressions: Optional[int] = None,
         trace: bool = False,
         include_unidirectional: bool = False,
         groups: Optional[List[str]] = None
@@ -2163,6 +2164,11 @@ class RuleEngine:
             expr_a: First expression
             expr_b: Second expression
             max_depth: Maximum rewrite steps from either expression (default: 10)
+            max_expressions: Optional total-work budget across both frontiers.
+                When the sum of visited states exceeds this, the search
+                returns None (same as max_depth exhaustion). Useful for
+                bounding un-provable queries, which otherwise exhaust the
+                full reachable set under `max_depth`. Default: None (no cap).
             trace: If True, include full paths in the proof
             include_unidirectional: If True, also use => rules (not just <=>)
             groups: If specified, only use rules from these groups
@@ -2178,6 +2184,9 @@ class RuleEngine:
             proof = engine.prove_equal(["+", "a", "b"], ["+", "b", "a"])
             if proof:
                 print(f"Equal! Common form: {format_sexpr(proof.common)}")
+
+            # With a work budget for expensive queries:
+            proof = engine.prove_equal(a, b, max_depth=8, max_expressions=5000)
         """
         bidirectional_only = not include_unidirectional
 
@@ -2227,6 +2236,11 @@ class RuleEngine:
 
         # Alternate expanding from A and B
         while frontier_a or frontier_b:
+            # Budget check: total work across both frontiers
+            if max_expressions is not None and \
+                    len(visited_a) + len(visited_b) >= max_expressions:
+                return None
+
             # Expand from A
             if frontier_a:
                 current, depth = frontier_a.popleft()
@@ -2337,7 +2351,7 @@ class RuleEngine:
         op_costs: Optional[Dict[str, float]] = None,
         max_depth: int = 10,
         max_count: Optional[int] = 10000,
-        include_unidirectional: bool = False,
+        include_unidirectional: bool = True,
         groups: Optional[List[str]] = None
     ) -> OptimizationResult:
         """
@@ -2353,7 +2367,12 @@ class RuleEngine:
             op_costs: Dictionary of operator costs (e.g., {"+": 1, "*": 2, "^": 10})
             max_depth: Maximum rewrite steps from original (default: 10)
             max_count: Maximum expressions to evaluate (default: 10000)
-            include_unidirectional: If True, also use => rules
+            include_unidirectional: If True (default), also use => rules in
+                addition to <=> rules. Simplification rules are typically
+                unidirectional, so this default makes minimize useful out
+                of the box. Set to False to restrict to bidirectional-only
+                exploration (useful when you want to preserve equivalence
+                strictly under a reversible theory).
             groups: If specified, only use rules from these groups
 
         Returns:

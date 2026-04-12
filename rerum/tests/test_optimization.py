@@ -7,6 +7,7 @@ from rerum.engine import (
     expr_size, expr_depth, expr_ops, expr_atoms, make_op_cost_fn,
     COST_METRICS,
 )
+from rerum import ARITHMETIC_PRELUDE
 
 
 class TestCostFunctions:
@@ -498,22 +499,54 @@ class TestOptimizationPractical:
         assert result.expr == "a"
 
     def test_minimize_can_increase_first(self):
-        """Optimization may increase size before decreasing."""
-        engine = RuleEngine.from_dsl("""
-            @expand: (square ?x) <=> (* :x :x)
-            @fold-mul: (* ?a:const ?b:const) => (! * :a :b)
-        """)
-        # Note: fold-mul is unidirectional, so won't be used by default
+        """Optimization may increase size before decreasing.
 
-        # square 3 -> (* 3 3) -> actually we can't fold without include_unidirectional
+        With the v0.4 default (include_unidirectional=True), minimize
+        uses both => and <=> rules, so (square 3) expands via <=> to
+        (* 3 3) and then folds via => to 9.
+        """
+        engine = (RuleEngine()
+            .with_prelude(ARITHMETIC_PRELUDE)
+            .load_dsl("""
+                @expand: (square ?x) <=> (* :x :x)
+                @fold-mul: (* ?a:const ?b:const) => (! * :a :b)
+            """))
+
+        result = engine.minimize(["square", 3], metric="size", max_depth=3)
+        assert result.expr == 9
+        assert result.cost == 1
+
+    def test_minimize_can_increase_first_bidirectional_only(self):
+        """With include_unidirectional=False, only <=> rules apply."""
+        engine = (RuleEngine()
+            .with_prelude(ARITHMETIC_PRELUDE)
+            .load_dsl("""
+                @expand: (square ?x) <=> (* :x :x)
+                @fold-mul: (* ?a:const ?b:const) => (! * :a :b)
+            """))
+
+        # With unidirectional disabled, fold-mul is ignored;
+        # the best alternative to (square 3) is (* 3 3), which is larger,
+        # so the original is kept.
         result = engine.minimize(
             ["square", 3],
             metric="size",
-            max_depth=3
+            max_depth=3,
+            include_unidirectional=False,
         )
-        # Without fold, (* 3 3) is larger than (square 3)
-        # So original should be kept
         assert result.expr == ["square", 3]
+
+    def test_minimize_default_uses_unidirectional(self):
+        """v0.4 regression: minimize() must apply => rules by default."""
+        engine = RuleEngine.from_dsl("""
+            @add-zero: (+ ?x 0) => :x
+            @mul-one:  (* ?x 1) => :x
+        """)
+        # No <=> rules at all, just =>. Under the old default, minimize
+        # would find zero improvements. Under the new default, it reduces.
+        result = engine.minimize(["+", ["*", "x", 1], 0], metric="size")
+        assert result.expr == "x"
+        assert result.cost == 1
 
     def test_sample_diversity(self):
         """Sampling produces diverse equivalents."""

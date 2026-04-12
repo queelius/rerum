@@ -182,6 +182,73 @@ number_theory(E("(gcd 12 8)"))      # => 4
 number_theory(E("(factorial 5)"))   # => 120
 ```
 
+## Proving Boolean Identities
+
+Bidirectional rules let you prove expressions are equivalent by searching
+for a common form from both sides.
+
+```python
+from rerum import RuleEngine, format_sexpr
+
+logic = RuleEngine.from_dsl('''
+    @demorgan-and: (not (and ?x ?y)) <=> (or (not :x) (not :y))
+    @demorgan-or:  (not (or  ?x ?y)) <=> (and (not :x) (not :y))
+    @double-neg:   (not (not ?x)) <=> :x
+    @comm-and:     (and ?x ?y) <=> (and :y :x)
+    @comm-or:      (or  ?x ?y) <=> (or  :y :x)
+''')
+
+proof = logic.prove_equal(
+    ["not", ["and", "p", "q"]],
+    ["or", ["not", "p"], ["not", "q"]],
+)
+print(format_sexpr(proof.common))
+# (or (not p) (not q))
+```
+
+## Minimizing Algebraic Expressions
+
+`minimize()` finds the smallest equivalent expression under a cost metric.
+It applies both `=>` and `<=>` rules by default, so you can throw in
+commutativity and it will explore permutations to find simplifiable forms.
+
+```python
+algebra = RuleEngine.from_dsl('''
+    @add-zero: (+ ?x 0) => :x
+    @mul-one:  (* ?x 1) => :x
+    @mul-zero: (* ?x 0) => 0
+    @comm-add: (+ ?x ?y) <=> (+ :y :x)
+    @comm-mul: (* ?x ?y) <=> (* :y :x)
+''')
+
+result = algebra.minimize(
+    ["*", ["+", "x", 0], ["+", "y", 0]],
+    metric="size",
+)
+print(format_sexpr(result.expr))   # (* x y)
+print(f"{result.improvement_ratio:.0%} smaller")   # 57%
+```
+
+## Enumerating Equivalence Classes
+
+Under assoc + commute, `a + b + c + d` has exactly 120 distinct forms:
+
+```python
+assoc_comm = RuleEngine.from_dsl('''
+    @assoc: (+ (+ ?x ?y) ?z) <=> (+ :x (+ :y :z))
+    @comm:  (+ ?x ?y) <=> (+ :y :x)
+''')
+
+forms = assoc_comm.enumerate_equivalents(
+    ["+", ["+", "a", "b"], ["+", "c", "d"]],
+    max_depth=10,
+)
+print(len(forms))   # 120
+```
+
+For larger sums, use `prove_equal` with a `max_expressions` budget rather
+than full enumeration.
+
 ## Tracing Derivations
 
 ```python

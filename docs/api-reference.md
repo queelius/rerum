@@ -106,6 +106,75 @@ pipeline = engine1 >> engine2
 result = pipeline(expr)
 ```
 
+### Equivalence and Proof
+
+```python
+from rerum import format_sexpr
+
+# Lazy generator of equivalent expressions
+for eq in engine.equivalents(expr, max_depth=10):
+    print(format_sexpr(eq))
+
+# Eager list
+forms = engine.enumerate_equivalents(expr, max_depth=10, max_count=1000)
+
+# Prove two expressions are equivalent (bidirectional BFS)
+proof = engine.prove_equal(a, b, max_depth=10, max_expressions=5000)
+if proof:
+    proof.common       # common form
+    proof.depth_a      # steps from a
+    proof.depth_b      # steps from b
+    proof.path_a       # full path (if trace=True)
+    proof.path_b
+    print(proof.format("full"))
+
+# Boolean convenience
+engine.are_equal(a, b)
+```
+
+### Cost Optimization
+
+```python
+from rerum import expr_size, expr_depth, expr_ops, expr_atoms, make_op_cost_fn
+
+# Built-in metric: "size", "depth", "ops", or "atoms"
+result = engine.minimize(expr, metric="size")
+
+# Custom cost function
+result = engine.minimize(expr, cost=lambda e: expr_size(e) + 2*expr_depth(e))
+
+# Per-operator costs
+result = engine.minimize(expr, op_costs={"+": 1, "*": 2, "^": 10})
+
+# OptimizationResult attributes
+result.expr               # minimum-cost expression found
+result.cost               # its cost
+result.original_cost
+result.improvement        # absolute cost reduction
+result.improvement_ratio  # fractional improvement (0.0 = none)
+result.cost_ratio         # retained cost ratio (1.0 = no change)
+result.expressions_checked
+bool(result)              # True iff any improvement found
+```
+
+### Random Sampling
+
+```python
+import random
+rng = random.Random(42)
+
+# Single random equivalent via random walk
+equiv = engine.random_equivalent(expr, steps=20, rng=rng)
+
+# Sample multiple (unique by default)
+samples = engine.sample_equivalents(expr, n=10, unique=True, rng=rng)
+
+# Lazy infinite walk
+for eq in engine.random_walk(expr, max_steps=100, rng=rng):
+    if interesting(eq):
+        break
+```
+
 ## Expression Builder (E)
 
 ```python
@@ -208,10 +277,11 @@ from rerum import (
     format_sexpr, # Format to s-expression string
 )
 
-# Direct pattern matching
-bindings = match(pattern, expr, [])
-if bindings != "failed":
-    result = instantiate(skeleton, bindings, fold_funcs)
+# Direct pattern matching: wrap_bindings() returns falsy Bindings on failure
+from rerum import wrap_bindings
+raw = match(pattern, expr, [])
+if wrap_bindings(raw):
+    result = instantiate(skeleton, raw, fold_funcs)
 
 # Create rewriter function
 simplify = rewriter(rules, fold_funcs=ARITHMETIC_PRELUDE)

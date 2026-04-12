@@ -8,10 +8,12 @@ A pattern matching and term rewriting library for symbolic computation in Python
 
 - **Declarative Rules** - Define rewrite rules in a simple DSL
 - **Pattern Matching** - Match expressions with variables, constants, and rest patterns
+- **Bidirectional Rules** - Use `<=>` for reversible equivalences
 - **Conditional Guards** - Rules with `when` conditions
 - **Rule Priorities** - Control which rules fire first
 - **Named Groups** - Organize rules into selectable groups
 - **Multiple Strategies** - exhaustive, once, bottomup, topdown
+- **Equivalence & Proof** - Enumerate equivalent forms, prove equality, minimize by cost
 - **CLI & REPL** - Interactive exploration and scripting
 - **Extensible** - Custom preludes for new operations
 
@@ -49,6 +51,7 @@ y
 
 - [Getting Started](getting-started.md) - Tutorial introduction
 - [DSL Reference](dsl-reference.md) - Complete syntax guide
+- [Equivalence & Proof](equivalence.md) - Bidirectional rules, `prove_equal`, `minimize`
 - [CLI](cli.md) - Command-line interface
 - [API Reference](api-reference.md) - Python API
 - [Examples](examples.md) - Real-world examples

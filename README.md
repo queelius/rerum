@@ -298,6 +298,93 @@ engine = RuleEngine.from_dsl('''
 engine(E("(+ (+ 1 2) 3 4)"))  # => ["+", 1, 2, 3, 4] => 10
 ```
 
+## Equivalence, Proof, and Optimization
+
+Bidirectional rules (`<=>`) let you reason over equivalence classes, not
+just reduce expressions to normal form.
+
+### Bidirectional Rules
+
+```python
+engine = RuleEngine.from_dsl('''
+    @comm-add:  (+ ?x ?y) <=> (+ :y :x)
+    @assoc:     (+ (+ ?x ?y) ?z) <=> (+ :x (+ :y :z))
+    @demorgan:  (not (and ?x ?y)) <=> (or (not :x) (not :y))
+''')
+```
+
+Each `<=>` rule expands into two unidirectional rules internally, so the
+equivalence class is closed under both directions.
+
+### Proving Equality
+
+`prove_equal` uses bidirectional BFS. It meets in the middle, so it handles
+non-trivial equalities in milliseconds on small rule sets.
+
+```python
+proof = engine.prove_equal(
+    ["+", ["+", "a", "b"], "c"],
+    ["+", "c", ["+", "b", "a"]],
+    max_depth=10,
+    max_expressions=5000,   # optional work budget
+)
+if proof:
+    print(format_sexpr(proof.common))
+    print(f"Depths: a={proof.depth_a}, b={proof.depth_b}")
+
+# Boolean shortcut
+engine.are_equal(a, b)
+```
+
+Set `max_expressions` to bound un-provable queries (they otherwise exhaust
+the full depth-bounded reachable set on both sides).
+
+### Minimizing Cost
+
+`minimize` searches the equivalence class for the lowest-cost member.
+
+```python
+from rerum import expr_size, expr_depth, make_op_cost_fn
+
+# Built-in metric
+result = engine.minimize(expr, metric="size")    # or "depth", "ops", "atoms"
+
+# Custom cost
+result = engine.minimize(expr, cost=lambda e: expr_size(e) + 2*expr_depth(e))
+
+# Per-operator costs
+result = engine.minimize(expr, op_costs={"+": 1, "*": 2, "^": 10})
+
+print(result.expr, result.cost, result.improvement_ratio)
+```
+
+By default, `minimize` uses both `=>` and `<=>` rules, which matches how
+users typically write simplification rules. Pass `include_unidirectional=False`
+to restrict to strict reversible equivalences.
+
+### Enumerating and Sampling
+
+```python
+# Lazy generator over the equivalence class
+for eq in engine.equivalents(expr, max_depth=6):
+    ...
+
+# Eager list
+forms = engine.enumerate_equivalents(expr, max_depth=10, max_count=1000)
+
+# Random sampling
+import random
+rng = random.Random(42)
+samples = engine.sample_equivalents(expr, n=10, unique=True, rng=rng)
+equiv = engine.random_equivalent(expr, steps=20, rng=rng)
+```
+
+Under `assoc + commute`, the class of an `n`-term sum has exactly
+`n! × Catalan(n-1)` members (2, 12, 120, 1680 for `n = 2..5`). Past `n = 5`
+prefer `prove_equal` with a budget over full enumeration. See the
+[equivalence guide](https://queelius.github.io/rerum/equivalence/) and
+`experiments/` for benchmarks.
+
 ## API Reference
 
 ### Creating Engines

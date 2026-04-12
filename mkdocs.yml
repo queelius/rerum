@@ -41,6 +41,7 @@ nav:
   - Home: index.md
   - Getting Started: getting-started.md
   - DSL Reference: dsl-reference.md
+  - Equivalence & Proof: equivalence.md
   - CLI: cli.md
   - API Reference: api-reference.md
   - Examples: examples.md

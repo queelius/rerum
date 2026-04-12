@@ -318,6 +318,53 @@ class TestProveEqualMaxDepth:
         assert proof is not None
 
 
+class TestProveEqualMaxExpressions:
+    """Tests for the max_expressions work budget."""
+
+    def test_budget_returns_none_on_exhaust(self):
+        """Un-provable queries terminate quickly with a budget."""
+        engine = RuleEngine.from_dsl("""
+            @comm-and: (and ?x ?y) <=> (and :y :x)
+            @comm-or:  (or  ?x ?y) <=> (or  :y :x)
+            @demorgan: (not (and ?x ?y)) <=> (or (not :x) (not :y))
+            @dneg:     (not (not ?x)) <=> :x
+        """)
+        a = ["not", ["and", "p", "q"]]
+        b = ["and", "p", "q"]  # genuinely not equivalent to a
+        proof = engine.prove_equal(a, b, max_depth=10, max_expressions=100)
+        assert proof is None
+
+    def test_budget_allows_provable_if_sufficient(self):
+        """Budget must not block provable queries when work fits."""
+        engine = RuleEngine.from_dsl("""
+            @comm: (+ ?x ?y) <=> (+ :y :x)
+        """)
+        proof = engine.prove_equal(
+            ["+", "a", "b"], ["+", "b", "a"],
+            max_depth=5, max_expressions=50
+        )
+        assert proof is not None
+
+    def test_budget_blocks_provable_if_too_tight(self):
+        """A tight budget may block even a provable query."""
+        engine = RuleEngine.from_dsl("""
+            @comm:  (+ ?x ?y) <=> (+ :y :x)
+            @assoc: (+ (+ ?x ?y) ?z) <=> (+ :x (+ :y :z))
+        """)
+        a = ["+", ["+", ["+", "a", "b"], "c"], "d"]
+        b = ["+", "d", ["+", "c", ["+", "b", "a"]]]
+        proof = engine.prove_equal(a, b, max_depth=10, max_expressions=4)
+        assert proof is None
+
+    def test_budget_default_is_none(self):
+        """Without a budget, behavior is unchanged from pre-v0.4."""
+        engine = RuleEngine.from_dsl("""
+            @comm: (+ ?x ?y) <=> (+ :y :x)
+        """)
+        proof = engine.prove_equal(["+", "a", "b"], ["+", "b", "a"])
+        assert proof is not None
+
+
 class TestProveEqualWithGroups:
     """Tests for prove_equal with group filtering."""
 
