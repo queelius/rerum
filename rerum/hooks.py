@@ -10,7 +10,7 @@ max_depth, cycle, should_fire) are fired by the engine at its natural pause
 points; this module provides the data types they exchange.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -45,9 +45,10 @@ class ResolverLoopError(HooksError):
 @dataclass(frozen=True)
 class Resolution:
     """Returned by a Resolver hook to override engine default behavior at a
-    dead-end. Exactly one of ``value``, ``rules``, ``fold_funcs``,
-    ``allow_more``, or ``abort`` must be the non-default action;
-    ``metadata`` is orthogonal and may co-exist with any action.
+    dead-end. Exactly one of ``value``, ``rules``, ``fold_funcs``, or
+    ``allow_more`` must be set as the primary action; ``abort`` and
+    ``metadata`` are orthogonal flags that may co-exist with any primary
+    action (or with each other when no primary action is set).
     """
 
     value: Optional["ExprType"] = None
@@ -58,22 +59,30 @@ class Resolution:
     metadata: Optional[Dict[str, Any]] = None
 
     def __post_init__(self):
-        # Count primary actions (excluding metadata).
-        actions = [
+        # Count primary actions (abort is orthogonal, not a primary action).
+        primary = [
             self.value is not None,
             self.rules is not None,
             self.fold_funcs is not None,
             self.allow_more is not None,
-            self.abort,
         ]
-        n = sum(actions)
-        if n == 0:
+        n = sum(primary)
+        if n == 0 and not self.abort:
             raise ResolutionError(
                 "Resolution is empty: set exactly one of "
-                "value/rules/fold_funcs/allow_more/abort"
+                "value/rules/fold_funcs/allow_more, or set abort=True"
             )
         if n > 1:
             raise ResolutionError(
                 "Resolution is ambiguous: set exactly one of "
-                "value/rules/fold_funcs/allow_more/abort"
+                "value/rules/fold_funcs/allow_more"
             )
+        if self.allow_more is False:
+            raise ResolutionError(
+                "allow_more=False is not a valid Resolution; "
+                "return None from the resolver to decline"
+            )
+        if self.rules is not None and len(self.rules) == 0:
+            raise ResolutionError("rules must be non-empty (an empty list adds nothing)")
+        if self.fold_funcs is not None and len(self.fold_funcs) == 0:
+            raise ResolutionError("fold_funcs must be non-empty")
