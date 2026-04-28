@@ -974,3 +974,107 @@ class TestCancelRequestedIsolation:
         result = engine.simplify(["+", "y", 0])
         # Cancellation fired again, but the rule had already produced "y".
         assert result == "y"
+
+
+class TestStrategyParity:
+    """no_match, cycle, and fixpoint must fire across all strategies, not
+    just exhaustive. The hook-driven LLM rule inference flow needs this
+    parity to work uniformly."""
+
+    def test_no_match_fires_in_bottomup(self):
+        engine = RuleEngine()  # no rules
+        seen = []
+        engine.on_no_match(lambda expr, ctx: seen.append(expr))
+        engine.simplify(["foo", "bar"], strategy="bottomup")
+        # The compound (foo bar) had no matching rule.
+        assert ["foo", "bar"] in seen
+
+    def test_no_match_fires_in_topdown(self):
+        engine = RuleEngine()
+        seen = []
+        engine.on_no_match(lambda expr, ctx: seen.append(expr))
+        engine.simplify(["foo", "bar"], strategy="topdown")
+        assert ["foo", "bar"] in seen
+
+    def test_no_match_value_resolution_in_bottomup(self):
+        from rerum.hooks import Resolution
+        engine = RuleEngine()
+
+        @engine.on_no_match
+        def resolver(expr, ctx):
+            if expr == ["foo", "bar"]:
+                return Resolution(value="baz")
+            return None
+
+        result = engine.simplify(["foo", "bar"], strategy="bottomup")
+        assert result == "baz"
+
+    def test_no_match_value_resolution_in_topdown(self):
+        from rerum.hooks import Resolution
+        engine = RuleEngine()
+
+        @engine.on_no_match
+        def resolver(expr, ctx):
+            if expr == ["foo", "bar"]:
+                return Resolution(value="baz")
+            return None
+
+        result = engine.simplify(["foo", "bar"], strategy="topdown")
+        assert result == "baz"
+
+    def test_no_match_rules_resolution_in_bottomup(self):
+        from rerum.engine import parse_rule_line
+        from rerum.hooks import Resolution
+
+        engine = RuleEngine()
+
+        @engine.on_no_match
+        def resolver(expr, ctx):
+            if isinstance(expr, list) and expr and expr[0] == "foo":
+                pairs = parse_rule_line("@foo-id: (foo ?x) => :x")
+                rules = [(m, [p, s]) for m, p, s in pairs]
+                return Resolution(rules=rules)
+            return None
+
+        result = engine.simplify(["foo", "y"], strategy="bottomup")
+        assert result == "y"
+
+    def test_cycle_fires_in_bottomup(self):
+        engine = RuleEngine.from_dsl("@commute: (+ ?x ?y) <=> (+ :y :x)")
+        cycles = []
+        engine.on_cycle(lambda expr, path, ctx: cycles.append(expr))
+        engine.simplify(["+", "a", "b"], strategy="bottomup")
+        assert len(cycles) >= 1
+
+    def test_cycle_fires_in_topdown(self):
+        engine = RuleEngine.from_dsl("@commute: (+ ?x ?y) <=> (+ :y :x)")
+        cycles = []
+        engine.on_cycle(lambda expr, path, ctx: cycles.append(expr))
+        engine.simplify(["+", "a", "b"], strategy="topdown")
+        assert len(cycles) >= 1
+
+    def test_fixpoint_fires_in_bottomup(self):
+        engine = RuleEngine.from_dsl("@add-zero: (+ ?x 0) => :x")
+        finals = []
+        engine.on_fixpoint(lambda expr, ctx: finals.append(expr))
+        result = engine.simplify(["+", "y", 0], strategy="bottomup")
+        assert result == "y"
+        assert finals == ["y"]
+
+    def test_fixpoint_fires_in_topdown(self):
+        engine = RuleEngine.from_dsl("@add-zero: (+ ?x 0) => :x")
+        finals = []
+        engine.on_fixpoint(lambda expr, ctx: finals.append(expr))
+        result = engine.simplify(["+", "y", 0], strategy="topdown")
+        assert result == "y"
+        assert finals == ["y"]
+
+    def test_no_match_does_not_fire_when_rule_matches(self):
+        """Sanity: no_match should NOT fire if a rule matched at that
+        position, regardless of strategy."""
+        engine = RuleEngine.from_dsl("@id: (foo ?x) => :x")
+        seen = []
+        engine.on_no_match(lambda expr, ctx: seen.append(expr))
+        engine.simplify(["foo", "y"], strategy="bottomup")
+        # foo-id matched; no_match should not fire on the (foo y) compound.
+        assert ["foo", "y"] not in seen

@@ -1962,17 +1962,22 @@ class RuleEngine:
         """
         visited = set()
         self._cancel_requested = False
+        cycle_break = False
         for _ in range(max_steps):
             key = _expr_to_tuple(expr)
             if key in visited:
+                self._fire_cycle(expr, visited)
+                cycle_break = True
                 break
             visited.add(key)
             new_expr = self._bottomup_pass(expr, groups=groups)
             if new_expr == expr:
-                break
+                break  # natural convergence
             expr = new_expr
             if self._cancel_requested:
                 break
+        if not cycle_break and not self._cancel_requested:
+            self._fire_fixpoint(expr)
         return expr
 
     def _bottomup_pass(self, expr: ExprType, groups: Optional[List[str]] = None) -> ExprType:
@@ -2014,8 +2019,22 @@ class RuleEngine:
                     self._fire_rule_applied(step)
                     return result
 
-        # TODO(future): fire no_match here for parity with _simplify_exhaustive.
-        # T8 wires no_match into the exhaustive strategy only.
+        # No rule matched at this compound position. Fire no_match.
+        resolution = self._fire_no_match(current)
+        if self._cancel_requested:
+            return current
+        if resolution is not None:
+            if resolution.abort:
+                return current
+            if resolution.value is not None:
+                return resolution.value
+            if resolution.rules is not None:
+                added = self._install_resolver_rules(
+                    resolution.rules, metadata=resolution.metadata
+                )
+                if added > 0:
+                    # Retry: re-call the pass so the new rules can fire.
+                    return self._bottomup_pass(current, groups=groups)
         return current
 
     def _simplify_topdown(self, expr: ExprType, max_steps: int, groups: Optional[List[str]] = None) -> ExprType:
@@ -2025,17 +2044,22 @@ class RuleEngine:
         """
         visited = set()
         self._cancel_requested = False
+        cycle_break = False
         for _ in range(max_steps):
             key = _expr_to_tuple(expr)
             if key in visited:
+                self._fire_cycle(expr, visited)
+                cycle_break = True
                 break
             visited.add(key)
             new_expr = self._topdown_pass(expr, groups=groups)
             if new_expr == expr:
-                break
+                break  # natural convergence
             expr = new_expr
             if self._cancel_requested:
                 break
+        if not cycle_break and not self._cancel_requested:
+            self._fire_fixpoint(expr)
         return expr
 
     def _topdown_pass(self, expr: ExprType, groups: Optional[List[str]] = None) -> ExprType:
@@ -2070,9 +2094,24 @@ class RuleEngine:
                     self._fire_rule_applied(step)
                     return result  # Return immediately - will be called again
 
+        # No rule matched at this compound position. Fire no_match.
+        resolution = self._fire_no_match(current)
+        if self._cancel_requested:
+            return current
+        if resolution is not None:
+            if resolution.abort:
+                return current
+            if resolution.value is not None:
+                return resolution.value
+            if resolution.rules is not None:
+                added = self._install_resolver_rules(
+                    resolution.rules, metadata=resolution.metadata
+                )
+                if added > 0:
+                    # Retry: re-call the pass so the new rules can fire.
+                    return self._topdown_pass(current, groups=groups)
+
         # No rule applied - recursively process children
-        # TODO(future): fire no_match here for parity with _simplify_exhaustive.
-        # T8 wires no_match into the exhaustive strategy only.
         if isinstance(current, list) and len(current) > 0:
             new_children = [self._topdown_pass(child, groups=groups) for child in current]
             if new_children != list(current):
