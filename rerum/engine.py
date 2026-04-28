@@ -1515,6 +1515,30 @@ class RuleEngine:
 
         return expr
 
+    def _fire_rule_applied(self, step: RewriteStep, *, step_count: int = 0,
+                           depth: int = 0) -> bool:
+        """Fire the rule_applied event with a standard HookContext.
+
+        Returns True if any observer requested cancellation via ctx.cancel().
+        Callers should treat True as a signal to break out of their rule
+        loop and propagate the cancellation upward.
+
+        ``depth`` is a placeholder pending path-tracking infrastructure.
+        ``step_count`` is the rule-application counter for the current
+        top-level call.
+        """
+        if not self._hooks.count("rule_applied"):
+            return False
+        ctx = HookContext(
+            engine=self,
+            expr_path=[],
+            depth=depth,
+            step_count=step_count,
+            event_name="rule_applied",
+        )
+        self._hooks.run_observers("rule_applied", step, ctx)
+        return ctx.cancelled
+
     def _simplify_exhaustive(self, expr: ExprType, max_steps: int,
                               groups: Optional[List[str]] = None,
                               listener: Optional[TraceListener] = None) -> ExprType:
@@ -1530,6 +1554,7 @@ class RuleEngine:
         """
         current = expr
         visited = set()
+        step_count_so_far = 0
         for _ in range(max_steps):
             key = _expr_to_tuple(current)
             if key in visited:
@@ -1558,15 +1583,9 @@ class RuleEngine:
                         )
                         if listener is not None:
                             listener(step)
-                        if self._hooks.count("rule_applied"):
-                            ctx = HookContext(
-                                engine=self,
-                                expr_path=[],
-                                depth=0,
-                                step_count=0,
-                                event_name="rule_applied",
-                            )
-                            self._hooks.run_observers("rule_applied", step, ctx)
+                        step_count_so_far += 1
+                        if self._fire_rule_applied(step, step_count=step_count_so_far):
+                            return new_expr  # Hook requested cancellation after this step.
                         current = new_expr
                         changed = True
                         break

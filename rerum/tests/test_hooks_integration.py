@@ -131,8 +131,13 @@ class TestPublicReexports:
 
 
 class TestRuleAppliedEventSlowPath:
-    """Tests for rule_applied in _simplify_exhaustive directly. Task 6 will
-    wire it through the public simplify() and other strategies."""
+    """Tests for rule_applied in _simplify_exhaustive directly.
+
+    These tests call the private method because the public ``simplify()``
+    fast path bypasses engine-level hooks. Task 6 will wire the fast path
+    and other strategies; once that lands, these tests should be migrated
+    to use the public API and this class can be deleted.
+    """
 
     def test_rule_applied_fires_on_each_step(self):
         engine = RuleEngine.from_dsl("""
@@ -172,3 +177,34 @@ class TestRuleAppliedEventSlowPath:
         assert len(contexts) == 1
         assert contexts[0].engine is engine
         assert contexts[0].event_name == "rule_applied"
+
+    def test_observer_can_cancel_via_ctx(self):
+        """Observer calling ctx.cancel() halts the rewrite immediately."""
+        engine = RuleEngine.from_dsl("""
+            @r1: (a ?x) => (b :x)
+            @r2: (b ?x) => (c :x)
+        """)
+
+        @engine.on_rule_applied
+        def cancelling(step, ctx):
+            if step.metadata.name == "r1":
+                ctx.cancel()
+
+        # The first rule fires, then cancel triggers; r2 should not fire.
+        result = engine._simplify_exhaustive(["a", "x"], 100)
+        assert result == ["b", "x"]  # r1 applied; r2 blocked by cancel.
+
+    def test_observer_receives_step_count(self):
+        engine = RuleEngine.from_dsl("""
+            @r1: (a ?x) => (b :x)
+            @r2: (b ?x) => (c :x)
+        """)
+        counts = []
+
+        @engine.on_rule_applied
+        def observer(step, ctx):
+            counts.append(ctx.step_count)
+
+        engine._simplify_exhaustive(["a", "x"], 100)
+        # First rule firing has step_count=1, second has step_count=2.
+        assert counts == [1, 2]
