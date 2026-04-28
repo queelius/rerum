@@ -1578,6 +1578,9 @@ class RuleEngine:
         Returns the Resolution if a resolver provided one, else None.
         Atoms (constants, variables, empty list) do not fire no_match:
         rules apply at compound positions, not at leaves.
+
+        ``ctx.cancel()`` from a resolver propagates to ``self._cancel_requested``,
+        consistent with the other event helpers.
         """
         if not isinstance(expr, list) or not expr:
             return None
@@ -1590,7 +1593,10 @@ class RuleEngine:
             step_count=0,
             event_name="no_match",
         )
-        return self._hooks.run_resolvers("no_match", expr, ctx)
+        resolution = self._hooks.run_resolvers("no_match", expr, ctx)
+        if ctx.cancelled:
+            self._cancel_requested = True
+        return resolution
 
     def _check_should_fire(self, rule, metadata, expr, bindings) -> bool:
         """Check if all should_fire decisions allow this rule to fire.
@@ -1685,11 +1691,18 @@ class RuleEngine:
             if not changed:
                 # No rule matched at this compound position. Fire no_match.
                 resolution = self._fire_no_match(current)
+                if self._cancel_requested:
+                    return current
                 if resolution is not None:
                     if resolution.abort:
                         return current
                     if resolution.value is not None:
                         current = resolution.value
+                        # The visited set at the top of the loop catches
+                        # the case where a resolver returns a value that
+                        # was already seen (or the same value repeatedly),
+                        # so the engine terminates within max_steps even
+                        # if the resolver is stuck.
                         continue  # Outer loop tries to apply rules to the new value.
                     # Resolution(rules=[...]) and (fold_funcs=...) are handled
                     # in T9 and T10. For T8, value and abort are the only
@@ -1768,6 +1781,8 @@ class RuleEngine:
                     self._fire_rule_applied(step)
                     return result
 
+        # TODO(future): fire no_match here for parity with _simplify_exhaustive.
+        # T8 wires no_match into the exhaustive strategy only.
         return current
 
     def _simplify_topdown(self, expr: ExprType, max_steps: int, groups: Optional[List[str]] = None) -> ExprType:
@@ -1819,6 +1834,8 @@ class RuleEngine:
                     return result  # Return immediately - will be called again
 
         # No rule applied - recursively process children
+        # TODO(future): fire no_match here for parity with _simplify_exhaustive.
+        # T8 wires no_match into the exhaustive strategy only.
         if isinstance(current, list) and len(current) > 0:
             new_children = [self._topdown_pass(child, groups=groups) for child in current]
             if new_children != list(current):

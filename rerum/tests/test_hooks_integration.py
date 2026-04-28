@@ -388,18 +388,22 @@ class TestNoMatchResolverValuePath:
         result = engine.simplify(["foo", "bar"])
         assert result == ["foo", "bar"]
 
-    def test_resolver_only_fires_at_compound_positions(self):
-        # Atoms (constants, variables) are not "positions where rules could
-        # have fired"; resolver should not be called for them.
-        engine = RuleEngine.from_dsl("@id: (foo ?x) => :x")
-        called = []
-        engine.on_no_match(lambda expr, ctx: called.append(expr))
+    def test_resolver_does_not_fire_for_atom_children(self):
+        """The atom guard in _fire_no_match prevents firing on leaf nodes
+        (strings, numbers). The resolver should be called only at compound
+        positions where rules could have applied."""
+        engine = RuleEngine()  # No rules, every position will exhaust rules.
+        seen = []
 
-        engine.simplify(["foo", "bar"])
-        # foo-rule fires on (foo bar) -> bar; bar is an atom, no_match
-        # should not fire there. The compound (foo bar) had a matching rule
-        # so no_match shouldn't fire either.
-        assert called == []
+        @engine.on_no_match
+        def resolver(expr, ctx):
+            seen.append(expr)
+            return None
+
+        engine.simplify(["foo", "bar", 42])
+        # Only the top-level compound expression. Atoms ("foo", "bar", 42)
+        # are leaves and don't fire no_match.
+        assert seen == [["foo", "bar", 42]]
 
     def test_no_match_fires_when_no_rule_matches(self):
         engine = RuleEngine.from_dsl("@id: (foo ?x) => :x")
@@ -424,4 +428,16 @@ class TestNoMatchResolverValuePath:
 
         result = engine.simplify(["foo", "bar"])
         # Abort short-circuits; engine returns the unchanged expression.
+        assert result == ["foo", "bar"]
+
+    def test_resolver_can_cancel_via_ctx(self):
+        engine = RuleEngine()
+
+        @engine.on_no_match
+        def resolver(expr, ctx):
+            ctx.cancel()
+            return None  # Decline the chain; cancellation propagates separately.
+
+        result = engine.simplify(["foo", "bar"])
+        # Cancellation halts the rewrite; the unchanged expression is returned.
         assert result == ["foo", "bar"]
