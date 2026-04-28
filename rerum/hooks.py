@@ -86,3 +86,41 @@ class Resolution:
             raise ResolutionError("rules must be non-empty (an empty list adds nothing)")
         if self.fold_funcs is not None and len(self.fold_funcs) == 0:
             raise ResolutionError("fold_funcs must be non-empty")
+
+
+class HookContext:
+    """Read access to engine state plus controlled mutation primitives.
+
+    Constructed by the engine for each hook invocation; not user-instantiable
+    in normal use (but the constructor stays public for testability).
+    """
+
+    __slots__ = (
+        "engine", "_expr_path", "depth", "step_count", "event_name",
+        "cancelled",
+    )
+
+    def __init__(
+        self,
+        engine,
+        expr_path: List["ExprType"],
+        depth: int,
+        step_count: int,
+        event_name: str,
+    ):
+        self.engine = engine
+        self._expr_path = tuple(expr_path)
+        self.depth = depth
+        self.step_count = step_count
+        self.event_name = event_name
+        self.cancelled = False
+
+    @property
+    def expr_path(self) -> tuple:
+        """Ancestry from root expression to current position. Immutable view."""
+        return self._expr_path
+
+    def cancel(self) -> None:
+        """Signal the engine to abort the current rewrite. Equivalent to
+        returning ``Resolution(abort=True)`` from a Resolver."""
+        self.cancelled = True

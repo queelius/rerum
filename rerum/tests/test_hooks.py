@@ -87,3 +87,51 @@ class TestResolutionValidation:
         from rerum.hooks import Resolution, ResolutionError
         with pytest.raises(ResolutionError, match="allow_more=False"):
             Resolution(allow_more=False)
+
+
+class TestHookContext:
+    def test_context_exposes_engine(self):
+        from rerum.hooks import HookContext
+
+        sentinel_engine = object()
+        ctx = HookContext(
+            engine=sentinel_engine,
+            expr_path=[],
+            depth=0,
+            step_count=0,
+            event_name="rule_applied",
+        )
+        assert ctx.engine is sentinel_engine
+        assert ctx.event_name == "rule_applied"
+        assert ctx.depth == 0
+        assert ctx.step_count == 0
+
+    def test_cancel_sets_flag(self):
+        from rerum.hooks import HookContext
+
+        ctx = HookContext(
+            engine=None,
+            expr_path=[],
+            depth=0,
+            step_count=0,
+            event_name="rule_applied",
+        )
+        assert ctx.cancelled is False
+        ctx.cancel()
+        assert ctx.cancelled is True
+
+    def test_expr_path_is_immutable_view(self):
+        from rerum.hooks import HookContext
+
+        path = [["+", "a", "b"], ["a"]]
+        ctx = HookContext(
+            engine=None,
+            expr_path=path,
+            depth=2,
+            step_count=5,
+            event_name="no_match",
+        )
+        # ctx.expr_path returns a tuple (immutable) so hooks can't mutate the
+        # engine's internal stack.
+        assert isinstance(ctx.expr_path, tuple)
+        assert ctx.expr_path == tuple(path)
