@@ -1399,6 +1399,13 @@ class RuleEngine:
                 if not self._check_condition(metadata.condition, bindings):
                     continue
                 result = instantiate(skeleton, bindings, self._fold_funcs)
+                step = RewriteStep(
+                    rule_index=rule_idx,
+                    metadata=metadata,
+                    before=expr,
+                    after=result,
+                )
+                self._fire_rule_applied(step)
                 return result, metadata
 
         return expr, None
@@ -1484,7 +1491,21 @@ class RuleEngine:
             if has_conditions or has_groups:
                 return self._simplify_exhaustive(expr, max_steps, groups=groups)
             else:
-                # Use fast path when no conditions or groups
+                # Use fast path when no conditions, no groups, AND no
+                # engine-fired hooks are registered. Hooks need engine
+                # context, which the rewriter() factory does not have, so
+                # we fall back to _simplify_exhaustive when any hook
+                # event has subscribers.
+                hooks_active = any(
+                    self._hooks.count(ev) > 0
+                    for ev in (
+                        "rule_applied", "fixpoint", "no_match",
+                        "undefined_op", "fold_error", "should_fire",
+                        "cycle",
+                    )
+                )
+                if hooks_active:
+                    return self._simplify_exhaustive(expr, max_steps, groups=groups)
                 if self._simplifier is None:
                     self._simplifier = rewriter(self._rules, fold_funcs=self._fold_funcs)
                 return self._simplifier(expr)
@@ -1650,6 +1671,13 @@ class RuleEngine:
                     continue
                 result = instantiate(skeleton, bindings, self._fold_funcs)
                 if result != current:
+                    step = RewriteStep(
+                        rule_index=rule_idx,
+                        metadata=metadata,
+                        before=current,
+                        after=result,
+                    )
+                    self._fire_rule_applied(step)
                     return result
 
         return current
@@ -1688,6 +1716,13 @@ class RuleEngine:
                     continue
                 result = instantiate(skeleton, bindings, self._fold_funcs)
                 if result != current:
+                    step = RewriteStep(
+                        rule_index=rule_idx,
+                        metadata=metadata,
+                        before=current,
+                        after=result,
+                    )
+                    self._fire_rule_applied(step)
                     return result  # Return immediately - will be called again
 
         # No rule applied - recursively process children

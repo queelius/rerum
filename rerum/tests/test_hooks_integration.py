@@ -208,3 +208,37 @@ class TestRuleAppliedEventSlowPath:
         engine._simplify_exhaustive(["a", "x"], 100)
         # First rule firing has step_count=1, second has step_count=2.
         assert counts == [1, 2]
+
+
+class TestRuleAppliedAcrossStrategies:
+    def test_bottomup_fires_rule_applied(self):
+        engine = RuleEngine.from_dsl("@add-zero: (+ ?x 0) => :x")
+        steps = []
+        engine.on_rule_applied(lambda step, ctx: steps.append(step.metadata.name))
+        engine.simplify(["+", "x", 0], strategy="bottomup")
+        assert steps == ["add-zero"]
+
+    def test_topdown_fires_rule_applied(self):
+        engine = RuleEngine.from_dsl("@add-zero: (+ ?x 0) => :x")
+        steps = []
+        engine.on_rule_applied(lambda step, ctx: steps.append(step.metadata.name))
+        engine.simplify(["+", "x", 0], strategy="topdown")
+        assert steps == ["add-zero"]
+
+    def test_apply_once_fires_rule_applied(self):
+        engine = RuleEngine.from_dsl("@add-zero: (+ ?x 0) => :x")
+        steps = []
+        engine.on_rule_applied(lambda step, ctx: steps.append(step.metadata.name))
+        engine.apply_once(["+", "x", 0])
+        assert steps == ["add-zero"]
+
+    def test_fast_path_fires_rule_applied(self):
+        # No conditions, no groups: would normally hit fast path. With hooks
+        # registered, the bailout makes simplify use _simplify_exhaustive,
+        # which fires the event.
+        engine = RuleEngine.from_dsl("@add-zero: (+ ?x 0) => :x")
+        steps = []
+        engine.on_rule_applied(lambda step, ctx: steps.append(step.metadata.name))
+        # Default strategy.
+        engine.simplify(["+", "x", 0])
+        assert steps == ["add-zero"]
