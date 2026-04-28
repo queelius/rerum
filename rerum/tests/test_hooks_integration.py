@@ -128,3 +128,47 @@ class TestPublicReexports:
         assert issubclass(HookError, HooksError)
         assert issubclass(ResolutionError, HooksError)
         assert issubclass(ResolverLoopError, HooksError)
+
+
+class TestRuleAppliedEventSlowPath:
+    """Tests for rule_applied in _simplify_exhaustive directly. Task 6 will
+    wire it through the public simplify() and other strategies."""
+
+    def test_rule_applied_fires_on_each_step(self):
+        engine = RuleEngine.from_dsl("""
+            @add-zero: (+ ?x 0) => :x
+            @mul-one: (* ?x 1) => :x
+        """)
+        steps = []
+
+        @engine.on_rule_applied
+        def observer(step, ctx):
+            steps.append(step.metadata.name)
+
+        engine._simplify_exhaustive(["+", ["*", "a", 1], 0], 100)
+        assert "mul-one" in steps
+        assert "add-zero" in steps
+
+    def test_observers_broadcast_to_all(self):
+        engine = RuleEngine.from_dsl("@add-zero: (+ ?x 0) => :x")
+        log_a = []
+        log_b = []
+        engine.on_rule_applied(lambda step, ctx: log_a.append(step.metadata.name))
+        engine.on_rule_applied(lambda step, ctx: log_b.append(step.metadata.name))
+
+        engine._simplify_exhaustive(["+", "x", 0], 100)
+        assert log_a == ["add-zero"]
+        assert log_b == ["add-zero"]
+
+    def test_ctx_passed_to_observer(self):
+        engine = RuleEngine.from_dsl("@add-zero: (+ ?x 0) => :x")
+        contexts = []
+
+        @engine.on_rule_applied
+        def observer(step, ctx):
+            contexts.append(ctx)
+
+        engine._simplify_exhaustive(["+", "x", 0], 100)
+        assert len(contexts) == 1
+        assert contexts[0].engine is engine
+        assert contexts[0].event_name == "rule_applied"

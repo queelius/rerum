@@ -1550,13 +1550,23 @@ class RuleEngine:
                         continue
                     new_expr = instantiate(skeleton, bindings, self._fold_funcs)
                     if new_expr != current:
+                        step = RewriteStep(
+                            rule_index=rule_idx,
+                            metadata=metadata,
+                            before=current,
+                            after=new_expr,
+                        )
                         if listener is not None:
-                            listener(RewriteStep(
-                                rule_index=rule_idx,
-                                metadata=metadata,
-                                before=current,
-                                after=new_expr,
-                            ))
+                            listener(step)
+                        if self._hooks.count("rule_applied"):
+                            ctx = HookContext(
+                                engine=self,
+                                expr_path=[],
+                                depth=0,
+                                step_count=0,
+                                event_name="rule_applied",
+                            )
+                            self._hooks.run_observers("rule_applied", step, ctx)
                         current = new_expr
                         changed = True
                         break
