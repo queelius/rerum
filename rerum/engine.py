@@ -1607,8 +1607,14 @@ class RuleEngine:
             self._cancel_requested = True
         return resolution
 
-    def _fire_cycle(self, expr, visited_path) -> None:
+    def _fire_cycle(self, expr, visited_states) -> None:
         """Fire the cycle event when visited-set cycle detection catches a repeat.
+
+        ``visited_states`` is the unordered set of expression states seen
+        so far in the current simplify call (as a list, snapshotted from
+        the engine's visited set). It is *not* an ordered path: the
+        engine does not retain order. Resolvers needing reconstruction
+        of the cycle must build their own history.
 
         Resolvers can return Resolution(abort=True) to escalate the cycle
         into a propagated cancellation. ctx.cancel() does the same.
@@ -1623,13 +1629,22 @@ class RuleEngine:
             event_name="cycle",
         )
         resolution = self._hooks.run_resolvers(
-            "cycle", expr, list(visited_path), ctx
+            "cycle", expr, list(visited_states), ctx
         )
         if ctx.cancelled or (resolution is not None and resolution.abort):
             self._cancel_requested = True
 
     def _fire_fixpoint(self, expr) -> None:
-        """Fire the fixpoint event when the engine converges (no rule fires)."""
+        """Fire the fixpoint event when the engine converges (no rule fires).
+
+        Observer-only: there is no Resolution mechanism. ``ctx.cancel()``
+        from a fixpoint observer is silently ignored because the engine
+        has already finished computing the result before this fires;
+        cancellation has nothing to abort. Observers that need to influence
+        a downstream operation (e.g., a SequencedEngine pipeline) should
+        return their decision through a separate channel (e.g., raising
+        an exception).
+        """
         if not self._hooks.count("fixpoint"):
             return
         ctx = HookContext(
@@ -1640,8 +1655,8 @@ class RuleEngine:
             event_name="fixpoint",
         )
         self._hooks.run_observers("fixpoint", expr, ctx)
-        if ctx.cancelled:
-            self._cancel_requested = True
+        # Note: ctx.cancelled is intentionally not propagated. The engine
+        # has already converged; there is nothing to cancel.
 
     def _undefined_op_resolver(self, op: str, args) -> Optional[Resolution]:
         """Bridge from rewriter.instantiate to on_undefined_op hooks.
