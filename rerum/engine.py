@@ -1060,6 +1060,7 @@ class RuleEngine:
         self._disabled_groups: set = set()  # Groups that are disabled
         self._hooks = _HookRegistry()
         self._cancel_requested = False
+        self._step_count: int = 0  # successful rule applications in current top-level call
 
     def _sort_by_priority(self) -> None:
         """Sort rules by priority (descending). Higher priority fires first.
@@ -1392,6 +1393,8 @@ class RuleEngine:
             if applied:
                 print(f"Applied rule: {applied.name}")
         """
+        self._step_count = 0
+        self._cancel_requested = False
         for rule_idx, rule in enumerate(self._rules):
             metadata = self._metadata[rule_idx]
             # Check group filter
@@ -1532,6 +1535,8 @@ class RuleEngine:
 
     def _simplify_once(self, expr: ExprType, groups: Optional[List[str]] = None) -> ExprType:
         """Apply at most one rule anywhere in the expression tree."""
+        self._step_count = 0
+        self._cancel_requested = False
         # Try to apply a rule at the top level
         result, applied = self.apply_once(expr, groups=groups)
         if applied:
@@ -1547,8 +1552,7 @@ class RuleEngine:
 
         return expr
 
-    def _fire_rule_applied(self, step: RewriteStep, *, step_count: int = 0,
-                           depth: int = 0) -> bool:
+    def _fire_rule_applied(self, step: RewriteStep, *, depth: int = 0) -> bool:
         """Fire the rule_applied event with a standard HookContext.
 
         Returns True if any observer requested cancellation via ctx.cancel().
@@ -1556,19 +1560,23 @@ class RuleEngine:
         stack (e.g. strategy drivers calling pass methods in a loop) can
         detect cancellation without threading the return value through.
 
-        ``depth`` is a placeholder pending path-tracking infrastructure.
-        ``step_count`` defaults to 0. The exhaustive strategy plumbs the real
-        counter through, but bottomup, topdown, and apply_once currently pass
-        the default. Hooks that branch on ``step_count`` should be aware of
-        this and may need to maintain their own counter.
+        Increments ``self._step_count`` before constructing the context so
+        that ``ctx.step_count`` reflects the count after this firing (1-based).
+        ``self._step_count`` is reset to 0 at the top of every top-level call
+        (simplify, equivalents, prove_equal, random_walk, random_equivalent).
+
+        ``depth`` is the recursion depth of the expression position being
+        matched (root = 0, root's child = 1, etc.). Pass-methods thread this
+        value through their recursive calls.
         """
+        self._step_count += 1
         if not self._hooks.count("rule_applied"):
             return False
         ctx = HookContext(
             engine=self,
             expr_path=[],
             depth=depth,
-            step_count=step_count,
+            step_count=self._step_count,
             event_name="rule_applied",
         )
         self._hooks.run_observers("rule_applied", step, ctx)
@@ -1577,7 +1585,7 @@ class RuleEngine:
             return True
         return False
 
-    def _fire_no_match(self, expr) -> Optional[Resolution]:
+    def _fire_no_match(self, expr, *, depth: int = 0) -> Optional[Resolution]:
         """Fire the no_match event when no rule matches at the current
         compound position.
 
@@ -1598,8 +1606,8 @@ class RuleEngine:
         ctx = HookContext(
             engine=self,
             expr_path=[],
-            depth=0,
-            step_count=0,
+            depth=depth,
+            step_count=self._step_count,
             event_name="no_match",
         )
         resolution = self._hooks.run_resolvers("no_match", expr, ctx)
@@ -1625,7 +1633,7 @@ class RuleEngine:
             engine=self,
             expr_path=[],
             depth=0,
-            step_count=0,
+            step_count=self._step_count,
             event_name="cycle",
         )
         resolution = self._hooks.run_resolvers(
@@ -1651,7 +1659,7 @@ class RuleEngine:
             engine=self,
             expr_path=[],
             depth=0,
-            step_count=0,
+            step_count=self._step_count,
             event_name="fixpoint",
         )
         self._hooks.run_observers("fixpoint", expr, ctx)
@@ -1677,7 +1685,7 @@ class RuleEngine:
             engine=self,
             expr_path=[],
             depth=depth,
-            step_count=0,
+            step_count=self._step_count,
             event_name="max_depth",
         )
         resolution = self._hooks.run_resolvers("max_depth", expr, depth, ctx)
@@ -1710,7 +1718,7 @@ class RuleEngine:
             engine=self,
             expr_path=[],
             depth=0,
-            step_count=0,
+            step_count=self._step_count,
             event_name="undefined_op",
         )
         resolution = self._hooks.run_resolvers("undefined_op", op, args, ctx)
@@ -1741,7 +1749,7 @@ class RuleEngine:
             engine=self,
             expr_path=[],
             depth=0,
-            step_count=0,
+            step_count=self._step_count,
             event_name="fold_error",
         )
         resolution = self._hooks.run_resolvers(
@@ -1822,7 +1830,7 @@ class RuleEngine:
             engine=self,
             expr_path=[],
             depth=0,
-            step_count=0,
+            step_count=self._step_count,
             event_name="should_fire",
         )
         result = self._hooks.run_decisions(
@@ -1848,7 +1856,7 @@ class RuleEngine:
         """
         current = expr
         visited = set()
-        step_count_so_far = 0
+        self._step_count = 0
         self._cancel_requested = False
         _cycle_break = False
         converged = False
@@ -1890,8 +1898,7 @@ class RuleEngine:
                             before=current,
                             after=new_expr,
                         )
-                        step_count_so_far += 1
-                        if self._fire_rule_applied(step, step_count=step_count_so_far):
+                        if self._fire_rule_applied(step):
                             return new_expr  # Hook requested cancellation after this step.
                         current = new_expr
                         changed = True
@@ -1963,6 +1970,7 @@ class RuleEngine:
         Cycle-detected so non-confluent rule sets terminate cleanly.
         """
         visited = set()
+        self._step_count = 0
         self._cancel_requested = False
         cycle_break = False
         converged = False
@@ -1984,7 +1992,8 @@ class RuleEngine:
             self._fire_fixpoint(expr)
         return expr
 
-    def _bottomup_pass(self, expr: ExprType, groups: Optional[List[str]] = None) -> ExprType:
+    def _bottomup_pass(self, expr: ExprType, groups: Optional[List[str]] = None,
+                        depth: int = 0) -> ExprType:
         """Single bottom-up pass: simplify children, then apply rules to parent.
 
         no_match resolvers may install rules and request retry. Retry loops
@@ -1997,7 +2006,7 @@ class RuleEngine:
             return expr
 
         # First, recursively simplify all children
-        new_children = [self._bottomup_pass(child, groups=groups) for child in expr]
+        new_children = [self._bottomup_pass(child, groups=groups, depth=depth + 1) for child in expr]
         current = new_children
 
         # Try to apply rules to the parent. Loop allows a resolver returning
@@ -2031,11 +2040,11 @@ class RuleEngine:
                         before=current,
                         after=result,
                     )
-                    self._fire_rule_applied(step)
+                    self._fire_rule_applied(step, depth=depth)
                     return result
 
             # No rule fired. Try the no_match resolver.
-            resolution = self._fire_no_match(current)
+            resolution = self._fire_no_match(current, depth=depth)
             if self._cancel_requested:
                 return current
             if resolution is None:
@@ -2066,6 +2075,7 @@ class RuleEngine:
         Cycle-detected so non-confluent rule sets terminate cleanly.
         """
         visited = set()
+        self._step_count = 0
         self._cancel_requested = False
         cycle_break = False
         converged = False
@@ -2087,7 +2097,8 @@ class RuleEngine:
             self._fire_fixpoint(expr)
         return expr
 
-    def _topdown_pass(self, expr: ExprType, groups: Optional[List[str]] = None) -> ExprType:
+    def _topdown_pass(self, expr: ExprType, groups: Optional[List[str]] = None,
+                      depth: int = 0) -> ExprType:
         """Single top-down pass: apply rules to parent, then simplify children.
 
         no_match resolvers may install rules and request retry. Retry loops
@@ -2128,11 +2139,11 @@ class RuleEngine:
                         before=current,
                         after=result,
                     )
-                    self._fire_rule_applied(step)
+                    self._fire_rule_applied(step, depth=depth)
                     return result  # Return immediately - will be called again
 
             # No rule fired. Try the no_match resolver.
-            resolution = self._fire_no_match(current)
+            resolution = self._fire_no_match(current, depth=depth)
             if self._cancel_requested:
                 return current
             if resolution is None:
@@ -2159,7 +2170,7 @@ class RuleEngine:
 
         # No rule applied at this node - recursively process children
         if isinstance(current, list) and len(current) > 0:
-            new_children = [self._topdown_pass(child, groups=groups) for child in current]
+            new_children = [self._topdown_pass(child, groups=groups, depth=depth + 1) for child in current]
             if new_children != list(current):
                 return new_children
 
@@ -2613,6 +2624,7 @@ class RuleEngine:
         if strategy not in ("bfs", "dfs"):
             raise ValueError(f"Unknown strategy: {strategy}. Valid: bfs, dfs")
 
+        self._step_count = 0
         self._cancel_requested = False
         bidirectional_only = not include_unidirectional
 
@@ -2749,6 +2761,7 @@ class RuleEngine:
             # With a work budget for expensive queries:
             proof = engine.prove_equal(a, b, max_depth=8, max_expressions=5000)
         """
+        self._step_count = 0
         self._cancel_requested = False
         bidirectional_only = not include_unidirectional
 
@@ -3052,6 +3065,7 @@ class RuleEngine:
             rng = random.Random(42)
             rand_expr = engine.random_equivalent(expr, rng=rng)
         """
+        self._step_count = 0
         self._cancel_requested = False
         if rng is None:
             rng = random.Random()
@@ -3160,6 +3174,7 @@ class RuleEngine:
             for i, equiv in enumerate(engine.random_walk(expr, max_steps=20)):
                 print(f"Step {i}: {format_sexpr(equiv)}")
         """
+        self._step_count = 0
         self._cancel_requested = False
         if rng is None:
             rng = random.Random()

@@ -1112,3 +1112,65 @@ class TestStrategyParity:
         engine.simplify(["foo", "y"], strategy="bottomup")
         # foo-id matched; no_match should not fire on the (foo y) compound.
         assert ["foo", "y"] not in seen
+
+
+class TestContextFieldConsistency:
+    """step_count and depth in HookContext should be populated correctly
+    across all strategies, not just _simplify_exhaustive."""
+
+    def test_step_count_in_bottomup(self):
+        engine = RuleEngine.from_dsl("""
+            @r1: (a ?x) => (b :x)
+            @r2: (b ?x) => (c :x)
+        """)
+        counts = []
+        engine.on_rule_applied(lambda step, ctx: counts.append(ctx.step_count))
+        engine.simplify(["a", "x"], strategy="bottomup")
+        # Two rule firings: r1 -> step_count=1, r2 -> step_count=2.
+        assert counts == [1, 2]
+
+    def test_step_count_in_topdown(self):
+        engine = RuleEngine.from_dsl("""
+            @r1: (a ?x) => (b :x)
+            @r2: (b ?x) => (c :x)
+        """)
+        counts = []
+        engine.on_rule_applied(lambda step, ctx: counts.append(ctx.step_count))
+        engine.simplify(["a", "x"], strategy="topdown")
+        assert counts == [1, 2]
+
+    def test_step_count_resets_between_calls(self):
+        engine = RuleEngine.from_dsl("@r: (a ?x) => :x")
+        counts = []
+        engine.on_rule_applied(lambda step, ctx: counts.append(ctx.step_count))
+        engine.simplify(["a", "x"])
+        engine.simplify(["a", "y"])
+        # Each top-level call resets; both observed step_count=1.
+        assert counts == [1, 1]
+
+    def test_depth_in_no_match_for_nested_expression(self):
+        engine = RuleEngine()
+        seen = []
+        engine.on_no_match(lambda expr, ctx: seen.append((expr, ctx.depth)))
+        engine.simplify(["foo", ["bar", "baz"]], strategy="bottomup")
+        # Both compounds should fire no_match. The inner one has depth > 0;
+        # the outer has depth = 0.
+        depths = sorted({d for _, d in seen})
+        # At least depth 0 (outer) and depth 1 (inner).
+        assert 0 in depths
+        assert 1 in depths
+
+    def test_step_count_cumulative_across_subexpressions(self):
+        engine = RuleEngine.from_dsl("""
+            @r1: (foo ?x) => :x
+            @r2: (bar ?x) => :x
+        """)
+        counts = []
+        engine.on_rule_applied(lambda step, ctx: counts.append(ctx.step_count))
+        # Compound with nested compounds: bottomup fires r2 on inner first,
+        # then r1 on outer. Both step_count values must be distinct.
+        engine.simplify(["foo", ["bar", "y"]], strategy="bottomup")
+        # Two rule firings, increasing counts.
+        assert counts == [1, 2] or counts == [2, 1]  # order depends on traversal
+        # The set is {1, 2}.
+        assert set(counts) == {1, 2}
