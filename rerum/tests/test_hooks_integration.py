@@ -232,7 +232,7 @@ class TestRuleAppliedAcrossStrategies:
         engine.apply_once(["+", "x", 0])
         assert steps == ["add-zero"]
 
-    def test_fast_path_fires_rule_applied(self):
+    def test_hooks_bypass_fast_path_and_fire_rule_applied(self):
         # No conditions, no groups: would normally hit fast path. With hooks
         # registered, the bailout makes simplify use _simplify_exhaustive,
         # which fires the event.
@@ -242,3 +242,46 @@ class TestRuleAppliedAcrossStrategies:
         # Default strategy.
         engine.simplify(["+", "x", 0])
         assert steps == ["add-zero"]
+
+    def test_cancel_propagates_through_bottomup_driver(self):
+        engine = RuleEngine.from_dsl("""
+            @r1: (a ?x) => (b :x)
+            @r2: (b ?x) => (c :x)
+        """)
+        seen = []
+
+        @engine.on_rule_applied
+        def cancelling(step, ctx):
+            seen.append(step.metadata.name)
+            if step.metadata.name == "r1":
+                ctx.cancel()
+
+        result = engine.simplify(["a", "x"], strategy="bottomup")
+        # Only r1 fires; cancellation breaks out of the bottomup driver loop.
+        assert seen == ["r1"]
+        assert result == ["b", "x"]
+
+    def test_cancel_propagates_through_topdown_driver(self):
+        engine = RuleEngine.from_dsl("""
+            @r1: (a ?x) => (b :x)
+            @r2: (b ?x) => (c :x)
+        """)
+        seen = []
+
+        @engine.on_rule_applied
+        def cancelling(step, ctx):
+            seen.append(step.metadata.name)
+            if step.metadata.name == "r1":
+                ctx.cancel()
+
+        result = engine.simplify(["a", "x"], strategy="topdown")
+        assert seen == ["r1"]
+        assert result == ["b", "x"]
+
+    def test_apply_once_does_not_fire_for_noop_rewrite(self):
+        # A rule whose RHS equals its LHS structurally is a no-op.
+        engine = RuleEngine.from_dsl("@noop: (foo ?x) => (foo :x)")
+        seen = []
+        engine.on_rule_applied(lambda step, ctx: seen.append(step.metadata.name))
+        engine.apply_once(["foo", "y"])
+        assert seen == []

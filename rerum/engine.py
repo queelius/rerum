@@ -1057,6 +1057,7 @@ class RuleEngine:
         self._fold_funcs: Optional[FoldFuncsType] = fold_funcs
         self._disabled_groups: set = set()  # Groups that are disabled
         self._hooks = _HookRegistry()
+        self._cancel_requested = False
 
     def _sort_by_priority(self) -> None:
         """Sort rules by priority (descending). Higher priority fires first.
@@ -1399,13 +1400,14 @@ class RuleEngine:
                 if not self._check_condition(metadata.condition, bindings):
                     continue
                 result = instantiate(skeleton, bindings, self._fold_funcs)
-                step = RewriteStep(
-                    rule_index=rule_idx,
-                    metadata=metadata,
-                    before=expr,
-                    after=result,
-                )
-                self._fire_rule_applied(step)
+                if result != expr:
+                    step = RewriteStep(
+                        rule_index=rule_idx,
+                        metadata=metadata,
+                        before=expr,
+                        after=result,
+                    )
+                    self._fire_rule_applied(step)
                 return result, metadata
 
         return expr, None
@@ -1496,13 +1498,14 @@ class RuleEngine:
                 # context, which the rewriter() factory does not have, so
                 # we fall back to _simplify_exhaustive when any hook
                 # event has subscribers.
+                # Derive the bailout list from _HOOK_EVENTS so new events
+                # (added by future tasks) are automatically covered. Exclude
+                # max_depth which fires only in equivalents/prove_equal/
+                # minimize, not in simplify.
                 hooks_active = any(
                     self._hooks.count(ev) > 0
-                    for ev in (
-                        "rule_applied", "fixpoint", "no_match",
-                        "undefined_op", "fold_error", "should_fire",
-                        "cycle",
-                    )
+                    for ev in RuleEngine._HOOK_EVENTS
+                    if ev != "max_depth"
                 )
                 if hooks_active:
                     return self._simplify_exhaustive(expr, max_steps, groups=groups)
@@ -1541,12 +1544,15 @@ class RuleEngine:
         """Fire the rule_applied event with a standard HookContext.
 
         Returns True if any observer requested cancellation via ctx.cancel().
-        Callers should treat True as a signal to break out of their rule
-        loop and propagate the cancellation upward.
+        Also sets ``self._cancel_requested = True`` so callers higher up the
+        stack (e.g. strategy drivers calling pass methods in a loop) can
+        detect cancellation without threading the return value through.
 
         ``depth`` is a placeholder pending path-tracking infrastructure.
-        ``step_count`` is the rule-application counter for the current
-        top-level call.
+        ``step_count`` defaults to 0. The exhaustive strategy plumbs the real
+        counter through, but bottomup, topdown, and apply_once currently pass
+        the default. Hooks that branch on ``step_count`` should be aware of
+        this and may need to maintain their own counter.
         """
         if not self._hooks.count("rule_applied"):
             return False
@@ -1558,7 +1564,10 @@ class RuleEngine:
             event_name="rule_applied",
         )
         self._hooks.run_observers("rule_applied", step, ctx)
-        return ctx.cancelled
+        if ctx.cancelled:
+            self._cancel_requested = True
+            return True
+        return False
 
     def _simplify_exhaustive(self, expr: ExprType, max_steps: int,
                               groups: Optional[List[str]] = None,
@@ -1576,6 +1585,7 @@ class RuleEngine:
         current = expr
         visited = set()
         step_count_so_far = 0
+        self._cancel_requested = False
         for _ in range(max_steps):
             key = _expr_to_tuple(current)
             if key in visited:
@@ -1636,6 +1646,7 @@ class RuleEngine:
         Cycle-detected so non-confluent rule sets terminate cleanly.
         """
         visited = set()
+        self._cancel_requested = False
         for _ in range(max_steps):
             key = _expr_to_tuple(expr)
             if key in visited:
@@ -1645,6 +1656,8 @@ class RuleEngine:
             if new_expr == expr:
                 break
             expr = new_expr
+            if self._cancel_requested:
+                break
         return expr
 
     def _bottomup_pass(self, expr: ExprType, groups: Optional[List[str]] = None) -> ExprType:
@@ -1688,6 +1701,7 @@ class RuleEngine:
         Cycle-detected so non-confluent rule sets terminate cleanly.
         """
         visited = set()
+        self._cancel_requested = False
         for _ in range(max_steps):
             key = _expr_to_tuple(expr)
             if key in visited:
@@ -1697,6 +1711,8 @@ class RuleEngine:
             if new_expr == expr:
                 break
             expr = new_expr
+            if self._cancel_requested:
+                break
         return expr
 
     def _topdown_pass(self, expr: ExprType, groups: Optional[List[str]] = None) -> ExprType:
