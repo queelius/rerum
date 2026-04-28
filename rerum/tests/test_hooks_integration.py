@@ -1174,3 +1174,29 @@ class TestContextFieldConsistency:
         assert counts == [1, 2] or counts == [2, 1]  # order depends on traversal
         # The set is {1, 2}.
         assert set(counts) == {1, 2}
+
+    def test_depth_in_no_match_for_three_level_tree(self):
+        engine = RuleEngine()
+        seen = []
+        engine.on_no_match(lambda expr, ctx: seen.append((expr, ctx.depth)))
+        # Three levels of nesting.
+        engine.simplify(["a", ["b", ["c", "d"]]], strategy="bottomup")
+        depths = sorted({d for _, d in seen})
+        # depth 0 (outer), depth 1 (middle), depth 2 (innermost compound).
+        assert depths == [0, 1, 2]
+
+    def test_step_count_in_exhaustive_with_recursive_descent(self):
+        """The exhaustive strategy recurses into children when no top-level
+        rule matches. The step counter must accumulate across the entire
+        top-level call, not reset per recursion level."""
+        engine = RuleEngine.from_dsl("""
+            @r1: (foo ?x) => :x
+            @r2: (bar ?x) => :x
+        """)
+        counts = []
+        engine.on_rule_applied(lambda step, ctx: counts.append(ctx.step_count))
+        # Two rules fire: r1 on the outer (foo (bar y)) -> (bar y), then
+        # r2 on (bar y) -> y. (Or r2 first if exhaustive descends into the
+        # child before the parent rule loop finds a match.)
+        engine.simplify(["foo", ["bar", "y"]])
+        assert sorted(counts) == [1, 2]

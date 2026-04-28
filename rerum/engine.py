@@ -1051,6 +1051,12 @@ class RuleEngine:
                 Default: None (pure rule rewriting, no constant folding).
                 Use ARITHMETIC_PRELUDE for basic +, -, *, /, ^.
                 Use MATH_PRELUDE for arithmetic + trig/exp/log.
+
+        Note: ``RuleEngine`` instances are not thread-safe. ``_step_count``,
+        ``_cancel_requested``, and the rule-set storage are mutable per-call
+        state held on the instance. Concurrent ``simplify()`` calls on the
+        same engine will race. Create a separate instance per thread, or
+        use a lock at the call boundary.
         """
         self._rules: List[List] = []
         self._metadata: List[RuleMetadata] = []
@@ -1371,7 +1377,8 @@ class RuleEngine:
             rs = rs.bidirectional_only()
         return rs
 
-    def apply_once(self, expr: ExprType, groups: Optional[List[str]] = None) -> Tuple[ExprType, Optional[RuleMetadata]]:
+    def apply_once(self, expr: ExprType, groups: Optional[List[str]] = None,
+                   _top_level: bool = True) -> Tuple[ExprType, Optional[RuleMetadata]]:
         """
         Apply at most one rule to the expression.
 
@@ -1393,8 +1400,9 @@ class RuleEngine:
             if applied:
                 print(f"Applied rule: {applied.name}")
         """
-        self._step_count = 0
-        self._cancel_requested = False
+        if _top_level:
+            self._step_count = 0
+            self._cancel_requested = False
         for rule_idx, rule in enumerate(self._rules):
             metadata = self._metadata[rule_idx]
             # Check group filter
@@ -1533,19 +1541,21 @@ class RuleEngine:
             raise ValueError(f"Unknown strategy: {strategy}. "
                            f"Valid options: exhaustive, once, bottomup, topdown")
 
-    def _simplify_once(self, expr: ExprType, groups: Optional[List[str]] = None) -> ExprType:
+    def _simplify_once(self, expr: ExprType, groups: Optional[List[str]] = None,
+                       _top_level: bool = True) -> ExprType:
         """Apply at most one rule anywhere in the expression tree."""
-        self._step_count = 0
-        self._cancel_requested = False
+        if _top_level:
+            self._step_count = 0
+            self._cancel_requested = False
         # Try to apply a rule at the top level
-        result, applied = self.apply_once(expr, groups=groups)
+        result, applied = self.apply_once(expr, groups=groups, _top_level=False)
         if applied:
             return result
 
         # If no rule applied at top level, try children (depth-first)
         if isinstance(expr, list) and len(expr) > 0:
             for i, child in enumerate(expr):
-                new_child = self._simplify_once(child, groups=groups)
+                new_child = self._simplify_once(child, groups=groups, _top_level=False)
                 if new_child != child:
                     # Found a rewrite - apply it and return
                     return expr[:i] + [new_child] + expr[i+1:]
@@ -1842,7 +1852,8 @@ class RuleEngine:
         return result
 
     def _simplify_exhaustive(self, expr: ExprType, max_steps: int,
-                              groups: Optional[List[str]] = None) -> ExprType:
+                              groups: Optional[List[str]] = None,
+                              _top_level: bool = True) -> ExprType:
         """Exhaustive strategy with condition and group support.
 
         Uses a visited set to terminate on cycles (e.g. bidirectional rules
@@ -1856,8 +1867,9 @@ class RuleEngine:
         """
         current = expr
         visited = set()
-        self._step_count = 0
-        self._cancel_requested = False
+        if _top_level:
+            self._step_count = 0
+            self._cancel_requested = False
         _cycle_break = False
         converged = False
         # Per-call cap on resolver-driven rule retries. Catches buggy LLM
@@ -1949,7 +1961,7 @@ class RuleEngine:
                     subexpr_changed = False
                     for child in current:
                         new_child = self._simplify_exhaustive(
-                            child, max_steps // 10 or 1, groups=groups,
+                            child, max_steps // 10 or 1, groups=groups, _top_level=False,
                         )
                         new_children.append(new_child)
                         if new_child != child:
