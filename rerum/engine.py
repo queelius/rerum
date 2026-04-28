@@ -1060,7 +1060,6 @@ class RuleEngine:
         self._disabled_groups: set = set()  # Groups that are disabled
         self._hooks = _HookRegistry()
         self._cancel_requested = False
-        self._max_depth_extensions: Dict[int, int] = {}
 
     def _sort_by_priority(self) -> None:
         """Sort rules by priority (descending). Higher priority fires first.
@@ -1662,9 +1661,12 @@ class RuleEngine:
     def _fire_max_depth(self, expr, depth) -> Optional[Resolution]:
         """Bridge to on_max_depth hooks.
 
-        Fires when equivalents/prove_equal/minimize/random_walk exhaust
-        their depth budget. Resolvers can return Resolution(allow_more=True)
-        to extend the budget once.
+        Fires when equivalents/prove_equal/minimize exhaust their depth
+        budget. Resolvers can return Resolution(allow_more=True) to extend
+        the budget once per call.
+
+        random_walk uses max_steps (a different concept) and does not fire
+        this event.
 
         Honors ctx.cancel() and Resolution(abort=True) by setting
         self._cancel_requested.
@@ -2523,6 +2525,10 @@ class RuleEngine:
         if max_count is not None and count >= max_count:
             return
 
+        # Extension tracker is local to this call; avoids memory leaks and
+        # id-reuse hazards from a per-instance dict.
+        _depth_extended = False
+
         # Initialize queue/stack with (expression, depth)
         if strategy == "bfs":
             frontier: deque = deque([(expr, 0)])
@@ -2530,6 +2536,9 @@ class RuleEngine:
             frontier: List = [(expr, 0)]
 
         while frontier:
+            if self._cancel_requested:
+                return
+
             if strategy == "bfs":
                 current, depth = frontier.popleft()
             else:
@@ -2537,12 +2546,10 @@ class RuleEngine:
 
             if depth >= max_depth:
                 resolution = self._fire_max_depth(current, depth)
-                if resolution is not None and resolution.allow_more:
-                    # Extend budget once per call (tracked by id of visited set).
-                    extension_key = id(visited)
-                    if extension_key not in self._max_depth_extensions:
-                        self._max_depth_extensions[extension_key] = max_depth
-                        max_depth = max_depth * 2 if max_depth > 0 else 1
+                if (resolution is not None and resolution.allow_more
+                        and not _depth_extended):
+                    _depth_extended = True
+                    max_depth = max_depth * 2 if max_depth > 0 else 1
                 if depth >= max_depth:
                     continue
 
@@ -2665,6 +2672,12 @@ class RuleEngine:
             key_b: (expr_b, 0, None)
         }
 
+        # Per-side extension trackers; local to this call to avoid state leaks.
+        _depth_extended_a = False
+        _depth_extended_b = False
+        max_depth_a = max_depth
+        max_depth_b = max_depth
+
         # BFS frontiers: (expression, depth)
         frontier_a: deque = deque([(expr_a, 0)])
         frontier_b: deque = deque([(expr_b, 0)])
@@ -2685,6 +2698,9 @@ class RuleEngine:
 
         # Alternate expanding from A and B
         while frontier_a or frontier_b:
+            if self._cancel_requested:
+                return None
+
             # Budget check: total work across both frontiers
             if max_expressions is not None and \
                     len(visited_a) + len(visited_b) >= max_expressions:
@@ -2693,7 +2709,13 @@ class RuleEngine:
             # Expand from A
             if frontier_a:
                 current, depth = frontier_a.popleft()
-                if depth < max_depth:
+                if depth >= max_depth_a:
+                    resolution = self._fire_max_depth(current, depth)
+                    if (resolution is not None and resolution.allow_more
+                            and not _depth_extended_a):
+                        _depth_extended_a = True
+                        max_depth_a = max_depth_a * 2 if max_depth_a > 0 else 1
+                if depth < max_depth_a:
                     current_key = _expr_to_tuple(current)
                     rewrites = self._all_single_rewrites(
                         current, bidirectional_only, groups, rules=rules
@@ -2727,7 +2749,13 @@ class RuleEngine:
             # Expand from B
             if frontier_b:
                 current, depth = frontier_b.popleft()
-                if depth < max_depth:
+                if depth >= max_depth_b:
+                    resolution = self._fire_max_depth(current, depth)
+                    if (resolution is not None and resolution.allow_more
+                            and not _depth_extended_b):
+                        _depth_extended_b = True
+                        max_depth_b = max_depth_b * 2 if max_depth_b > 0 else 1
+                if depth < max_depth_b:
                     current_key = _expr_to_tuple(current)
                     rewrites = self._all_single_rewrites(
                         current, bidirectional_only, groups, rules=rules

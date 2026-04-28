@@ -821,16 +821,17 @@ class TestMaxDepthResolver:
 
         engine = RuleEngine.from_dsl("@commute: (+ ?x ?y) <=> (+ :y :x)")
 
+        # Baseline: with no resolver, max_depth=0 yields only the original.
+        baseline = list(engine.equivalents(["+", "a", "b"], max_depth=0))
+        assert len(baseline) == 1
+        assert baseline[0] == ["+", "a", "b"]
+
+        # With allow_more, the budget extends so commute can fire.
         @engine.on_max_depth
         def resolver(expr, depth, ctx):
             return Resolution(allow_more=True)
 
-        # Without the resolver, max_depth=0 yields only the original.
-        # With allow_more, the budget extends once (effectively to depth 1+),
-        # so we see both forms.
         forms = list(engine.equivalents(["+", "a", "b"], max_depth=0))
         keys = {tuple(f) for f in forms}
-        # Original is always yielded; commute may or may not fire depending
-        # on how aggressively allow_more extends. The contract is "budget
-        # extended at least once", so we should see at least the original.
         assert ("+", "a", "b") in keys
+        assert ("+", "b", "a") in keys  # commute fired thanks to extension
