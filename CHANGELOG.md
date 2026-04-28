@@ -44,6 +44,33 @@ may include breaking changes.
   rule loop is removed (~50 lines), and the listener mechanism unblocks
   tracing on other simplification strategies.
 
+### Added (hooks system)
+- ``rerum/hooks.py``: new module with the ``Resolution`` dataclass,
+  ``HookContext``, ``HooksError``/``HookError``/``ResolutionError``/
+  ``ResolverLoopError`` exception types, and the internal ``_HookRegistry``.
+- ``RuleEngine`` exposes eight ``on_<event>`` / ``off_<event>`` methods
+  for ``rule_applied``, ``fixpoint``, ``no_match``, ``undefined_op``,
+  ``fold_error``, ``max_depth``, ``cycle``, and ``should_fire``. Each
+  ``on_<event>`` works as both decorator and method form.
+  ``clear_hooks(event=None)`` removes one or all events.
+- ``Resolution`` is the structured return type from Resolver hooks.
+  Setting ``rules=...`` causes the engine to install the rules (with
+  provenance metadata if provided) and retry the operation.
+  ``value=...`` substitutes an expression in. ``fold_funcs={op: handler}``
+  installs prelude handlers. ``allow_more=True`` extends ``max_depth``
+  budgets. ``abort=True`` returns early with whatever the engine has.
+- Three composition policies, locally determined by event category:
+  observers broadcast, resolvers chain (first non-None wins), decisions
+  AND-gate.
+- Default resolver retry cap of 100 per top-level call; exceeding raises
+  ``ResolverLoopError`` to the caller rather than hanging.
+- ``simplify(trace=True)`` is now implemented as a temporary
+  ``on_rule_applied`` hook; the legacy ``_simplify_with_trace`` duplicate
+  rule loop is fully retired.
+- ``RuleMetadata.extra`` dict for resolver-supplied metadata
+  (``provenance``, model name, confidence). Inferred rules carry their
+  origin via this field.
+
 ### Added
 - ``rerum/optimize.py``: extracted ``expr_size``, ``expr_depth``,
   ``expr_ops``, ``expr_atoms``, ``make_op_cost_fn``, ``COST_METRICS``, and

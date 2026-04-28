@@ -50,6 +50,22 @@ The package is split into a *pure functional core* (`rewriter.py`) and a *high-l
 - `RerumREPL` (interactive), `ScriptRunner` (`.rerum` files), one-shot via `-e`, pipe via stdin with `-q`.
 - Custom prelude: any `.py` file exporting a `PRELUDE` dict, loaded with `-p path.py`.
 
+### `hooks.py`, the engine extension points
+
+- ``Resolution`` (frozen dataclass), ``HookContext`` (engine state view),
+  exception types (``HooksError`` base; ``HookError``, ``ResolutionError``,
+  ``ResolverLoopError`` subclasses), and ``_HookRegistry`` (per-category
+  composition).
+- Eight named events: ``rule_applied`` and ``fixpoint`` (observers,
+  broadcast); ``no_match``, ``undefined_op``, ``fold_error``, ``max_depth``,
+  ``cycle`` (resolvers, chain); ``should_fire`` (decision, AND-gate).
+- LLM rule inference: register an ``on_no_match`` resolver that returns
+  ``Resolution(rules=[...])``; the engine installs the rules with
+  provenance metadata and retries. Default retry cap of 100 catches
+  resolver loops.
+- ``simplify(trace=True)`` registers a temporary ``on_rule_applied``
+  hook; the trace is fully integrated with the hook system.
+
 ### Key design boundaries
 - **Rules are data; preludes are code.** Rules can only invoke operations the developer has explicitly enabled in the prelude. That is the security boundary for loading rules from untrusted sources, so preserve it when adding features that touch rule evaluation.
 - **Pure core, mutable engine.** `rewriter.py` does not allocate engine state. Rule storage, group enable/disable, and trace accumulation all live in `engine.py`.
@@ -68,6 +84,25 @@ The package is split into a *pure functional core* (`rewriter.py`) and a *high-l
 - **`prove_equal(..., max_expressions=N)` is the work budget.** Without it, un-provable queries exhaust the depth-bounded reachable set on both BFS frontiers and can run for tens of seconds at modest depths on rich bidirectional rule sets.
 - **Equivalence-class size grows as `n! × Catalan(n-1)`** under associative-commutative `+`. Enumeration is fine to `n=5` (1,680 forms); `n=6` is roughly 30k and impractical. Past `n=5` use `prove_equal` with a budget over `enumerate_equivalents`.
 - **Strategy default is `"exhaustive"`** (apply rules to fixpoint). For one-shot rule application that also returns the matched rule's metadata, use `engine.apply_once(expr)` rather than `engine(expr, strategy="once")`.
+- **Hook fast-path bypass**: when any engine-fired hook is registered,
+  ``simplify`` skips the cached ``rewriter()`` fast path and uses
+  ``_simplify_exhaustive``. Hooks need engine context that the
+  pure-function rewriter does not have. This is correct behavior, not
+  a bug, but explains why a heavily-hooked engine is slower than an
+  unhooked one on the same rule set.
+- **Resolver retry cap**: a resolver returning rules that don't match
+  triggers ``ResolverLoopError`` after 100 retries per top-level call.
+  Named rules deduplicate (so the same named rule installed twice
+  doesn't increment the counter). Anonymous rules without progress
+  trigger the cap. Default cap is not currently configurable; future
+  work may expose it.
+- **Cancellation propagation**: ``ctx.cancel()`` from within a hook
+  sets ``self._cancel_requested``. Strategy drivers
+  (``_simplify_exhaustive``, ``_simplify_bottomup``, ``_simplify_topdown``)
+  check this flag at strategic points; ``equivalents`` and ``prove_equal``
+  also honor it. ``apply_once`` is one-shot so it doesn't need to check.
+  Cancellation from a ``fixpoint`` observer is silently ignored because
+  the engine has already converged.
 
 ## Expression representation
 
