@@ -1601,30 +1601,50 @@ class RuleEngine:
         return resolution
 
     def _install_resolver_rules(self, rules,
-                                metadata: Optional[Dict[str, Any]] = None) -> None:
+                                metadata: Optional[Dict[str, Any]] = None) -> int:
         """Install rules provided by a Resolver mid-rewrite.
 
         Each entry in ``rules`` is a (RuleMetadata, [pattern, skeleton]) tuple,
-        matching the shape produced by parse_rule_line and the engine's
-        normal rule loaders.
+        matching the shape produced by parse_rule_line.
 
         ``metadata`` from the Resolution is merged into each rule's
-        ``RuleMetadata.extra`` dict for later introspection (provenance,
-        model name, confidence). Cache invalidation and priority sort
-        are run after appending so the new rules are visible on the next
-        match attempt.
+        ``RuleMetadata.extra`` dict for later introspection.
+
+        Rules whose names already exist in the engine are skipped (idempotent
+        installation). This prevents unbounded accumulation when a resolver
+        keeps returning the same rules. Anonymous rules (name=None) are
+        always added.
+
+        Returns the number of newly-added rules. Callers can use this to
+        detect "resolver returned rules but none were new" and avoid
+        spinning the outer loop.
         """
+        added = 0
         for meta, rule in rules:
+            if meta.name and meta.name in self._rule_names:
+                continue  # Already installed; skip.
             if metadata:
-                merged = dict(meta.extra or {})
-                merged.update(metadata)
-                meta.extra = merged
+                # Construct a new RuleMetadata with merged extra rather than
+                # mutating the caller's object.
+                merged_extra = dict(meta.extra or {})
+                merged_extra.update(metadata)
+                meta = RuleMetadata(
+                    name=meta.name,
+                    description=meta.description,
+                    tags=list(meta.tags) if meta.tags else None,
+                    condition=meta.condition,
+                    priority=meta.priority,
+                    bidirectional=meta.bidirectional,
+                    direction=meta.direction,
+                    extra=merged_extra,
+                )
             self._rules.append(rule)
             self._metadata.append(meta)
-            if meta.name:
-                self._rule_names[meta.name] = len(self._rules) - 1
-        self._sort_by_priority()
-        self._simplifier = None  # Cache invalidation.
+            added += 1
+        if added > 0:
+            self._sort_by_priority()  # Rebuilds _rule_names correctly.
+            self._simplifier = None  # Cache invalidation.
+        return added
 
     def _check_should_fire(self, rule, metadata, expr, bindings) -> bool:
         """Check if all should_fire decisions allow this rule to fire.
@@ -1733,14 +1753,19 @@ class RuleEngine:
                         # if the resolver is stuck.
                         continue  # Outer loop tries to apply rules to the new value.
                     if resolution.rules is not None:
-                        self._install_resolver_rules(
+                        added = self._install_resolver_rules(
                             resolution.rules, metadata=resolution.metadata
                         )
-                        # Retry: remove the current key from visited so the
-                        # next iteration tries the new rules against the same
-                        # expression rather than hitting the cycle guard.
-                        visited.discard(_expr_to_tuple(current))
-                        continue
+                        if added == 0:
+                            # Resolver returned only rules already installed.
+                            # No progress is possible; fall through to the
+                            # default no-match behavior (recurse into children).
+                            pass
+                        else:
+                            # New rules added; clear current expr from visited
+                            # so the retry can re-evaluate with the new rules.
+                            visited.discard(_expr_to_tuple(current))
+                            continue
                     # fold_funcs path is T10.
 
                 # Recursively simplify subexpressions

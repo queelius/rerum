@@ -524,3 +524,52 @@ class TestNoMatchResolverRulesPath:
         assert engine.simplify(["foo", "z"]) == "z"
         # The rule is now in the engine.
         assert "foo-id" in engine
+
+    def test_resolver_returning_nonmatching_rules_terminates(self):
+        from rerum.engine import parse_rule_line
+        from rerum.hooks import Resolution
+
+        engine = RuleEngine()
+        calls = [0]
+
+        @engine.on_no_match
+        def resolver(expr, ctx):
+            calls[0] += 1
+            # Return rules that match a different expression entirely.
+            pairs = parse_rule_line("@never: (zzz ?x) => :x")
+            rules = [(m, [p, s]) for m, p, s in pairs]
+            return Resolution(rules=rules)
+
+        result = engine.simplify(["foo", "bar"], max_steps=100)
+        # Expression unchanged because no rule matches (foo bar).
+        assert result == ["foo", "bar"]
+        # Resolver called at most twice: once for the first install (rules
+        # added), once on retry where the rules don't match and aren't
+        # re-installed (deduplication by name). Then the engine falls
+        # through to default no-match behavior.
+        assert calls[0] <= 2
+        # Only one copy of @never in the engine, not max_steps copies.
+        assert len(engine._rules) == 1
+
+    def test_resolver_returning_anonymous_rules_dedups_via_progress_check(self):
+        # Anonymous rules can't dedupe by name. The "added > 0" check still
+        # caps work because each install genuinely adds rules. T14 will add
+        # the retry cap as a final safeguard for this case.
+        from rerum.engine import parse_rule_line
+        from rerum.hooks import Resolution
+
+        engine = RuleEngine()
+
+        @engine.on_no_match
+        def resolver(expr, ctx):
+            # Anonymous rule (no @name).
+            pairs = parse_rule_line("(zzz ?x) => :x")
+            rules = [(m, [p, s]) for m, p, s in pairs]
+            return Resolution(rules=rules)
+
+        # With max_steps=5, the engine will accumulate up to 5 anonymous
+        # rules in this case. T14 will fix this entirely with a retry cap.
+        result = engine.simplify(["foo", "bar"], max_steps=5)
+        assert result == ["foo", "bar"]
+        # Bound is max_steps; T14 will tighten this.
+        assert len(engine._rules) <= 5
