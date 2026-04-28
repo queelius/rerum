@@ -285,3 +285,42 @@ class TestRuleAppliedAcrossStrategies:
         engine.on_rule_applied(lambda step, ctx: seen.append(step.metadata.name))
         engine.apply_once(["foo", "y"])
         assert seen == []
+
+
+class TestShouldFireDecision:
+    def test_false_vetoes_rule(self):
+        engine = RuleEngine.from_dsl("@add-zero: (+ ?x 0) => :x")
+
+        @engine.on_should_fire
+        def veto_all(rule, expr, bindings, ctx):
+            return False
+
+        result = engine.simplify(["+", "x", 0])
+        assert result == ["+", "x", 0]  # rule blocked
+
+    def test_true_allows_rule(self):
+        engine = RuleEngine.from_dsl("@add-zero: (+ ?x 0) => :x")
+        engine.on_should_fire(lambda rule, expr, bindings, ctx: True)
+        result = engine.simplify(["+", "x", 0])
+        assert result == "x"
+
+    def test_decision_and_gate(self):
+        engine = RuleEngine.from_dsl("@add-zero: (+ ?x 0) => :x")
+        engine.on_should_fire(lambda *a: True)
+        engine.on_should_fire(lambda *a: False)  # second one vetoes
+        result = engine.simplify(["+", "x", 0])
+        assert result == ["+", "x", 0]
+
+    def test_decision_receives_rule_payload(self):
+        engine = RuleEngine.from_dsl("@add-zero: (+ ?x 0) => :x")
+        seen_names = []
+
+        @engine.on_should_fire
+        def record(rule, expr, bindings, ctx):
+            # rule is the (rule_payload, metadata) tuple from _check_should_fire.
+            _, metadata = rule
+            seen_names.append(metadata.name)
+            return True
+
+        engine.simplify(["+", "x", 0])
+        assert "add-zero" in seen_names

@@ -1399,6 +1399,8 @@ class RuleEngine:
                 # Check condition if present
                 if not self._check_condition(metadata.condition, bindings):
                     continue
+                if not self._check_should_fire(rule, metadata, expr, bindings):
+                    continue
                 result = instantiate(skeleton, bindings, self._fold_funcs)
                 if result != expr:
                     step = RewriteStep(
@@ -1569,6 +1571,31 @@ class RuleEngine:
             return True
         return False
 
+    def _check_should_fire(self, rule, metadata, expr, bindings) -> bool:
+        """Check if all should_fire decisions allow this rule to fire.
+
+        Returns True if no decisions are registered or every registered
+        decision returns truthy. AND-gate semantics: any False vetoes.
+
+        Layered on top of the DSL ``condition``/``when`` clause: rule-author
+        guards stay in the DSL (data), engine-user predicates go in
+        ``should_fire`` (code). A rule fires iff its ``condition`` passes
+        AND every ``should_fire`` hook returns True.
+        """
+        if not self._hooks.count("should_fire"):
+            return True
+        ctx = HookContext(
+            engine=self,
+            expr_path=[],
+            depth=0,
+            step_count=0,
+            event_name="should_fire",
+        )
+        rule_payload = (rule, metadata)
+        return self._hooks.run_decisions(
+            "should_fire", rule_payload, expr, bindings, ctx
+        )
+
     def _simplify_exhaustive(self, expr: ExprType, max_steps: int,
                               groups: Optional[List[str]] = None,
                               listener: Optional[TraceListener] = None) -> ExprType:
@@ -1603,6 +1630,8 @@ class RuleEngine:
                 bindings = _match_internal(pattern, current)
                 if bindings is not None:
                     if not self._check_condition(metadata.condition, bindings):
+                        continue
+                    if not self._check_should_fire(rule, metadata, current, bindings):
                         continue
                     new_expr = instantiate(skeleton, bindings, self._fold_funcs)
                     if new_expr != current:
@@ -1682,6 +1711,8 @@ class RuleEngine:
                 # Check condition if present
                 if not self._check_condition(metadata.condition, bindings):
                     continue
+                if not self._check_should_fire(rule, metadata, current, bindings):
+                    continue
                 result = instantiate(skeleton, bindings, self._fold_funcs)
                 if result != current:
                     step = RewriteStep(
@@ -1729,6 +1760,8 @@ class RuleEngine:
             if bindings is not None:
                 # Check condition if present
                 if not self._check_condition(metadata.condition, bindings):
+                    continue
+                if not self._check_should_fire(rule, metadata, current, bindings):
                     continue
                 result = instantiate(skeleton, bindings, self._fold_funcs)
                 if result != current:
@@ -2123,6 +2156,8 @@ class RuleEngine:
             bindings = _match_internal(pattern, expr)
             if bindings is not None:
                 if not self._check_condition(metadata.condition, bindings):
+                    continue
+                if not self._check_should_fire(rule, metadata, expr, bindings):
                     continue
                 result = instantiate(skeleton, bindings, self._fold_funcs)
                 if result != expr:
