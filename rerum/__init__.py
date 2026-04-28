@@ -97,6 +97,7 @@ from .engine import (
 
 # Hooks
 from .hooks import (
+    HooksError,
     Resolution,
     HookContext,
     HookError,
@@ -162,9 +163,10 @@ __all__ = [
     "make_op_cost_fn",
     "COST_METRICS",
     # Hooks
-    "Resolution",
+    "HooksError",
     "HookContext",
     "HookError",
+    "Resolution",
     "ResolutionError",
     "ResolverLoopError",
 ]

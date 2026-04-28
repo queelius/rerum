@@ -59,6 +59,7 @@ from .rewriter import (
 )
 from .hooks import (
     _HookRegistry,
+    HooksError,
     HookContext,
     Resolution,
     HookError,
@@ -1973,6 +1974,8 @@ class RuleEngine:
         new_engine._rules = self._rules.copy()
         new_engine._metadata = self._metadata.copy()
         new_engine._rule_names = self._rule_names.copy()
+        # Copy hooks too so that copy() and `|` are hook-preserving.
+        new_engine._hooks._hooks = {k: list(v) for k, v in self._hooks._hooks.items()}
         return new_engine
 
     def __or__(self, other: 'RuleEngine') -> 'RuleEngine':
@@ -2687,6 +2690,10 @@ for _event, _category in RuleEngine._HOOK_EVENTS.items():
 del _event, _category
 del RuleEngine._make_on_method
 del RuleEngine._make_off_method
+
+import types as _types
+RuleEngine._HOOK_EVENTS = _types.MappingProxyType(RuleEngine._HOOK_EVENTS)
+del _types
 
 
 class SequencedEngine:

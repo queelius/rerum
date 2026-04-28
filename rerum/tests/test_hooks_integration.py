@@ -63,6 +63,42 @@ class TestEngineHookRegistration:
             getattr(engine, f"off_{event}")(cb)
             assert engine._hooks.count(event) == 0
 
+    def test_copy_preserves_hooks(self):
+        engine = RuleEngine()
+        cb = lambda *a: None
+        engine.on_rule_applied(cb)
+        engine.on_no_match(cb)
+
+        copied = engine.copy()
+        assert copied._hooks.count("rule_applied") == 1
+        assert copied._hooks.count("no_match") == 1
+
+        # But hooks dicts are independent (modifying copy doesn't affect original).
+        copied.off_rule_applied(cb)
+        assert engine._hooks.count("rule_applied") == 1
+        assert copied._hooks.count("rule_applied") == 0
+
+    def test_union_preserves_hooks_from_left(self):
+        e1 = RuleEngine()
+        e2 = RuleEngine()
+        cb = lambda *a: None
+        e1.on_rule_applied(cb)
+
+        union = e1 | e2
+        assert union._hooks.count("rule_applied") == 1
+
+    def test_on_event_decorator_returns_callback(self):
+        engine = RuleEngine()
+
+        @engine.on_rule_applied
+        def cb(step, ctx):
+            pass
+
+        # Decorator must return the callback unchanged.
+        assert cb.__name__ == "cb"
+        # And the engine actually registered it.
+        assert engine._hooks.count("rule_applied") == 1
+
 
 class TestPublicReexports:
     def test_resolution_exported(self):
@@ -72,10 +108,23 @@ class TestPublicReexports:
 
     def test_hookcontext_exported(self):
         from rerum import HookContext
-        assert HookContext is not None
+        # Verify it's actually the right class with expected attributes.
+        assert hasattr(HookContext, "engine")  # via __slots__
+        assert hasattr(HookContext, "cancel")  # method
+        assert hasattr(HookContext, "expr_path")  # property
 
     def test_error_types_exported(self):
-        from rerum import HookError, ResolutionError, ResolverLoopError
-        assert issubclass(HookError, Exception)
-        assert issubclass(ResolutionError, Exception)
-        assert issubclass(ResolverLoopError, Exception)
+        from rerum import HookError, ResolutionError, ResolverLoopError, HooksError
+        # All hook error types share the HooksError base.
+        assert issubclass(HookError, HooksError)
+        assert issubclass(ResolutionError, HooksError)
+        assert issubclass(ResolverLoopError, HooksError)
+        # All ultimately Exception.
+        for cls in (HookError, ResolutionError, ResolverLoopError, HooksError):
+            assert issubclass(cls, Exception)
+
+    def test_hooks_error_base_exported(self):
+        from rerum import HooksError, HookError, ResolutionError, ResolverLoopError
+        assert issubclass(HookError, HooksError)
+        assert issubclass(ResolutionError, HooksError)
+        assert issubclass(ResolverLoopError, HooksError)
