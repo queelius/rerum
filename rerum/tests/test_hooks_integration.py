@@ -794,6 +794,40 @@ class TestCycleAndFixpointEvents:
         assert ctxs[0].engine is engine
         assert ctxs[0].event_name == "fixpoint"
 
+    def test_fixpoint_does_not_fire_on_max_steps_exhaustion(self):
+        from rerum.engine import parse_rule_line
+
+        # A rule that keeps producing different output forever (no convergence).
+        # If max_steps caps without convergence, fixpoint should NOT fire.
+        engine = RuleEngine()
+        # Rule that wraps in another layer each time: (foo X) -> (foo (foo X)),
+        # never converges.
+        pairs = parse_rule_line("@grow: (foo ?x) => (foo (foo :x))")
+        for meta, pat, skel in pairs:
+            engine._rules.append([pat, skel])
+            engine._metadata.append(meta)
+            if meta.name:
+                engine._rule_names[meta.name] = len(engine._rules) - 1
+
+        finals = []
+        engine.on_fixpoint(lambda expr, ctx: finals.append(expr))
+
+        # max_steps=3 exhausts before convergence; visited set won't break early
+        # because each step grows the expression to a new form.
+        engine.simplify(["foo", "x"], max_steps=3, strategy="bottomup")
+        # No fixpoint fired because we never converged naturally.
+        assert finals == []
+
+        # Same check for topdown.
+        finals.clear()
+        engine.simplify(["foo", "x"], max_steps=3, strategy="topdown")
+        assert finals == []
+
+        # Same check for exhaustive.
+        finals.clear()
+        engine.simplify(["foo", "x"], max_steps=3)
+        assert finals == []
+
 
 class TestMaxDepthResolver:
     def test_max_depth_event_fires_when_budget_exhausted(self):

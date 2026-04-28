@@ -1851,6 +1851,7 @@ class RuleEngine:
         step_count_so_far = 0
         self._cancel_requested = False
         _cycle_break = False
+        converged = False
         # Per-call cap on resolver-driven rule retries. Catches buggy LLM
         # resolvers that keep returning rules without making progress.
         max_resolver_retries = 100
@@ -1949,9 +1950,10 @@ class RuleEngine:
                     if subexpr_changed:
                         current = new_children
                         continue
+                converged = True
                 break
 
-        if not _cycle_break and not self._cancel_requested:
+        if converged and not _cycle_break and not self._cancel_requested:
             self._fire_fixpoint(current)
         return current
 
@@ -1963,6 +1965,7 @@ class RuleEngine:
         visited = set()
         self._cancel_requested = False
         cycle_break = False
+        converged = False
         for _ in range(max_steps):
             key = _expr_to_tuple(expr)
             if key in visited:
@@ -1972,16 +1975,23 @@ class RuleEngine:
             visited.add(key)
             new_expr = self._bottomup_pass(expr, groups=groups)
             if new_expr == expr:
+                converged = True
                 break  # natural convergence
             expr = new_expr
             if self._cancel_requested:
                 break
-        if not cycle_break and not self._cancel_requested:
+        if converged and not cycle_break and not self._cancel_requested:
             self._fire_fixpoint(expr)
         return expr
 
     def _bottomup_pass(self, expr: ExprType, groups: Optional[List[str]] = None) -> ExprType:
-        """Single bottom-up pass: simplify children, then apply rules to parent."""
+        """Single bottom-up pass: simplify children, then apply rules to parent.
+
+        no_match resolvers may install rules and request retry. Retry loops
+        within this pass invocation up to max_resolver_retries times before
+        raising ResolverLoopError, matching the safeguard in
+        _simplify_exhaustive.
+        """
         # Base case: atoms can't be simplified structurally
         if not isinstance(expr, list) or len(expr) == 0:
             return expr
@@ -1990,25 +2000,30 @@ class RuleEngine:
         new_children = [self._bottomup_pass(child, groups=groups) for child in expr]
         current = new_children
 
-        # Then try to apply rules to this node
-        for rule_idx, rule in enumerate(self._rules):
-            if self._cancel_requested:
-                break
-            metadata = self._metadata[rule_idx]
-            # Check group filter
-            if not self._is_rule_active(metadata, groups):
-                continue
-            pattern, skeleton = rule
-            bindings = _match_internal(pattern, current)
-            if bindings is not None:
-                # Check condition if present
+        # Try to apply rules to the parent. Loop allows a resolver returning
+        # rules to retry without unbounded recursion.
+        max_resolver_retries = 100
+        resolver_retries = 0
+        while True:
+            for rule_idx, rule in enumerate(self._rules):
+                if self._cancel_requested:
+                    return current
+                metadata = self._metadata[rule_idx]
+                if not self._is_rule_active(metadata, groups):
+                    continue
+                pattern, skeleton = rule
+                bindings = _match_internal(pattern, current)
+                if bindings is None:
+                    continue
                 if not self._check_condition(metadata.condition, bindings):
                     continue
                 if not self._check_should_fire(rule, metadata, current, bindings):
                     continue
-                result = instantiate(skeleton, bindings, self._fold_funcs,
-                                     undefined_op_resolver=self._undefined_op_resolver,
-                                     fold_error_resolver=self._fold_error_resolver)
+                result = instantiate(
+                    skeleton, bindings, self._fold_funcs,
+                    undefined_op_resolver=self._undefined_op_resolver,
+                    fold_error_resolver=self._fold_error_resolver,
+                )
                 if result != current:
                     step = RewriteStep(
                         rule_index=rule_idx,
@@ -2019,11 +2034,12 @@ class RuleEngine:
                     self._fire_rule_applied(step)
                     return result
 
-        # No rule matched at this compound position. Fire no_match.
-        resolution = self._fire_no_match(current)
-        if self._cancel_requested:
-            return current
-        if resolution is not None:
+            # No rule fired. Try the no_match resolver.
+            resolution = self._fire_no_match(current)
+            if self._cancel_requested:
+                return current
+            if resolution is None:
+                return current
             if resolution.abort:
                 return current
             if resolution.value is not None:
@@ -2032,10 +2048,17 @@ class RuleEngine:
                 added = self._install_resolver_rules(
                     resolution.rules, metadata=resolution.metadata
                 )
-                if added > 0:
-                    # Retry: re-call the pass so the new rules can fire.
-                    return self._bottomup_pass(current, groups=groups)
-        return current
+                if added == 0:
+                    return current  # No progress; give up on retry.
+                resolver_retries += 1
+                if resolver_retries > max_resolver_retries:
+                    raise ResolverLoopError(
+                        f"resolver retry cap ({max_resolver_retries}) "
+                        f"exceeded in _bottomup_pass at {current!r}"
+                    )
+                # Retry the outer while: scan all rules again with the new set.
+                continue
+            return current
 
     def _simplify_topdown(self, expr: ExprType, max_steps: int, groups: Optional[List[str]] = None) -> ExprType:
         """Top-down strategy: try parent first, then children.
@@ -2045,6 +2068,7 @@ class RuleEngine:
         visited = set()
         self._cancel_requested = False
         cycle_break = False
+        converged = False
         for _ in range(max_steps):
             key = _expr_to_tuple(expr)
             if key in visited:
@@ -2054,36 +2078,49 @@ class RuleEngine:
             visited.add(key)
             new_expr = self._topdown_pass(expr, groups=groups)
             if new_expr == expr:
+                converged = True
                 break  # natural convergence
             expr = new_expr
             if self._cancel_requested:
                 break
-        if not cycle_break and not self._cancel_requested:
+        if converged and not cycle_break and not self._cancel_requested:
             self._fire_fixpoint(expr)
         return expr
 
     def _topdown_pass(self, expr: ExprType, groups: Optional[List[str]] = None) -> ExprType:
-        """Single top-down pass: apply rules to parent, then simplify children."""
-        # Try to apply rules at this node first
+        """Single top-down pass: apply rules to parent, then simplify children.
+
+        no_match resolvers may install rules and request retry. Retry loops
+        within this pass invocation up to max_resolver_retries times before
+        raising ResolverLoopError, matching the safeguard in
+        _simplify_exhaustive.
+        """
         current = expr
-        for rule_idx, rule in enumerate(self._rules):
-            if self._cancel_requested:
-                break
-            metadata = self._metadata[rule_idx]
-            # Check group filter
-            if not self._is_rule_active(metadata, groups):
-                continue
-            pattern, skeleton = rule
-            bindings = _match_internal(pattern, current)
-            if bindings is not None:
-                # Check condition if present
+
+        # Try to apply rules at this node first. Loop allows a resolver
+        # returning rules to retry without unbounded recursion.
+        max_resolver_retries = 100
+        resolver_retries = 0
+        while True:
+            for rule_idx, rule in enumerate(self._rules):
+                if self._cancel_requested:
+                    return current
+                metadata = self._metadata[rule_idx]
+                if not self._is_rule_active(metadata, groups):
+                    continue
+                pattern, skeleton = rule
+                bindings = _match_internal(pattern, current)
+                if bindings is None:
+                    continue
                 if not self._check_condition(metadata.condition, bindings):
                     continue
                 if not self._check_should_fire(rule, metadata, current, bindings):
                     continue
-                result = instantiate(skeleton, bindings, self._fold_funcs,
-                                     undefined_op_resolver=self._undefined_op_resolver,
-                                     fold_error_resolver=self._fold_error_resolver)
+                result = instantiate(
+                    skeleton, bindings, self._fold_funcs,
+                    undefined_op_resolver=self._undefined_op_resolver,
+                    fold_error_resolver=self._fold_error_resolver,
+                )
                 if result != current:
                     step = RewriteStep(
                         rule_index=rule_idx,
@@ -2094,11 +2131,12 @@ class RuleEngine:
                     self._fire_rule_applied(step)
                     return result  # Return immediately - will be called again
 
-        # No rule matched at this compound position. Fire no_match.
-        resolution = self._fire_no_match(current)
-        if self._cancel_requested:
-            return current
-        if resolution is not None:
+            # No rule fired. Try the no_match resolver.
+            resolution = self._fire_no_match(current)
+            if self._cancel_requested:
+                return current
+            if resolution is None:
+                break
             if resolution.abort:
                 return current
             if resolution.value is not None:
@@ -2107,11 +2145,19 @@ class RuleEngine:
                 added = self._install_resolver_rules(
                     resolution.rules, metadata=resolution.metadata
                 )
-                if added > 0:
-                    # Retry: re-call the pass so the new rules can fire.
-                    return self._topdown_pass(current, groups=groups)
+                if added == 0:
+                    break  # No progress; fall through to children.
+                resolver_retries += 1
+                if resolver_retries > max_resolver_retries:
+                    raise ResolverLoopError(
+                        f"resolver retry cap ({max_resolver_retries}) "
+                        f"exceeded in _topdown_pass at {current!r}"
+                    )
+                # Retry the outer while: scan all rules again with the new set.
+                continue
+            break
 
-        # No rule applied - recursively process children
+        # No rule applied at this node - recursively process children
         if isinstance(current, list) and len(current) > 0:
             new_children = [self._topdown_pass(child, groups=groups) for child in current]
             if new_children != list(current):
