@@ -95,6 +95,15 @@ from .engine import (
     COST_METRICS,
 )
 
+# Hooks
+from .hooks import (
+    Resolution,
+    HookContext,
+    HookError,
+    ResolutionError,
+    ResolverLoopError,
+)
+
 # Public API
 __all__ = [
     # Version
@@ -152,4 +161,10 @@ __all__ = [
     "expr_atoms",
     "make_op_cost_fn",
     "COST_METRICS",
+    # Hooks
+    "Resolution",
+    "HookContext",
+    "HookError",
+    "ResolutionError",
+    "ResolverLoopError",
 ]

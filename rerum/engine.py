@@ -57,6 +57,14 @@ from .rewriter import (
     rewriter, match as _match_internal, instantiate, ExprType,
     FoldFuncsType, ARITHMETIC_PRELUDE, Bindings, NoMatch, _NoMatch, wrap_bindings,
 )
+from .hooks import (
+    _HookRegistry,
+    HookContext,
+    Resolution,
+    HookError,
+    ResolutionError,
+    ResolverLoopError,
+)
 
 
 # ============================================================
@@ -1047,6 +1055,7 @@ class RuleEngine:
         self._simplifier = None
         self._fold_funcs: Optional[FoldFuncsType] = fold_funcs
         self._disabled_groups: set = set()  # Groups that are disabled
+        self._hooks = _HookRegistry()
 
     def _sort_by_priority(self) -> None:
         """Sort rules by priority (descending). Higher priority fires first.
@@ -2613,6 +2622,45 @@ class RuleEngine:
             current = rng.choice(rewrites)
             yield current
 
+    # ============================================================
+    # Hook registration API
+    # ============================================================
+
+    _HOOK_EVENTS = {
+        "rule_applied":  "observer",
+        "fixpoint":      "observer",
+        "no_match":      "resolver",
+        "undefined_op":  "resolver",
+        "fold_error":    "resolver",
+        "max_depth":     "resolver",
+        "cycle":         "resolver",
+        "should_fire":   "decision",
+    }
+
+    def _make_on_method(event: str, category: str):
+        def on_event(self, callback):
+            self._hooks.register(event, category, callback)
+            return callback  # so it works as a decorator
+        on_event.__name__ = f"on_{event}"
+        on_event.__doc__ = (
+            f"Register a {category} hook for the {event!r} event. "
+            f"Callable is returned unchanged so this method works as a "
+            f"decorator."
+        )
+        return on_event
+
+    def _make_off_method(event: str):
+        def off_event(self, callback):
+            return self._hooks.unregister(event, callback)
+        off_event.__name__ = f"off_{event}"
+        off_event.__doc__ = f"Unregister a previously-registered hook for the {event!r} event."
+        return off_event
+
+    def clear_hooks(self, event: Optional[str] = None) -> None:
+        """Remove all hooks for ``event``, or all hooks for all events when
+        ``event`` is None."""
+        self._hooks.clear(event)
+
     def __rshift__(self, other: 'RuleEngine') -> 'SequencedEngine':
         """
         Sequence two engines: engine1 >> engine2.
@@ -2628,6 +2676,17 @@ class RuleEngine:
             result = normalize(E("(square 3)"))  # => 9
         """
         return SequencedEngine([self, other])
+
+
+# Install on_<event> / off_<event> methods on RuleEngine.
+for _event, _category in RuleEngine._HOOK_EVENTS.items():
+    setattr(RuleEngine, f"on_{_event}",
+            RuleEngine._make_on_method(_event, _category))
+    setattr(RuleEngine, f"off_{_event}",
+            RuleEngine._make_off_method(_event))
+del _event, _category
+del RuleEngine._make_on_method
+del RuleEngine._make_off_method
 
 
 class SequencedEngine:
