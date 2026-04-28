@@ -1851,6 +1851,10 @@ class RuleEngine:
         step_count_so_far = 0
         self._cancel_requested = False
         _cycle_break = False
+        # Per-call cap on resolver-driven rule retries. Catches buggy LLM
+        # resolvers that keep returning rules without making progress.
+        max_resolver_retries = 100
+        resolver_retries = 0
         for _ in range(max_steps):
             if self._cancel_requested:
                 return current
@@ -1922,6 +1926,13 @@ class RuleEngine:
                         else:
                             # New rules added; clear current expr from visited
                             # so the retry can re-evaluate with the new rules.
+                            resolver_retries += 1
+                            if resolver_retries > max_resolver_retries:
+                                raise ResolverLoopError(
+                                    f"resolver retry cap "
+                                    f"({max_resolver_retries}) exceeded "
+                                    f"for no_match at {current!r}"
+                                )
                             visited.discard(_expr_to_tuple(current))
                             continue
                     # fold_funcs path is T10.

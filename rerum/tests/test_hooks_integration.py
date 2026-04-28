@@ -835,3 +835,61 @@ class TestMaxDepthResolver:
         keys = {tuple(f) for f in forms}
         assert ("+", "a", "b") in keys
         assert ("+", "b", "a") in keys  # commute fired thanks to extension
+
+
+class TestResolverRetryCap:
+    def test_resolver_loop_error_raised_after_cap(self):
+        from rerum import ResolverLoopError
+        from rerum.engine import parse_rule_line
+        from rerum.hooks import Resolution
+
+        engine = RuleEngine()
+
+        @engine.on_no_match
+        def looping(expr, ctx):
+            # Anonymous rule that doesn't match anything in the input.
+            pairs = parse_rule_line("(zzz ?y) => :y")
+            rules = [(m, [p, s]) for m, p, s in pairs]
+            return Resolution(rules=rules)
+
+        with pytest.raises(ResolverLoopError, match="retry"):
+            engine.simplify(["foo", "bar"], max_steps=200)
+
+    def test_named_rules_dedup_avoids_loop_error(self):
+        # Named rules dedupe so the same rule isn't re-installed; T9 fix
+        # protects against this case without needing T14 to fire.
+        from rerum.engine import parse_rule_line
+        from rerum.hooks import Resolution
+
+        engine = RuleEngine()
+
+        @engine.on_no_match
+        def stable(expr, ctx):
+            pairs = parse_rule_line("@same: (zzz ?y) => :y")
+            rules = [(m, [p, s]) for m, p, s in pairs]
+            return Resolution(rules=rules)
+
+        # Should NOT raise: the named rule is deduped after first install,
+        # and the engine falls through after that without resolver loops.
+        result = engine.simplify(["foo", "bar"])
+        assert result == ["foo", "bar"]
+
+    def test_cap_does_not_fire_under_normal_use(self):
+        # A resolver that returns a useful rule on first call shouldn't
+        # trigger the cap.
+        from rerum.engine import parse_rule_line
+        from rerum.hooks import Resolution
+
+        engine = RuleEngine()
+
+        @engine.on_no_match
+        def helpful(expr, ctx):
+            if isinstance(expr, list) and expr and expr[0] == "foo":
+                pairs = parse_rule_line("@foo-id: (foo ?x) => :x")
+                rules = [(m, [p, s]) for m, p, s in pairs]
+                return Resolution(rules=rules)
+            return None
+
+        # No exception; rule fires.
+        result = engine.simplify(["foo", "x"])
+        assert result == "x"
