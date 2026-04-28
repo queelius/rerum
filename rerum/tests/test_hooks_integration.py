@@ -741,3 +741,55 @@ class TestFoldErrorResolver:
         # Resolution(abort=True) and ctx.cancel() are equivalent: both set
         # _cancel_requested.
         assert engine._cancel_requested
+
+
+class TestCycleAndFixpointEvents:
+    def test_cycle_event_fires_on_bidirectional(self):
+        engine = RuleEngine.from_dsl("@commute: (+ ?x ?y) <=> (+ :y :x)")
+        cycles = []
+        engine.on_cycle(lambda expr, path, ctx: cycles.append(expr))
+        engine.simplify(["+", "a", "b"])
+        # The cycle detection in simplify fires when the engine returns
+        # to a visited state.
+        assert len(cycles) >= 1
+
+    def test_fixpoint_event_fires_at_convergence(self):
+        engine = RuleEngine.from_dsl("@add-zero: (+ ?x 0) => :x")
+        finals = []
+        engine.on_fixpoint(lambda expr, ctx: finals.append(expr))
+        result = engine.simplify(["+", "x", 0])
+        assert result == "x"
+        assert finals == ["x"]
+
+    def test_cycle_resolver_can_abort(self):
+        from rerum.hooks import Resolution
+
+        engine = RuleEngine.from_dsl("@commute: (+ ?x ?y) <=> (+ :y :x)")
+
+        @engine.on_cycle
+        def aborter(expr, path, ctx):
+            return Resolution(abort=True)
+
+        result = engine.simplify(["+", "a", "b"])
+        # Abort propagates; engine returns whatever it has at that point.
+        assert result in (["+", "a", "b"], ["+", "b", "a"])
+
+    def test_fixpoint_observer_receives_final_expr(self):
+        engine = RuleEngine.from_dsl("""
+            @add-zero: (+ ?x 0) => :x
+            @mul-one: (* ?x 1) => :x
+        """)
+        finals = []
+        engine.on_fixpoint(lambda expr, ctx: finals.append(expr))
+        result = engine.simplify(["+", ["*", "y", 1], 0])
+        assert result == "y"
+        assert finals == ["y"]
+
+    def test_fixpoint_observer_receives_ctx(self):
+        engine = RuleEngine.from_dsl("@id: (foo ?x) => :x")
+        ctxs = []
+        engine.on_fixpoint(lambda expr, ctx: ctxs.append(ctx))
+        engine.simplify(["foo", "y"])
+        assert len(ctxs) == 1
+        assert ctxs[0].engine is engine
+        assert ctxs[0].event_name == "fixpoint"

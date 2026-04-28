@@ -1607,6 +1607,42 @@ class RuleEngine:
             self._cancel_requested = True
         return resolution
 
+    def _fire_cycle(self, expr, visited_path) -> None:
+        """Fire the cycle event when visited-set cycle detection catches a repeat.
+
+        Resolvers can return Resolution(abort=True) to escalate the cycle
+        into a propagated cancellation. ctx.cancel() does the same.
+        """
+        if not self._hooks.count("cycle"):
+            return
+        ctx = HookContext(
+            engine=self,
+            expr_path=[],
+            depth=0,
+            step_count=0,
+            event_name="cycle",
+        )
+        resolution = self._hooks.run_resolvers(
+            "cycle", expr, list(visited_path), ctx
+        )
+        if ctx.cancelled or (resolution is not None and resolution.abort):
+            self._cancel_requested = True
+
+    def _fire_fixpoint(self, expr) -> None:
+        """Fire the fixpoint event when the engine converges (no rule fires)."""
+        if not self._hooks.count("fixpoint"):
+            return
+        ctx = HookContext(
+            engine=self,
+            expr_path=[],
+            depth=0,
+            step_count=0,
+            event_name="fixpoint",
+        )
+        self._hooks.run_observers("fixpoint", expr, ctx)
+        if ctx.cancelled:
+            self._cancel_requested = True
+
     def _undefined_op_resolver(self, op: str, args) -> Optional[Resolution]:
         """Bridge from rewriter.instantiate to on_undefined_op hooks.
 
@@ -1772,11 +1808,14 @@ class RuleEngine:
         visited = set()
         step_count_so_far = 0
         self._cancel_requested = False
+        _cycle_break = False
         for _ in range(max_steps):
             if self._cancel_requested:
                 return current
             key = _expr_to_tuple(current)
             if key in visited:
+                self._fire_cycle(current, visited)
+                _cycle_break = True
                 break
             visited.add(key)
             changed = False
@@ -1861,6 +1900,8 @@ class RuleEngine:
                         continue
                 break
 
+        if not _cycle_break and not self._cancel_requested:
+            self._fire_fixpoint(current)
         return current
 
     def _simplify_bottomup(self, expr: ExprType, max_steps: int, groups: Optional[List[str]] = None) -> ExprType:
