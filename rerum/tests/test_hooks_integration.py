@@ -642,3 +642,66 @@ class TestUndefinedOpResolver:
         # The original expression rewrote to (! op 42) which can't be folded;
         # resolver cancelled. Engine should bail out.
         assert engine._cancel_requested  # The cancel signal was set.
+
+
+class TestFoldErrorResolver:
+    def test_fold_raises_resolver_provides_fallback(self):
+        from rerum.hooks import Resolution
+
+        def explode(args):
+            raise ValueError("boom")
+
+        engine = RuleEngine(fold_funcs={"bomb": explode})
+        engine.load_dsl("@detonate: (foo ?x) => (! bomb :x)")
+
+        @engine.on_fold_error
+        def resolver(op, args, exception, ctx):
+            return Resolution(value="defused")
+
+        result = engine.simplify(["foo", 42])
+        assert result == "defused"
+
+    def test_no_resolver_keeps_existing_silent_fallback(self):
+        def explode(args):
+            raise ValueError("boom")
+
+        engine = RuleEngine(fold_funcs={"bomb": explode})
+        engine.load_dsl("@detonate: (foo ?x) => (! bomb :x)")
+        # No resolver: existing behavior leaves [bomb, 42] in place.
+        result = engine.simplify(["foo", 42])
+        assert result == ["bomb", 42]
+
+    def test_resolver_returning_none_falls_through(self):
+        from rerum.hooks import Resolution
+
+        def explode(args):
+            raise ValueError("boom")
+
+        engine = RuleEngine(fold_funcs={"bomb": explode})
+        engine.load_dsl("@detonate: (foo ?x) => (! bomb :x)")
+
+        @engine.on_fold_error
+        def resolver(op, args, exception, ctx):
+            return None  # decline
+
+        result = engine.simplify(["foo", 42])
+        assert result == ["bomb", 42]
+
+    def test_resolver_receives_exception(self):
+        from rerum.hooks import Resolution
+
+        def explode(args):
+            raise ValueError("boom")
+
+        engine = RuleEngine(fold_funcs={"bomb": explode})
+        engine.load_dsl("@detonate: (foo ?x) => (! bomb :x)")
+
+        seen = []
+
+        @engine.on_fold_error
+        def resolver(op, args, exception, ctx):
+            seen.append((op, args, type(exception).__name__, str(exception)))
+            return Resolution(value="ok")
+
+        engine.simplify(["foo", 42])
+        assert seen == [("bomb", [42], "ValueError", "boom")]

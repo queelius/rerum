@@ -767,6 +767,7 @@ def instantiate(
     bindings,
     fold_funcs: Optional[FoldFuncsType] = None,
     undefined_op_resolver: Optional[Callable] = None,
+    fold_error_resolver: Optional[Callable] = None,
 ) -> ExprType:
     """
     Instantiate a skeleton with bindings.
@@ -787,6 +788,10 @@ def instantiate(
             ``Resolution(fold_funcs={op: handler})`` installs the handler into
             ``fold_funcs`` in place and retries the fold; ``None`` falls
             through to the existing "leave as compound" behavior.
+        fold_error_resolver: Optional callable ``(op, args, exc) -> Resolution|None``
+            called when an installed fold handler raises an exception. A
+            ``Resolution(value=v)`` returns ``v`` as the fallback; ``None``
+            falls through to the existing "leave as compound" behavior.
 
     Returns:
         The instantiated expression
@@ -830,10 +835,15 @@ def instantiate(
                         if isinstance(result, float) and result.is_integer():
                             return int(result)
                         return result
-                except Exception:
-                    pass
+                except Exception as exc:
+                    if fold_error_resolver is not None:
+                        resolution = fold_error_resolver(op, args, exc)
+                        if resolution is not None and resolution.value is not None:
+                            return resolution.value
+                    # Fall through to compound emission.
             return [op] + args
-        return instantiate_compound(s, coerced, fold_funcs, undefined_op_resolver)
+        return instantiate_compound(s, coerced, fold_funcs, undefined_op_resolver,
+                                    fold_error_resolver)
 
     return loop(skeleton)
 
@@ -843,6 +853,7 @@ def instantiate_compound(
     bindings,
     fold_funcs: Optional[FoldFuncsType] = None,
     undefined_op_resolver: Optional[Callable] = None,
+    fold_error_resolver: Optional[Callable] = None,
 ) -> List:
     """Instantiate a compound skeleton, handling splice patterns.
 
@@ -859,13 +870,16 @@ def instantiate_compound(
     if skeleton_splice(first):
         name = car(cdr(first))
         spliced = coerced.lookup(name)
-        rest_instantiated = instantiate_compound(rest, coerced, fold_funcs, undefined_op_resolver)
+        rest_instantiated = instantiate_compound(rest, coerced, fold_funcs,
+                                                 undefined_op_resolver, fold_error_resolver)
         if isinstance(spliced, list):
             return spliced + rest_instantiated
         return [spliced] + rest_instantiated
 
-    first_instantiated = instantiate(first, coerced, fold_funcs, undefined_op_resolver)
-    rest_instantiated = instantiate_compound(rest, coerced, fold_funcs, undefined_op_resolver)
+    first_instantiated = instantiate(first, coerced, fold_funcs, undefined_op_resolver,
+                                     fold_error_resolver)
+    rest_instantiated = instantiate_compound(rest, coerced, fold_funcs, undefined_op_resolver,
+                                             fold_error_resolver)
     return [first_instantiated] + rest_instantiated
 
 

@@ -1256,7 +1256,8 @@ class RuleEngine:
 
         # Instantiate the condition with bindings
         result = instantiate(condition, bindings, self._fold_funcs,
-                             undefined_op_resolver=self._undefined_op_resolver)
+                             undefined_op_resolver=self._undefined_op_resolver,
+                             fold_error_resolver=self._fold_error_resolver)
 
         # Check truthiness
         # Numbers: 0 is falsy
@@ -1405,7 +1406,8 @@ class RuleEngine:
                 if not self._check_should_fire(rule, metadata, expr, bindings):
                     continue
                 result = instantiate(skeleton, bindings, self._fold_funcs,
-                                     undefined_op_resolver=self._undefined_op_resolver)
+                                     undefined_op_resolver=self._undefined_op_resolver,
+                                     fold_error_resolver=self._fold_error_resolver)
                 if result != expr:
                     step = RewriteStep(
                         rule_index=rule_idx,
@@ -1641,6 +1643,31 @@ class RuleEngine:
             self._simplifier = None  # Invalidate fast-path cache.
         return resolution
 
+    def _fold_error_resolver(self, op: str, args, exception) -> Optional[Resolution]:
+        """Bridge from rewriter.instantiate to on_fold_error hooks.
+
+        Fired when an installed fold handler raises an exception. Resolvers
+        can return Resolution(value=...) for a fallback or None to fall
+        through to the existing "leave as compound" behavior.
+
+        Honors ctx.cancel() by setting self._cancel_requested.
+        """
+        if not self._hooks.count("fold_error"):
+            return None
+        ctx = HookContext(
+            engine=self,
+            expr_path=[],
+            depth=0,
+            step_count=0,
+            event_name="fold_error",
+        )
+        resolution = self._hooks.run_resolvers(
+            "fold_error", op, args, exception, ctx
+        )
+        if ctx.cancelled:
+            self._cancel_requested = True
+        return resolution
+
     def _install_resolver_rules(self, rules,
                                 metadata: Optional[Dict[str, Any]] = None) -> int:
         """Install rules provided by a Resolver mid-rewrite.
@@ -1763,7 +1790,8 @@ class RuleEngine:
                     if not self._check_should_fire(rule, metadata, current, bindings):
                         continue
                     new_expr = instantiate(skeleton, bindings, self._fold_funcs,
-                                           undefined_op_resolver=self._undefined_op_resolver)
+                                           undefined_op_resolver=self._undefined_op_resolver,
+                                           fold_error_resolver=self._fold_error_resolver)
                     if new_expr != current:
                         step = RewriteStep(
                             rule_index=rule_idx,
@@ -1877,7 +1905,8 @@ class RuleEngine:
                 if not self._check_should_fire(rule, metadata, current, bindings):
                     continue
                 result = instantiate(skeleton, bindings, self._fold_funcs,
-                                     undefined_op_resolver=self._undefined_op_resolver)
+                                     undefined_op_resolver=self._undefined_op_resolver,
+                                     fold_error_resolver=self._fold_error_resolver)
                 if result != current:
                     step = RewriteStep(
                         rule_index=rule_idx,
@@ -1932,7 +1961,8 @@ class RuleEngine:
                 if not self._check_should_fire(rule, metadata, current, bindings):
                     continue
                 result = instantiate(skeleton, bindings, self._fold_funcs,
-                                     undefined_op_resolver=self._undefined_op_resolver)
+                                     undefined_op_resolver=self._undefined_op_resolver,
+                                     fold_error_resolver=self._fold_error_resolver)
                 if result != current:
                     step = RewriteStep(
                         rule_index=rule_idx,
@@ -2333,7 +2363,8 @@ class RuleEngine:
                 if not self._check_should_fire(rule, metadata, expr, bindings):
                     continue
                 result = instantiate(skeleton, bindings, self._fold_funcs,
-                                     undefined_op_resolver=self._undefined_op_resolver)
+                                     undefined_op_resolver=self._undefined_op_resolver,
+                                     fold_error_resolver=self._fold_error_resolver)
                 if result != expr:
                     add_if_new(result)
 
