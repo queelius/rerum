@@ -366,3 +366,62 @@ class TestShouldFireDecision:
         assert seen == ["r1"]
         # The result is unchanged because r1 was vetoed (no rewrite happened).
         assert result == ["a", "x"]
+
+
+class TestNoMatchResolverValuePath:
+    def test_value_resolution_substitutes_expression(self):
+        engine = RuleEngine()  # no rules
+
+        @engine.on_no_match
+        def resolver(expr, ctx):
+            from rerum.hooks import Resolution
+            if expr == ["foo", "bar"]:
+                return Resolution(value="baz")
+            return None
+
+        result = engine.simplify(["foo", "bar"])
+        assert result == "baz"
+
+    def test_none_resolution_means_no_change(self):
+        engine = RuleEngine()
+        engine.on_no_match(lambda expr, ctx: None)
+        result = engine.simplify(["foo", "bar"])
+        assert result == ["foo", "bar"]
+
+    def test_resolver_only_fires_at_compound_positions(self):
+        # Atoms (constants, variables) are not "positions where rules could
+        # have fired"; resolver should not be called for them.
+        engine = RuleEngine.from_dsl("@id: (foo ?x) => :x")
+        called = []
+        engine.on_no_match(lambda expr, ctx: called.append(expr))
+
+        engine.simplify(["foo", "bar"])
+        # foo-rule fires on (foo bar) -> bar; bar is an atom, no_match
+        # should not fire there. The compound (foo bar) had a matching rule
+        # so no_match shouldn't fire either.
+        assert called == []
+
+    def test_no_match_fires_when_no_rule_matches(self):
+        engine = RuleEngine.from_dsl("@id: (foo ?x) => :x")
+        called_with = []
+
+        @engine.on_no_match
+        def resolver(expr, ctx):
+            called_with.append(expr)
+            return None
+
+        # (bar baz) has no matching rule; no_match should fire.
+        engine.simplify(["bar", "baz"])
+        assert called_with == [["bar", "baz"]]
+
+    def test_resolution_abort_returns_current_expression(self):
+        engine = RuleEngine()
+
+        @engine.on_no_match
+        def resolver(expr, ctx):
+            from rerum.hooks import Resolution
+            return Resolution(abort=True)
+
+        result = engine.simplify(["foo", "bar"])
+        # Abort short-circuits; engine returns the unchanged expression.
+        assert result == ["foo", "bar"]

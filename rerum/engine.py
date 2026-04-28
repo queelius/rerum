@@ -1571,6 +1571,27 @@ class RuleEngine:
             return True
         return False
 
+    def _fire_no_match(self, expr) -> Optional[Resolution]:
+        """Fire the no_match event when no rule matches at the current
+        compound position.
+
+        Returns the Resolution if a resolver provided one, else None.
+        Atoms (constants, variables, empty list) do not fire no_match:
+        rules apply at compound positions, not at leaves.
+        """
+        if not isinstance(expr, list) or not expr:
+            return None
+        if not self._hooks.count("no_match"):
+            return None
+        ctx = HookContext(
+            engine=self,
+            expr_path=[],
+            depth=0,
+            step_count=0,
+            event_name="no_match",
+        )
+        return self._hooks.run_resolvers("no_match", expr, ctx)
+
     def _check_should_fire(self, rule, metadata, expr, bindings) -> bool:
         """Check if all should_fire decisions allow this rule to fire.
 
@@ -1662,6 +1683,18 @@ class RuleEngine:
                         break
 
             if not changed:
+                # No rule matched at this compound position. Fire no_match.
+                resolution = self._fire_no_match(current)
+                if resolution is not None:
+                    if resolution.abort:
+                        return current
+                    if resolution.value is not None:
+                        current = resolution.value
+                        continue  # Outer loop tries to apply rules to the new value.
+                    # Resolution(rules=[...]) and (fold_funcs=...) are handled
+                    # in T9 and T10. For T8, value and abort are the only
+                    # supported actions.
+
                 # Recursively simplify subexpressions
                 if isinstance(current, list) and len(current) > 0:
                     new_children = []
