@@ -51,7 +51,7 @@ import random
 import re
 from collections import deque
 from pathlib import Path
-from typing import List, Tuple, Optional, Dict, Union, Iterator, Set, Callable
+from typing import List, Tuple, Optional, Dict, Union, Iterator, Set, Callable, Any
 
 from .rewriter import (
     rewriter, match as _match_internal, instantiate, ExprType,
@@ -89,7 +89,8 @@ class RuleMetadata:
     def __init__(self, name: Optional[str] = None, description: Optional[str] = None,
                  tags: Optional[List[str]] = None, condition: Optional[ExprType] = None,
                  priority: int = 0, bidirectional: bool = False,
-                 direction: Optional[str] = None):
+                 direction: Optional[str] = None,
+                 extra: Optional[Dict[str, Any]] = None):
         self.name = name
         self.description = description
         self.tags = tags or []
@@ -97,6 +98,7 @@ class RuleMetadata:
         self.priority = priority  # Higher priority fires first (default: 0)
         self.bidirectional = bidirectional  # True if from a <=> rule
         self.direction = direction  # 'fwd' or 'rev' for bidirectional rules
+        self.extra = extra or {}  # Resolver-provided metadata (provenance, model, confidence)
 
     def __repr__(self) -> str:
         base = ""
@@ -1598,6 +1600,32 @@ class RuleEngine:
             self._cancel_requested = True
         return resolution
 
+    def _install_resolver_rules(self, rules,
+                                metadata: Optional[Dict[str, Any]] = None) -> None:
+        """Install rules provided by a Resolver mid-rewrite.
+
+        Each entry in ``rules`` is a (RuleMetadata, [pattern, skeleton]) tuple,
+        matching the shape produced by parse_rule_line and the engine's
+        normal rule loaders.
+
+        ``metadata`` from the Resolution is merged into each rule's
+        ``RuleMetadata.extra`` dict for later introspection (provenance,
+        model name, confidence). Cache invalidation and priority sort
+        are run after appending so the new rules are visible on the next
+        match attempt.
+        """
+        for meta, rule in rules:
+            if metadata:
+                merged = dict(meta.extra or {})
+                merged.update(metadata)
+                meta.extra = merged
+            self._rules.append(rule)
+            self._metadata.append(meta)
+            if meta.name:
+                self._rule_names[meta.name] = len(self._rules) - 1
+        self._sort_by_priority()
+        self._simplifier = None  # Cache invalidation.
+
     def _check_should_fire(self, rule, metadata, expr, bindings) -> bool:
         """Check if all should_fire decisions allow this rule to fire.
 
@@ -1704,9 +1732,16 @@ class RuleEngine:
                         # so the engine terminates within max_steps even
                         # if the resolver is stuck.
                         continue  # Outer loop tries to apply rules to the new value.
-                    # Resolution(rules=[...]) and (fold_funcs=...) are handled
-                    # in T9 and T10. For T8, value and abort are the only
-                    # supported actions.
+                    if resolution.rules is not None:
+                        self._install_resolver_rules(
+                            resolution.rules, metadata=resolution.metadata
+                        )
+                        # Retry: remove the current key from visited so the
+                        # next iteration tries the new rules against the same
+                        # expression rather than hitting the cycle guard.
+                        visited.discard(_expr_to_tuple(current))
+                        continue
+                    # fold_funcs path is T10.
 
                 # Recursively simplify subexpressions
                 if isinstance(current, list) and len(current) > 0:

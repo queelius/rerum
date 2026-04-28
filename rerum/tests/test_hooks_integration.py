@@ -441,3 +441,86 @@ class TestNoMatchResolverValuePath:
         result = engine.simplify(["foo", "bar"])
         # Cancellation halts the rewrite; the unchanged expression is returned.
         assert result == ["foo", "bar"]
+
+
+class TestNoMatchResolverRulesPath:
+    def test_rules_resolution_adds_rule_and_retries(self):
+        from rerum.engine import parse_rule_line
+        from rerum.hooks import Resolution
+
+        engine = RuleEngine()
+
+        @engine.on_no_match
+        def resolver(expr, ctx):
+            if expr == ["foo", "bar"]:
+                pairs = parse_rule_line("@foo-id: (foo ?x) => :x")
+                rules = [(meta, [pat, skel]) for meta, pat, skel in pairs]
+                return Resolution(rules=rules, metadata={"provenance": "test"})
+            return None
+
+        result = engine.simplify(["foo", "bar"])
+        assert result == "bar"
+
+    def test_added_rule_persists_after_call(self):
+        from rerum.engine import parse_rule_line
+        from rerum.hooks import Resolution
+
+        engine = RuleEngine()
+        called = [0]
+
+        @engine.on_no_match
+        def resolver(expr, ctx):
+            called[0] += 1
+            if isinstance(expr, list) and expr and expr[0] == "foo":
+                pairs = parse_rule_line("@foo-id: (foo ?x) => :x")
+                rules = [(m, [p, s]) for m, p, s in pairs]
+                return Resolution(rules=rules)
+            return None
+
+        engine.simplify(["foo", "a"])  # adds rule, resolver called
+        first_call_count = called[0]
+        engine.simplify(["foo", "b"])  # rule already there
+        # Resolver should not fire again because foo-id matches now.
+        assert called[0] == first_call_count
+
+    def test_rule_provenance_metadata_in_extra(self):
+        from rerum.engine import parse_rule_line
+        from rerum.hooks import Resolution
+
+        engine = RuleEngine()
+
+        @engine.on_no_match
+        def resolver(expr, ctx):
+            if isinstance(expr, list) and expr and expr[0] == "foo":
+                pairs = parse_rule_line("@foo-id: (foo ?x) => :x")
+                rules = [(m, [p, s]) for m, p, s in pairs]
+                return Resolution(rules=rules,
+                                  metadata={"provenance": "llm-inferred",
+                                            "model": "test-model"})
+            return None
+
+        engine.simplify(["foo", "a"])
+        # Find the rule's metadata.
+        rule_meta = engine._metadata[-1]
+        assert rule_meta.extra.get("provenance") == "llm-inferred"
+        assert rule_meta.extra.get("model") == "test-model"
+
+    def test_added_rule_visible_in_subsequent_simplify(self):
+        from rerum.engine import parse_rule_line
+        from rerum.hooks import Resolution
+
+        engine = RuleEngine()
+
+        @engine.on_no_match
+        def resolver(expr, ctx):
+            if isinstance(expr, list) and expr and expr[0] == "foo":
+                pairs = parse_rule_line("@foo-id: (foo ?x) => :x")
+                rules = [(m, [p, s]) for m, p, s in pairs]
+                return Resolution(rules=rules)
+            return None
+
+        engine.simplify(["foo", "a"])
+        # Subsequent simplify uses the added rule directly.
+        assert engine.simplify(["foo", "z"]) == "z"
+        # The rule is now in the engine.
+        assert "foo-id" in engine
