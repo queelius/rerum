@@ -120,7 +120,7 @@ class TestHookContext:
         ctx.cancel()
         assert ctx.cancelled is True
 
-    def test_expr_path_is_immutable_view(self):
+    def test_expr_path_is_tuple_not_list(self):
         from rerum.hooks import HookContext
 
         path = [["+", "a", "b"], ["a"]]
@@ -131,7 +131,20 @@ class TestHookContext:
             step_count=5,
             event_name="no_match",
         )
-        # ctx.expr_path returns a tuple (immutable) so hooks can't mutate the
-        # engine's internal stack.
+        # The container is a tuple, so hooks can't reassign or resize the path.
         assert isinstance(ctx.expr_path, tuple)
         assert ctx.expr_path == tuple(path)
+
+    def test_expr_path_container_cannot_be_modified(self):
+        from rerum.hooks import HookContext
+
+        path = [["+", "a", "b"], ["a"]]
+        ctx = HookContext(
+            engine=None,
+            expr_path=path,
+            depth=2,
+            step_count=5,
+            event_name="no_match",
+        )
+        with pytest.raises(TypeError):
+            ctx.expr_path[0] = "replaced"

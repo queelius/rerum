@@ -11,7 +11,7 @@ points; this module provides the data types they exchange.
 """
 
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .rewriter import ExprType
@@ -93,6 +93,10 @@ class HookContext:
 
     Constructed by the engine for each hook invocation; not user-instantiable
     in normal use (but the constructor stays public for testability).
+
+    Hooks should treat all attributes as read-only and call ``cancel()`` to
+    signal abort rather than mutating ``cancelled`` directly. The engine
+    only checks ``cancelled`` after the hook returns.
     """
 
     __slots__ = (
@@ -116,8 +120,15 @@ class HookContext:
         self.cancelled = False
 
     @property
-    def expr_path(self) -> tuple:
-        """Ancestry from root expression to current position. Immutable view."""
+    def expr_path(self) -> "Tuple[ExprType, ...]":
+        """Ancestry from root expression to current position.
+
+        Returned as a tuple so the path itself cannot be re-assigned or
+        re-sized from inside a hook. Note that the elements (expression
+        nodes) are shared references; the engine treats expressions as
+        immutable values, and hooks must do the same. Mutating an
+        expression node from a hook is undefined behavior.
+        """
         return self._expr_path
 
     def cancel(self) -> None:
