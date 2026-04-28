@@ -152,8 +152,11 @@ class _HookRegistry:
         self._hooks: Dict[str, List[Callable]] = {}
 
     def register(self, event: str, category: str, callback: Callable) -> None:
-        # ``category`` is currently descriptive only; the runner method picks
-        # the policy. Reserved here for a future symmetry check.
+        # Category is validated for fail-fast on typos but not persisted; the
+        # registry has no per-hook category record. The runner method
+        # (run_observers / run_resolvers / run_decisions) determines the
+        # composition policy; calling the wrong runner for a category is a
+        # programming error in the engine, not something the registry guards.
         if category not in ("observer", "resolver", "decision"):
             raise ValueError(f"unknown hook category: {category!r}")
         self._hooks.setdefault(event, []).append(callback)

@@ -218,6 +218,16 @@ class TestHookRegistryResolvers:
         ctx = HookContext(None, [], 0, 0, "no_match")
         assert reg.run_resolvers("no_match", ["foo"], ctx) is None
 
+    def test_resolver_wrong_return_type_raises_resolution_error(self):
+        from rerum.hooks import _HookRegistry, HookContext, ResolutionError
+
+        reg = _HookRegistry()
+        reg.register("no_match", "resolver", lambda expr, ctx: 42)  # not Resolution or None
+
+        ctx = HookContext(None, [], 0, 0, "no_match")
+        with pytest.raises(ResolutionError, match="expected Resolution or None"):
+            reg.run_resolvers("no_match", ["foo"], ctx)
+
 
 class TestHookRegistryDecisions:
     """Decision events: AND-gate, every hook must return True."""
@@ -295,3 +305,77 @@ class TestHookRegistryUnregister:
         # both empty
         assert reg.count("rule_applied") == 0
         assert reg.count("no_match") == 0
+
+    def test_hook_unregistering_itself_during_firing_is_safe(self):
+        """The list(...) snapshot in run_observers means a hook removing
+        itself mid-fire doesn't corrupt iteration."""
+        from rerum.hooks import _HookRegistry, HookContext
+
+        reg = _HookRegistry()
+        log = []
+
+        def self_remover(payload, ctx):
+            log.append("self_remover")
+            reg.unregister("rule_applied", self_remover)
+
+        def follower(payload, ctx):
+            log.append("follower")
+
+        reg.register("rule_applied", "observer", self_remover)
+        reg.register("rule_applied", "observer", follower)
+
+        ctx = HookContext(None, [], 0, 0, "rule_applied")
+        reg.run_observers("rule_applied", "STEP", ctx)
+
+        # Both ran in this fire (snapshot semantics).
+        assert log == ["self_remover", "follower"]
+        # self_remover is gone for the next fire.
+        assert reg.count("rule_applied") == 1
+
+        log.clear()
+        reg.run_observers("rule_applied", "STEP", ctx)
+        assert log == ["follower"]
+
+    def test_hook_adding_new_hook_during_firing_is_safe(self):
+        """A hook that registers a new hook does not cause the new hook to
+        fire in the current cycle (snapshot semantics)."""
+        from rerum.hooks import _HookRegistry, HookContext
+
+        reg = _HookRegistry()
+        log = []
+
+        def newcomer(payload, ctx):
+            log.append("newcomer")
+
+        def adder(payload, ctx):
+            log.append("adder")
+            reg.register("rule_applied", "observer", newcomer)
+
+        reg.register("rule_applied", "observer", adder)
+
+        ctx = HookContext(None, [], 0, 0, "rule_applied")
+        reg.run_observers("rule_applied", "STEP", ctx)
+
+        # adder ran; newcomer did not, even though it was registered during the fire.
+        assert log == ["adder"]
+
+        # Next fire: both run.
+        log.clear()
+        reg.run_observers("rule_applied", "STEP", ctx)
+        assert log == ["adder", "newcomer"]
+
+    def test_unregister_returns_false_on_unknown_event(self):
+        from rerum.hooks import _HookRegistry
+        reg = _HookRegistry()
+        cb = lambda *a: None
+        # Event was never registered.
+        assert reg.unregister("never_used", cb) is False
+
+    def test_unregister_returns_false_on_unknown_callback(self):
+        from rerum.hooks import _HookRegistry
+        reg = _HookRegistry()
+        a = lambda *a: None
+        b = lambda *a: None
+        reg.register("rule_applied", "observer", a)
+        # b was never registered for this event.
+        assert reg.unregister("rule_applied", b) is False
