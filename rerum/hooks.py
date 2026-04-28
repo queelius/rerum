@@ -135,3 +135,82 @@ class HookContext:
         """Signal the engine to abort the current rewrite. Equivalent to
         returning ``Resolution(abort=True)`` from a Resolver."""
         self.cancelled = True
+
+
+class _HookRegistry:
+    """Registry mapping (event, callable) pairs with three composition
+    policies: ``run_observers`` (broadcast), ``run_resolvers`` (chain),
+    ``run_decisions`` (AND-gate).
+
+    The category of each event is supplied at registration time; calling the
+    wrong runner for an event is a programming error and is intentionally
+    not protected against (the engine always uses the correct runner for the
+    event it is firing).
+    """
+
+    def __init__(self):
+        self._hooks: Dict[str, List[Callable]] = {}
+
+    def register(self, event: str, category: str, callback: Callable) -> None:
+        # ``category`` is currently descriptive only; the runner method picks
+        # the policy. Reserved here for a future symmetry check.
+        if category not in ("observer", "resolver", "decision"):
+            raise ValueError(f"unknown hook category: {category!r}")
+        self._hooks.setdefault(event, []).append(callback)
+
+    def unregister(self, event: str, callback: Callable) -> bool:
+        """Remove ``callback`` from ``event``. Returns True if it was present."""
+        hooks = self._hooks.get(event)
+        if not hooks:
+            return False
+        try:
+            hooks.remove(callback)
+            return True
+        except ValueError:
+            return False
+
+    def clear(self, event: Optional[str] = None) -> None:
+        """Remove all hooks for ``event``, or all hooks for all events."""
+        if event is None:
+            self._hooks.clear()
+        else:
+            self._hooks.pop(event, None)
+
+    def count(self, event: str) -> int:
+        return len(self._hooks.get(event, ()))
+
+    def run_observers(self, event: str, *args) -> None:
+        """Broadcast: every registered hook runs in order; return values
+        ignored. Hook exceptions wrap as ``HookError`` and propagate."""
+        for hook in list(self._hooks.get(event, ())):
+            try:
+                hook(*args)
+            except Exception as cause:
+                raise HookError(hook, event, cause) from cause
+
+    def run_resolvers(self, event: str, *args) -> Optional[Resolution]:
+        """Chain of responsibility: first non-None Resolution wins."""
+        for hook in list(self._hooks.get(event, ())):
+            try:
+                result = hook(*args)
+            except Exception as cause:
+                raise HookError(hook, event, cause) from cause
+            if result is not None:
+                if not isinstance(result, Resolution):
+                    raise ResolutionError(
+                        f"resolver for {event!r} returned {type(result).__name__}, "
+                        f"expected Resolution or None"
+                    )
+                return result
+        return None
+
+    def run_decisions(self, event: str, *args) -> bool:
+        """AND-gate: every hook must return truthy. First False short-circuits."""
+        for hook in list(self._hooks.get(event, ())):
+            try:
+                result = hook(*args)
+            except Exception as cause:
+                raise HookError(hook, event, cause) from cause
+            if not result:
+                return False
+        return True
