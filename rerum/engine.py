@@ -1603,18 +1603,23 @@ class RuleEngine:
         return resolution
 
     def _undefined_op_resolver(self, op: str, args) -> Optional[Resolution]:
-        """Bridge from rewriter.instantiate to the on_undefined_op hooks.
+        """Bridge from rewriter.instantiate to on_undefined_op hooks.
 
-        When ``instantiate`` encounters a (! op args) form and ``op`` is
-        not in ``fold_funcs``, it calls this method (passed in via the
-        ``undefined_op_resolver`` parameter). Returns the Resolution if a
-        resolver provided one, else None.
+        Dual-path install for ``Resolution(fold_funcs={op: handler})``:
+          1. ``instantiate`` updates ``fold_funcs`` (its parameter) in-place
+             when ``fold_funcs is not None``. This makes the handler available
+             for the current call.
+          2. This bridge also installs into ``self._fold_funcs``, initializing
+             it to ``{}`` if it was ``None`` (instantiate cannot do that
+             because Python pass-by-object means assigning to its parameter
+             doesn't reach the engine's attribute). It also invalidates
+             ``self._simplifier`` so the cached fast-path simplifier
+             rebuilds with the new fold_funcs on the next call.
 
-        When a ``Resolution(fold_funcs=...)`` is returned, this bridge also
-        installs the handlers into ``self._fold_funcs`` (initializing it to
-        an empty dict if it was ``None``) and invalidates the cached
-        simplifier. This ensures the next call does not re-fire the resolver
-        for the same op.
+        The two paths overlap (idempotent updates) but are both needed: path 1
+        for the current call when ``self._fold_funcs`` was already a dict,
+        path 2 to handle the fresh-engine case where ``self._fold_funcs`` was
+        ``None``. Honors ``ctx.cancel()`` by setting ``self._cancel_requested``.
         """
         if not self._hooks.count("undefined_op"):
             return None
@@ -1736,6 +1741,8 @@ class RuleEngine:
         step_count_so_far = 0
         self._cancel_requested = False
         for _ in range(max_steps):
+            if self._cancel_requested:
+                return current
             key = _expr_to_tuple(current)
             if key in visited:
                 break
@@ -1855,6 +1862,8 @@ class RuleEngine:
 
         # Then try to apply rules to this node
         for rule_idx, rule in enumerate(self._rules):
+            if self._cancel_requested:
+                break
             metadata = self._metadata[rule_idx]
             # Check group filter
             if not self._is_rule_active(metadata, groups):
@@ -1908,6 +1917,8 @@ class RuleEngine:
         # Try to apply rules at this node first
         current = expr
         for rule_idx, rule in enumerate(self._rules):
+            if self._cancel_requested:
+                break
             metadata = self._metadata[rule_idx]
             # Check group filter
             if not self._is_rule_active(metadata, groups):
@@ -1963,6 +1974,8 @@ class RuleEngine:
 
     def _fold_constants(self, expr: ExprType) -> ExprType:
         """Fold constant expressions using the configured fold_funcs."""
+        if self._fold_funcs is None:
+            return expr
         if not isinstance(expr, list) or len(expr) == 0:
             return expr
 
