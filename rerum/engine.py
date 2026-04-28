@@ -1060,6 +1060,7 @@ class RuleEngine:
         self._disabled_groups: set = set()  # Groups that are disabled
         self._hooks = _HookRegistry()
         self._cancel_requested = False
+        self._max_depth_extensions: Dict[int, int] = {}
 
     def _sort_by_priority(self) -> None:
         """Sort rules by priority (descending). Higher priority fires first.
@@ -1657,6 +1658,30 @@ class RuleEngine:
         self._hooks.run_observers("fixpoint", expr, ctx)
         # Note: ctx.cancelled is intentionally not propagated. The engine
         # has already converged; there is nothing to cancel.
+
+    def _fire_max_depth(self, expr, depth) -> Optional[Resolution]:
+        """Bridge to on_max_depth hooks.
+
+        Fires when equivalents/prove_equal/minimize/random_walk exhaust
+        their depth budget. Resolvers can return Resolution(allow_more=True)
+        to extend the budget once.
+
+        Honors ctx.cancel() and Resolution(abort=True) by setting
+        self._cancel_requested.
+        """
+        if not self._hooks.count("max_depth"):
+            return None
+        ctx = HookContext(
+            engine=self,
+            expr_path=[],
+            depth=depth,
+            step_count=0,
+            event_name="max_depth",
+        )
+        resolution = self._hooks.run_resolvers("max_depth", expr, depth, ctx)
+        if ctx.cancelled or (resolution is not None and resolution.abort):
+            self._cancel_requested = True
+        return resolution
 
     def _undefined_op_resolver(self, op: str, args) -> Optional[Resolution]:
         """Bridge from rewriter.instantiate to on_undefined_op hooks.
@@ -2511,7 +2536,15 @@ class RuleEngine:
                 current, depth = frontier.pop()
 
             if depth >= max_depth:
-                continue
+                resolution = self._fire_max_depth(current, depth)
+                if resolution is not None and resolution.allow_more:
+                    # Extend budget once per call (tracked by id of visited set).
+                    extension_key = id(visited)
+                    if extension_key not in self._max_depth_extensions:
+                        self._max_depth_extensions[extension_key] = max_depth
+                        max_depth = max_depth * 2 if max_depth > 0 else 1
+                if depth >= max_depth:
+                    continue
 
             # Find all single-step rewrites
             rewrites = self._all_single_rewrites(

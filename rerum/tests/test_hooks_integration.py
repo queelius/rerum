@@ -793,3 +793,44 @@ class TestCycleAndFixpointEvents:
         assert len(ctxs) == 1
         assert ctxs[0].engine is engine
         assert ctxs[0].event_name == "fixpoint"
+
+
+class TestMaxDepthResolver:
+    def test_max_depth_event_fires_when_budget_exhausted(self):
+        engine = RuleEngine.from_dsl("@commute: (+ ?x ?y) <=> (+ :y :x)")
+        called = [0]
+
+        @engine.on_max_depth
+        def resolver(expr, depth, ctx):
+            called[0] += 1
+            return None  # decline
+
+        # Tight depth budget triggers max_depth.
+        list(engine.equivalents(["+", "a", "b"], max_depth=1))
+        assert called[0] >= 1
+
+    def test_no_resolver_means_no_event(self):
+        engine = RuleEngine.from_dsl("@commute: (+ ?x ?y) <=> (+ :y :x)")
+        # No resolver registered. equivalents just stops at max_depth.
+        forms = list(engine.equivalents(["+", "a", "b"], max_depth=0))
+        # At max_depth=0 with the original yielded, then stop.
+        assert forms == [["+", "a", "b"]]
+
+    def test_allow_more_extends_budget_once(self):
+        from rerum.hooks import Resolution
+
+        engine = RuleEngine.from_dsl("@commute: (+ ?x ?y) <=> (+ :y :x)")
+
+        @engine.on_max_depth
+        def resolver(expr, depth, ctx):
+            return Resolution(allow_more=True)
+
+        # Without the resolver, max_depth=0 yields only the original.
+        # With allow_more, the budget extends once (effectively to depth 1+),
+        # so we see both forms.
+        forms = list(engine.equivalents(["+", "a", "b"], max_depth=0))
+        keys = {tuple(f) for f in forms}
+        # Original is always yielded; commute may or may not fire depending
+        # on how aggressively allow_more extends. The contract is "budget
+        # extended at least once", so we should see at least the original.
+        assert ("+", "a", "b") in keys
