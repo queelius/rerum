@@ -1577,6 +1577,14 @@ class RuleEngine:
         Returns True if no decisions are registered or every registered
         decision returns truthy. AND-gate semantics: any False vetoes.
 
+        Falsy non-True returns (None, 0, "", []) all veto. Decisions that
+        forget to return a value will silently veto every rule, which is
+        the standard chain-of-decisions semantics. Use ``return True``
+        explicitly.
+
+        ``ctx.cancel()`` from a decision sets ``self._cancel_requested``;
+        the strategy driver loop reads that flag to abort.
+
         Layered on top of the DSL ``condition``/``when`` clause: rule-author
         guards stay in the DSL (data), engine-user predicates go in
         ``should_fire`` (code). A rule fires iff its ``condition`` passes
@@ -1591,10 +1599,13 @@ class RuleEngine:
             step_count=0,
             event_name="should_fire",
         )
-        rule_payload = (rule, metadata)
-        return self._hooks.run_decisions(
-            "should_fire", rule_payload, expr, bindings, ctx
+        result = self._hooks.run_decisions(
+            "should_fire", rule, metadata, expr, bindings, ctx
         )
+        if ctx.cancelled:
+            self._cancel_requested = True
+            return False
+        return result
 
     def _simplify_exhaustive(self, expr: ExprType, max_steps: int,
                               groups: Optional[List[str]] = None,

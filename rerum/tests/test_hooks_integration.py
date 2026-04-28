@@ -292,35 +292,77 @@ class TestShouldFireDecision:
         engine = RuleEngine.from_dsl("@add-zero: (+ ?x 0) => :x")
 
         @engine.on_should_fire
-        def veto_all(rule, expr, bindings, ctx):
+        def veto_all(rule, metadata, expr, bindings, ctx):
             return False
 
         result = engine.simplify(["+", "x", 0])
-        assert result == ["+", "x", 0]  # rule blocked
+        assert result == ["+", "x", 0]
 
     def test_true_allows_rule(self):
         engine = RuleEngine.from_dsl("@add-zero: (+ ?x 0) => :x")
-        engine.on_should_fire(lambda rule, expr, bindings, ctx: True)
+        engine.on_should_fire(lambda rule, metadata, expr, bindings, ctx: True)
         result = engine.simplify(["+", "x", 0])
         assert result == "x"
 
     def test_decision_and_gate(self):
         engine = RuleEngine.from_dsl("@add-zero: (+ ?x 0) => :x")
         engine.on_should_fire(lambda *a: True)
-        engine.on_should_fire(lambda *a: False)  # second one vetoes
+        engine.on_should_fire(lambda *a: False)
         result = engine.simplify(["+", "x", 0])
         assert result == ["+", "x", 0]
 
-    def test_decision_receives_rule_payload(self):
+    def test_decision_receives_rule_and_metadata(self):
         engine = RuleEngine.from_dsl("@add-zero: (+ ?x 0) => :x")
         seen_names = []
 
         @engine.on_should_fire
-        def record(rule, expr, bindings, ctx):
-            # rule is the (rule_payload, metadata) tuple from _check_should_fire.
-            _, metadata = rule
+        def record(rule, metadata, expr, bindings, ctx):
             seen_names.append(metadata.name)
             return True
 
         engine.simplify(["+", "x", 0])
         assert "add-zero" in seen_names
+
+    def test_should_fire_only_called_when_condition_passes(self):
+        # The DSL condition is checked first; should_fire is only consulted
+        # when the condition has already passed. This locks in the order so
+        # a regression that moves the calls won't slip through.
+        engine = (RuleEngine()
+                  .with_prelude(__import__("rerum").FULL_PRELUDE)
+                  .load_dsl("@only-positive: (foo ?x) => :x when (! > :x 0)"))
+
+        called = []
+
+        @engine.on_should_fire
+        def record(rule, metadata, expr, bindings, ctx):
+            called.append(True)
+            return True
+
+        # condition fails: x = -5 is not > 0. should_fire should NOT be called.
+        engine.simplify(["foo", -5])
+        assert called == []
+
+        # condition passes: should_fire IS called.
+        engine.simplify(["foo", 5])
+        assert called == [True]
+
+    def test_should_fire_can_cancel_via_ctx(self):
+        engine = RuleEngine.from_dsl("""
+            @r1: (a ?x) => (b :x)
+            @r2: (b ?x) => (c :x)
+        """)
+        seen = []
+
+        @engine.on_should_fire
+        def cancelling(rule, metadata, expr, bindings, ctx):
+            seen.append(metadata.name)
+            if metadata.name == "r1":
+                ctx.cancel()
+                return False  # Veto this firing too.
+            return True
+
+        result = engine.simplify(["a", "x"])
+        # r1 vetoed and triggers cancel; engine bails out before r2.
+        assert seen == ["r1"]
+        # The result is unchanged because r1 was vetoed (no rewrite happened).
+        assert result == ["a", "x"]
