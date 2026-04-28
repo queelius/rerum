@@ -70,6 +70,25 @@ may include breaking changes.
 - ``RuleMetadata.extra`` dict for resolver-supplied metadata
   (``provenance``, model name, confidence). Inferred rules carry their
   origin via this field.
+- Strategy parity for resolver and observer events: ``no_match``,
+  ``cycle``, and ``fixpoint`` now fire under ``strategy="bottomup"`` and
+  ``strategy="topdown"`` in addition to the default exhaustive strategy.
+  An ``on_no_match`` resolver registered for LLM rule inference works
+  uniformly across all strategies.
+- ``HookContext.step_count`` is an engine-level counter (``self._step_count``)
+  reset at every top-level call (``simplify`` variants, ``equivalents``,
+  ``prove_equal``, ``random_walk``, ``random_equivalent``, ``apply_once``).
+  It accumulates across recursive descent and across pass methods, giving
+  hooks a reliable count of successful rule applications. Recursive
+  internal calls accept a ``_top_level=False`` kwarg to avoid resetting
+  the counter mid-call.
+- ``HookContext.depth`` is threaded through ``_bottomup_pass`` and
+  ``_topdown_pass`` recursive descent. Hooks at compound positions
+  observe the actual tree depth (root = 0; child = 1; etc.).
+- ``RuleEngine`` instances are explicitly documented as not thread-safe.
+  ``_step_count``, ``_cancel_requested``, and rule storage are mutable
+  per-call instance state; concurrent ``simplify()`` calls on the same
+  engine race.
 
 ### Added
 - ``rerum/optimize.py``: extracted ``expr_size``, ``expr_depth``,
