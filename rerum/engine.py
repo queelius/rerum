@@ -715,7 +715,7 @@ def load_rules_from_json(text: str) -> List[Tuple[RuleMetadata, List]]:
 
 # RewriteStep, RewriteTrace, and the listener protocol live in `trace.py`.
 # Re-exported below for backward compatibility.
-from .trace import RewriteStep, RewriteTrace, TraceListener
+from .trace import RewriteStep, RewriteTrace
 
 
 class EqualityProof:
@@ -1834,17 +1834,17 @@ class RuleEngine:
         return result
 
     def _simplify_exhaustive(self, expr: ExprType, max_steps: int,
-                              groups: Optional[List[str]] = None,
-                              listener: Optional[TraceListener] = None) -> ExprType:
-        """Exhaustive strategy with condition, group, and listener support.
+                              groups: Optional[List[str]] = None) -> ExprType:
+        """Exhaustive strategy with condition and group support.
 
         Uses a visited set to terminate on cycles (e.g. bidirectional rules
         like ``(+ ?x ?y) <=> (+ :y :x)`` that bounce between two equivalent
         forms). Without this, max_steps would simply bound an oscillation.
 
-        If ``listener`` is provided, it is invoked with each successful
-        ``RewriteStep``. This is how ``simplify(trace=True)`` accumulates
-        a trace without duplicating the rule loop.
+        Rule firings are reported via ``_fire_rule_applied``, which broadcasts
+        to all registered ``on_rule_applied`` hooks. Tracing is done by
+        registering a temporary hook in ``_simplify_with_trace`` rather than
+        passing a listener through.
         """
         current = expr
         visited = set()
@@ -1889,8 +1889,6 @@ class RuleEngine:
                             before=current,
                             after=new_expr,
                         )
-                        if listener is not None:
-                            listener(step)
                         step_count_so_far += 1
                         if self._fire_rule_applied(step, step_count=step_count_so_far):
                             return new_expr  # Hook requested cancellation after this step.
@@ -1943,7 +1941,7 @@ class RuleEngine:
                     subexpr_changed = False
                     for child in current:
                         new_child = self._simplify_exhaustive(
-                            child, max_steps // 10 or 1, groups=groups, listener=listener,
+                            child, max_steps // 10 or 1, groups=groups,
                         )
                         new_children.append(new_child)
                         if new_child != child:
@@ -2084,18 +2082,28 @@ class RuleEngine:
 
     def _simplify_with_trace(self, expr: ExprType, max_steps: int,
                              groups: Optional[List[str]] = None) -> Tuple[ExprType, RewriteTrace]:
-        """Traced simplification, implemented as a thin wrapper around
-        ``_simplify_exhaustive`` with a ``RewriteTrace`` listener.
+        """Traced simplification implemented as a temporary on_rule_applied hook.
 
-        Pre-refactor this was a separate near-duplicate rule loop. Pulling
-        the trace into a listener removes the duplication and makes the
-        same trace machinery available to other callers
-        (``equivalents``, ``minimize``, etc. could pass a listener through).
+        A ``RewriteTrace`` instance is registered as an ``on_rule_applied``
+        observer for the duration of the call, then deregistered. This means
+        ``simplify(trace=True)`` goes through the same code path as any other
+        simplify call; no separate listener thread is needed.
+
+        Behavioral compatibility: returns ``(result, RewriteTrace)`` with the
+        same trace contents as before.
         """
         trace_obj = RewriteTrace()
         trace_obj.initial = expr
-        result = self._simplify_exhaustive(expr, max_steps, groups=groups,
-                                            listener=trace_obj)
+
+        def trace_hook(step, ctx):
+            trace_obj(step)
+
+        self.on_rule_applied(trace_hook)
+        try:
+            result = self._simplify_exhaustive(expr, max_steps, groups=groups)
+        finally:
+            self.off_rule_applied(trace_hook)
+
         if self._fold_funcs:
             result = self._fold_constants(result)
         trace_obj.final = result

@@ -893,3 +893,44 @@ class TestResolverRetryCap:
         # No exception; rule fires.
         result = engine.simplify(["foo", "x"])
         assert result == "x"
+
+
+class TestTraceMigration:
+    def test_simplify_trace_still_returns_pair(self):
+        engine = RuleEngine.from_dsl("@add-zero: (+ ?x 0) => :x")
+        result, trace = engine.simplify(["+", "x", 0], trace=True)
+        assert result == "x"
+        assert len(trace.steps) == 1
+
+    def test_simplify_trace_captures_multiple_steps(self):
+        engine = RuleEngine.from_dsl("""
+            @add-zero: (+ ?x 0) => :x
+            @mul-one: (* ?x 1) => :x
+        """)
+        result, trace = engine.simplify(["+", ["*", "y", 1], 0], trace=True)
+        assert result == "y"
+        names = [s.metadata.name for s in trace.steps]
+        assert "mul-one" in names
+        assert "add-zero" in names
+
+    def test_external_observer_does_not_pollute_returned_trace(self):
+        engine = RuleEngine.from_dsl("@add-zero: (+ ?x 0) => :x")
+        external_log = []
+        engine.on_rule_applied(lambda step, ctx: external_log.append(step))
+
+        result, trace = engine.simplify(["+", "x", 0], trace=True)
+        # Both observed the step, but the returned trace contains only the
+        # internal accumulation; the external observer captured the same step
+        # independently.
+        assert len(external_log) == 1
+        assert len(trace.steps) == 1
+        # The trace step is the same RewriteStep instance that the external
+        # observer received (both go through _fire_rule_applied).
+
+    def test_trace_observer_unregistered_after_call(self):
+        # The trace registers a temporary observer for the duration of the
+        # call. After the call returns, that observer should be gone.
+        engine = RuleEngine.from_dsl("@add-zero: (+ ?x 0) => :x")
+        engine.simplify(["+", "x", 0], trace=True)
+        # No external observer was registered, so count should be 0.
+        assert engine._hooks.count("rule_applied") == 0
