@@ -934,3 +934,43 @@ class TestTraceMigration:
         engine.simplify(["+", "x", 0], trace=True)
         # No external observer was registered, so count should be 0.
         assert engine._hooks.count("rule_applied") == 0
+
+
+class TestCancelRequestedIsolation:
+    """A cancellation from one top-level call must not leak into the next."""
+
+    def test_cancel_from_simplify_does_not_affect_subsequent_equivalents(self):
+        engine = RuleEngine.from_dsl("@commute: (+ ?x ?y) <=> (+ :y :x)")
+
+        @engine.on_rule_applied
+        def cancel_first(step, ctx):
+            ctx.cancel()
+
+        # First call: cancellation fires, simplify returns early.
+        engine.simplify(["+", "a", "b"])
+        # Now _cancel_requested is True. Without a reset, equivalents
+        # would bail immediately.
+        engine.off_rule_applied(cancel_first)
+
+        forms = list(engine.equivalents(["+", "a", "b"], max_depth=2))
+        # Both equivalents should be reachable; the cancellation flag from
+        # the previous call must have been reset.
+        keys = {tuple(f) for f in forms}
+        assert ("+", "a", "b") in keys
+        assert ("+", "b", "a") in keys
+
+    def test_cancel_isolation_between_simplify_calls(self):
+        engine = RuleEngine.from_dsl("@add-zero: (+ ?x 0) => :x")
+
+        @engine.on_rule_applied
+        def cancel_first(step, ctx):
+            ctx.cancel()
+
+        # First call: cancellation fires.
+        engine.simplify(["+", "x", 0])
+        # Even with the hook still registered, the next call must reset
+        # the flag at entry, fire the rule, then cancel again. The
+        # contract is that each top-level call starts fresh.
+        result = engine.simplify(["+", "y", 0])
+        # Cancellation fired again, but the rule had already produced "y".
+        assert result == "y"

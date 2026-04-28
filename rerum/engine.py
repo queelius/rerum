@@ -2528,6 +2528,7 @@ class RuleEngine:
         if strategy not in ("bfs", "dfs"):
             raise ValueError(f"Unknown strategy: {strategy}. Valid: bfs, dfs")
 
+        self._cancel_requested = False
         bidirectional_only = not include_unidirectional
 
         # Track visited expressions
@@ -2663,6 +2664,7 @@ class RuleEngine:
             # With a work budget for expensive queries:
             proof = engine.prove_equal(a, b, max_depth=8, max_expressions=5000)
         """
+        self._cancel_requested = False
         bidirectional_only = not include_unidirectional
 
         # Convert to hashable for set operations
@@ -2965,6 +2967,7 @@ class RuleEngine:
             rng = random.Random(42)
             rand_expr = engine.random_equivalent(expr, rng=rng)
         """
+        self._cancel_requested = False
         if rng is None:
             rng = random.Random()
 
@@ -3072,6 +3075,7 @@ class RuleEngine:
             for i, equiv in enumerate(engine.random_walk(expr, max_steps=20)):
                 print(f"Step {i}: {format_sexpr(equiv)}")
         """
+        self._cancel_requested = False
         if rng is None:
             rng = random.Random()
 
