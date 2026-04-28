@@ -1587,6 +1587,9 @@ class RuleEngine:
 
         ``ctx.cancel()`` from a resolver propagates to ``self._cancel_requested``,
         consistent with the other event helpers.
+        Note: Resolution.abort is handled at the call site (returns current).
+        Both paths now consistently set _cancel_requested when cancellation
+        is requested.
         """
         if not isinstance(expr, list) or not expr:
             return None
@@ -1633,7 +1636,7 @@ class RuleEngine:
             event_name="undefined_op",
         )
         resolution = self._hooks.run_resolvers("undefined_op", op, args, ctx)
-        if ctx.cancelled:
+        if ctx.cancelled or (resolution is not None and resolution.abort):
             self._cancel_requested = True
         if resolution is not None and resolution.fold_funcs is not None:
             # Permanent install at the engine level.
@@ -1650,7 +1653,9 @@ class RuleEngine:
         can return Resolution(value=...) for a fallback or None to fall
         through to the existing "leave as compound" behavior.
 
-        Honors ctx.cancel() by setting self._cancel_requested.
+        Resolution(abort=True) and ctx.cancel() both propagate to
+        self._cancel_requested, halting the rewrite at the next strategy
+        loop checkpoint.
         """
         if not self._hooks.count("fold_error"):
             return None
@@ -1664,7 +1669,7 @@ class RuleEngine:
         resolution = self._hooks.run_resolvers(
             "fold_error", op, args, exception, ctx
         )
-        if ctx.cancelled:
+        if ctx.cancelled or (resolution is not None and resolution.abort):
             self._cancel_requested = True
         return resolution
 

@@ -792,6 +792,11 @@ def instantiate(
             called when an installed fold handler raises an exception. A
             ``Resolution(value=v)`` returns ``v`` as the fallback; ``None``
             falls through to the existing "leave as compound" behavior.
+            ``Resolution(value=None)`` is impossible to construct
+            (``Resolution.__post_init__`` rejects it as "empty"); fold
+            handlers cannot legitimately yield Python None as a result. If
+            such a value is needed, return ``Resolution(value=...)`` where
+            ``...`` is a sentinel object the caller can interpret.
 
     Returns:
         The instantiated expression

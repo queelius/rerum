@@ -705,3 +705,39 @@ class TestFoldErrorResolver:
 
         engine.simplify(["foo", 42])
         assert seen == [("bomb", [42], "ValueError", "boom")]
+
+    def test_fold_error_resolver_can_cancel_via_ctx(self):
+        from rerum.hooks import Resolution
+
+        def explode(args):
+            raise ValueError("boom")
+
+        engine = RuleEngine(fold_funcs={"bomb": explode})
+        engine.load_dsl("@detonate: (foo ?x) => (! bomb :x)")
+
+        @engine.on_fold_error
+        def resolver(op, args, exception, ctx):
+            ctx.cancel()
+            return None
+
+        # Cancellation propagates via _cancel_requested.
+        engine.simplify(["foo", 42])
+        assert engine._cancel_requested
+
+    def test_fold_error_resolver_can_abort_via_resolution(self):
+        from rerum.hooks import Resolution
+
+        def explode(args):
+            raise ValueError("boom")
+
+        engine = RuleEngine(fold_funcs={"bomb": explode})
+        engine.load_dsl("@detonate: (foo ?x) => (! bomb :x)")
+
+        @engine.on_fold_error
+        def resolver(op, args, exception, ctx):
+            return Resolution(abort=True)
+
+        engine.simplify(["foo", 42])
+        # Resolution(abort=True) and ctx.cancel() are equivalent: both set
+        # _cancel_requested.
+        assert engine._cancel_requested
