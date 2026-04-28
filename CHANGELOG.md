@@ -5,6 +5,71 @@ All notable changes to RERUM are documented here. Format follows
 [SemVer](https://semver.org/) with the caveat that while `0.x`, minor bumps
 may include breaking changes.
 
+## [Unreleased]
+
+### Fixed
+- **Critical**: `simplify()` no longer raises `RecursionError` on bidirectional
+  rules. The fast-path `try_rules` previously called `simplify(result)`
+  recursively, which reset the iteration guard on each recursion; with a
+  `<=>` rule that forms a 2-cycle (fwd output matches rev pattern, rev
+  output matches fwd pattern), this exhausted the call stack. The fix
+  drops the recursive call (the outer fixpoint loop drives convergence)
+  and adds visited-set cycle detection to all four fixpoint paths
+  (`exhaustive` fast/slow, `bottomup`, `topdown`, traced).
+- **Critical**: `<=>` desugaring now preserves type and free-variable
+  constraints (`?x:const`, `?x:var`, `?x:free(v)`) on the auto-derived
+  reverse pattern. Previously, `(f ?x:const) <=> (g :x)` produced a
+  reverse rule `(g ?x) => (f :x)` that fired on non-constant arguments,
+  silently producing unsound equivalence classes.
+- **Critical**: `<=>` desugaring now validates the auto-derived reverse
+  pattern at parse/load time. Multiple `?...` rest patterns at the same
+  compound level and `(! ...)` compute forms in pattern position are
+  rejected with clear errors instead of failing lazily inside the rule
+  application loop.
+- `to_dsl()` now emits paired `-fwd`/`-rev` rules as a single `<=>` rule;
+  `to_json()`/`to_dict()` write `"bidirectional": true` and
+  `load_rules_from_json()` reads it back. JSON and DSL roundtrips now
+  preserve bidirectional-rule semantics; previously the flag was silently
+  lost and `equivalents()` after roundtrip returned only the trivial
+  result.
+
+### Changed
+- Internal bindings pipeline migrated from the stringly-typed `"failed"`
+  sentinel to `Bindings | None`. Public `match()`, `extend_bindings()`,
+  and `lookup()` accept both the legacy form and the new form for
+  backward compatibility. The eight ``wrap_bindings`` call sites in
+  ``engine.py`` collapse into direct truthiness checks.
+- ``_simplify_with_trace`` is now a thin wrapper around
+  ``_simplify_exhaustive`` with a ``RewriteTrace`` listener. The duplicate
+  rule loop is removed (~50 lines), and the listener mechanism unblocks
+  tracing on other simplification strategies.
+
+### Added
+- ``rerum/optimize.py``: extracted ``expr_size``, ``expr_depth``,
+  ``expr_ops``, ``expr_atoms``, ``make_op_cost_fn``, ``COST_METRICS``, and
+  ``OptimizationResult``. Pure-function utilities now stand on their own.
+- ``rerum/trace.py``: extracted ``RewriteStep`` and ``RewriteTrace``, plus
+  the ``TraceListener`` callable contract. ``RewriteTrace`` instances are
+  now directly callable as listeners (they append the received step).
+- ``rerum/expr.py``: extracted ``parse_sexpr``, ``format_sexpr``,
+  ``expr_to_tuple``, and the ``E`` builder. Eliminates lazy-import cycles
+  in ``optimize.py`` and ``trace.py``.
+- ``RuleEngine.rule_set()`` returns a ``RuleSet`` view object with
+  chainable filters (``bidirectional_only()``, ``unidirectional_only()``,
+  ``in_groups()``). Equivalence-class methods now accept
+  ``rules: Optional[RuleSet] = None`` to opt into this API; the legacy
+  ``include_unidirectional`` and ``groups`` kwargs continue to work.
+- ``RuleEngine.equivalence_class(expr) -> EquivalenceClass`` returns a
+  value object capturing the starting expression and rule set. Provides
+  ``iter``, ``enumerate``, ``contains``, ``prove``, ``minimum``,
+  ``sample``, ``random``, ``walk``, plus ``__contains__`` and ``__iter__``.
+  The eight engine-level methods become thin shims; the cleaner API for
+  new code is the value object.
+- ``RuleEngine.source_rules()`` iterates over ``BidirectionalRule`` and
+  ``UnidirectionalRule`` value objects, collapsing adjacent ``-fwd``/``-rev``
+  storage entries back into a single logical rule. Useful for listing,
+  exporting, or counting "rules I wrote" rather than "rules in storage."
+
 ## [0.5.0]
 
 ### Added

@@ -13,9 +13,12 @@ import math
 
 # Type aliases
 ExprType = Union[int, float, str, List]
-BindingsType = Union[List[List], str]  # List of [name, value] pairs or "failed"
 RuleType = List  # [pattern, skeleton]
 NumericType = Union[int, float]
+# Internal bindings type: a Bindings object on success or None on failure.
+# Public match/lookup/extend_bindings still accept the legacy list-of-pairs
+# and "failed" sentinel for backward compatibility (see below).
+BindingsType = Optional["Bindings"]
 
 
 # ============================================================
@@ -98,6 +101,39 @@ class Bindings:
         """Convert to a plain dictionary."""
         return self._dict.copy()
 
+    def extend(self, name: str, value: Any) -> Optional["Bindings"]:
+        """Return a new Bindings with ``name`` bound to ``value``.
+
+        - If ``name`` is unbound, returns a new Bindings with the binding added.
+        - If ``name`` is already bound to ``value`` (consistent), returns ``self``.
+        - If ``name`` is already bound to something else (conflict), returns ``None``.
+
+        Functional / non-mutating: ``self`` is never modified.
+        """
+        if name in self._dict:
+            return self if self._dict[name] == value else None
+        new = Bindings.__new__(Bindings)
+        new._dict = {**self._dict, name: value}
+        return new
+
+    def lookup(self, name: str, default=None) -> Any:
+        """Return the bound value for ``name``, or ``default`` if unbound.
+
+        When ``default`` is None (the default), returns ``name`` itself,
+        matching the legacy ``lookup`` semantics where unbound variables
+        pass through as symbols during instantiation.
+        """
+        if default is None:
+            return self._dict.get(name, name)
+        return self._dict.get(name, default)
+
+    @classmethod
+    def empty(cls) -> "Bindings":
+        """Return an empty Bindings (no variables bound)."""
+        new = cls.__new__(cls)
+        new._dict = {}
+        return new
+
 
 class _NoMatch:
     """
@@ -150,18 +186,26 @@ class _NoMatch:
 NoMatch = _NoMatch()
 
 
-def wrap_bindings(result: BindingsType) -> Union[Bindings, _NoMatch]:
-    """
-    Convert internal bindings representation to Bindings or NoMatch.
+def wrap_bindings(result) -> Union[Bindings, _NoMatch]:
+    """Convert any bindings form to ``Bindings`` or ``NoMatch``.
 
-    Args:
-        result: Either list of [name, value] pairs or "failed"
+    Accepts:
+      - ``Bindings`` (returned unchanged)
+      - ``None`` (new internal sentinel for failure)
+      - List of [name, value] pairs (legacy success form)
+      - The string ``"failed"`` (legacy failure sentinel)
 
-    Returns:
-        Bindings object if matched, NoMatch if failed
+    .. deprecated::
+        Use ``bindings is not None`` (or just truthiness) directly. ``Bindings``
+        is truthy and ``None`` is falsy, so the wrapper is no longer needed
+        for control flow. Kept only for callers that need a concrete
+        ``NoMatch`` object (e.g. existing public APIs returning a
+        ``Bindings | NoMatch`` union).
     """
-    if result == "failed":
+    if result is None or result == "failed":
         return NoMatch
+    if isinstance(result, Bindings):
+        return result
     return Bindings(result)
 
 # FoldOp handler: receives list of numeric args, returns result or None (can't fold)
@@ -391,6 +435,13 @@ def atom(exp: ExprType) -> bool:
     return constant(exp) or variable(exp)
 
 
+def _expr_key(exp: ExprType):
+    """Convert an expression to a hashable key for cycle detection."""
+    if isinstance(exp, list):
+        return tuple(_expr_key(e) for e in exp)
+    return exp
+
+
 def compound(exp: ExprType) -> bool:
     """
     Check if an expression is compound (a list).
@@ -538,59 +589,64 @@ def variable_name(pat: List) -> str:
     return pat[1]  # Second element is always the binding name
 
 
-def extend_bindings(
-    pat: List, dat: ExprType, bindings: BindingsType
-) -> BindingsType:
+def _coerce_bindings(bindings) -> Optional[Bindings]:
+    """Accept legacy or new bindings form; return ``Bindings`` or ``None``.
+
+    Legacy callers pass:
+      - ``[]`` (initial, empty bindings) or ``[[name, value], ...]``
+      - ``"failed"`` (legacy failure sentinel)
+    New callers pass:
+      - ``Bindings`` instance
+      - ``None`` (failure)
+
+    This shim lets the public API accept either form during the transition
+    away from the stringly-typed sentinel. Internal helpers should produce
+    only ``Bindings | None``.
     """
-    Extend a bindings dictionary with a new binding.
+    if bindings is None or bindings == "failed":
+        return None
+    if isinstance(bindings, Bindings):
+        return bindings
+    if isinstance(bindings, list):
+        return Bindings(bindings)
+    return bindings  # unknown type; let callers fail loudly
 
-    Args:
-        pat: The pattern containing the variable name
-        dat: The data to bind
-        bindings: The current bindings dictionary
 
-    Returns:
-        Extended bindings or "failed" on conflict
+def extend_bindings(pat: List, dat: ExprType, bindings) -> Optional[Bindings]:
+    """Extend ``bindings`` with the binding implied by ``pat`` and ``dat``.
+
+    Returns a new ``Bindings`` with the binding added, ``bindings`` itself
+    if the binding was already consistent, or ``None`` on conflict / when
+    starting from a failed match.
+
+    Backward-compat: accepts legacy list-of-pairs and ``"failed"`` for the
+    bindings argument.
     """
-    if bindings == "failed":
-        return "failed"
-
+    coerced = _coerce_bindings(bindings)
+    if coerced is None:
+        return None
     name = variable_name(pat)
-    for entry in bindings:
-        if entry[0] == name:
-            # Check for consistent binding
-            if entry[1] == dat:
-                return bindings
-            else:
-                return "failed"
-
-    return bindings + [[name, dat]]
+    return coerced.extend(name, dat)
 
 
-def lookup(var: str, bindings: BindingsType) -> Any:
+def lookup(var: str, bindings) -> Any:
+    """Look up ``var`` in ``bindings``; returns ``var`` itself if unbound.
+
+    Backward-compat: accepts legacy list-of-pairs and ``"failed"`` for the
+    bindings argument.
     """
-    Look up a variable in the bindings dictionary.
-
-    Args:
-        var: The variable name
-        bindings: The bindings dictionary
-
-    Returns:
-        The bound value or var if not found
-    """
-    if bindings == "failed":
+    coerced = _coerce_bindings(bindings)
+    if coerced is None:
         return var
-    for entry in bindings:
-        if entry[0] == var:
-            return entry[1]
-    return var
+    return coerced.lookup(var)
 
 
 # ============================================================
 # Pattern Matching
 # ============================================================
 
-def match(pat: ExprType, exp: ExprType, bindings: BindingsType) -> BindingsType:
+def match(pat: ExprType, exp: ExprType,
+          bindings: Optional["Bindings"] = None) -> Optional["Bindings"]:
     """
     Match a pattern against an expression with bindings.
 
@@ -606,107 +662,98 @@ def match(pat: ExprType, exp: ExprType, bindings: BindingsType) -> BindingsType:
     Args:
         pat: The pattern to match
         exp: The expression to match against
-        bindings: Current bindings dictionary
+        bindings: Current bindings (``Bindings`` or ``None``). The legacy
+            list-of-pairs and ``"failed"`` forms are also accepted. When
+            ``None`` (default), starts from an empty Bindings.
 
     Returns:
-        Updated bindings on success, "failed" on failure
+        ``Bindings`` on success, ``None`` on failure.
     """
-    if bindings == "failed":
-        return "failed"
+    if bindings is None:
+        bindings = Bindings.empty()
+    elif bindings == "failed":
+        return None
+    elif isinstance(bindings, list):
+        bindings = Bindings(bindings)
+    elif not isinstance(bindings, Bindings):
+        return None
 
     if null(pat):
-        return bindings if null(exp) else "failed"
+        return bindings if null(exp) else None
 
     if atom(pat):
-        return bindings if atom(exp) and pat == exp else "failed"
+        return bindings if atom(exp) and pat == exp else None
 
     if arbitrary_constant(pat):
-        return extend_bindings(pat, exp, bindings) if constant(exp) else "failed"
+        return bindings.extend(variable_name(pat), exp) if constant(exp) else None
 
     if arbitrary_variable(pat):
-        return extend_bindings(pat, exp, bindings) if variable(exp) else "failed"
+        return bindings.extend(variable_name(pat), exp) if variable(exp) else None
 
     if arbitrary_expression(pat):
-        return extend_bindings(pat, exp, bindings)
+        return bindings.extend(variable_name(pat), exp)
 
     if arbitrary_free(pat):
         # ["?free", "name", "var"] - match if exp doesn't contain var
         var_to_exclude = pat[2]
-        # Look up var_to_exclude in bindings in case it's bound
-        actual_var = lookup(var_to_exclude, bindings)
+        actual_var = bindings.lookup(var_to_exclude)
         if isinstance(actual_var, str) and not free_in(actual_var, exp):
-            return extend_bindings(pat, exp, bindings)
-        return "failed"
+            return bindings.extend(variable_name(pat), exp)
+        return None
 
-    # Rest pattern can only appear when matching within a compound
-    # It's handled specially in the compound matching below
     if arbitrary_rest(pat):
-        # This case shouldn't be reached directly - rest patterns are
-        # handled in compound matching. But if somehow called directly
-        # with a list expression, bind the whole thing.
+        # Rest patterns are handled in compound matching; when called
+        # directly with a list expression, bind the whole list.
         if isinstance(exp, list):
-            return extend_bindings(pat, exp, bindings)
-        return "failed"
+            return bindings.extend(variable_name(pat), exp)
+        return None
 
     if atom(exp):
-        return "failed"
+        return None
 
-    # Both are compound - structural matching
     if null(pat) or null(exp):
-        return "failed"
+        return None
 
     return match_compound(pat, exp, bindings)
 
 
-def match_compound(pat: List, exp: List, bindings: BindingsType) -> BindingsType:
-    """
-    Match compound patterns against compound expressions.
+def match_compound(pat: List, exp: List,
+                   bindings: Optional["Bindings"]) -> Optional["Bindings"]:
+    """Match compound patterns against compound expressions.
 
     Handles rest patterns (?...) which must appear at the end.
     """
-    if bindings == "failed":
-        return "failed"
+    if bindings is None:
+        return None
 
-    # Base case: both empty
     if null(pat) and null(exp):
         return bindings
 
-    # Pattern empty but expression has more - fail (unless we had a rest pattern)
     if null(pat):
-        return "failed"
+        return None
 
-    # Get the current pattern element
     current_pat = car(pat)
     rest_pat = cdr(pat)
 
-    # Check if current pattern is a rest pattern
     if arbitrary_rest(current_pat):
-        # Rest pattern must be last in the pattern list
         if not null(rest_pat):
             raise ValueError("Rest pattern (?...) must be last in compound pattern")
 
-        # Collect remaining expressions
         remaining = exp if isinstance(exp, list) else [exp] if not null(exp) else []
 
-        # Check type constraint if present
         type_constraint = rest_type_constraint(current_pat)
         if type_constraint:
             for item in remaining:
                 if type_constraint == "const" and not constant(item):
-                    return "failed"
+                    return None
                 elif type_constraint == "var" and not variable(item):
-                    return "failed"
+                    return None
 
-        # Bind the list of remaining expressions
-        return extend_bindings(current_pat, remaining, bindings)
+        return bindings.extend(variable_name(current_pat), remaining)
 
-    # Expression empty but pattern has more
     if null(exp):
-        # Current pattern must be a rest pattern (which can match empty)
-        # Otherwise fail - we need expressions to match non-rest patterns
-        return "failed"
+        return None
 
-    # Normal case: match current elements, then recurse
     submatch = match(current_pat, car(exp), bindings)
     return match_compound(rest_pat, cdr(exp), submatch)
 
@@ -717,7 +764,7 @@ def match_compound(pat: List, exp: List, bindings: BindingsType) -> BindingsType
 
 def instantiate(
     skeleton: ExprType,
-    bindings: BindingsType,
+    bindings,
     fold_funcs: Optional[FoldFuncsType] = None,
 ) -> ExprType:
     """
@@ -731,12 +778,13 @@ def instantiate(
 
     Args:
         skeleton: The skeleton to instantiate
-        bindings: The bindings dictionary
+        bindings: ``Bindings`` instance (legacy list-of-pairs also accepted)
         fold_funcs: Optional fold functions for compute (!) evaluation
 
     Returns:
         The instantiated expression
     """
+    coerced = _coerce_bindings(bindings) or Bindings.empty()
 
     def loop(s):
         if null(s):
@@ -744,72 +792,55 @@ def instantiate(
         if atom(s):
             return s
         if skeleton_evaluation(s):
-            name = car(cdr(s))
-            return lookup(name, bindings)
+            return coerced.lookup(car(cdr(s)))
         if skeleton_splice(s):
-            # Splice is handled at the compound level, not here
-            # This shouldn't be reached for well-formed skeletons
-            name = car(cdr(s))
-            return lookup(name, bindings)
+            return coerced.lookup(car(cdr(s)))
         if skeleton_compute(s):
-            # Compute form: ["!", "op", arg1, arg2, ...]
-            # First instantiate all args, then evaluate
             op = s[1]
             raw_args = s[2:]
-            # Instantiate each arg
             args = [loop(arg) for arg in raw_args]
-            # Try to evaluate if we have fold_funcs
             if fold_funcs and op in fold_funcs:
                 try:
                     result = fold_funcs[op](args)
                     if result is not None:
-                        # Preserve integer type for numeric results
                         if isinstance(result, float) and result.is_integer():
                             return int(result)
                         return result
                 except Exception:
                     pass
-            # If can't evaluate, return as regular expression
             return [op] + args
-        # For compound expressions, use special handling for splice
-        return instantiate_compound(s, bindings, fold_funcs)
+        return instantiate_compound(s, coerced, fold_funcs)
 
     return loop(skeleton)
 
 
 def instantiate_compound(
     skeleton: List,
-    bindings: BindingsType,
+    bindings,
     fold_funcs: Optional[FoldFuncsType] = None,
 ) -> List:
-    """
-    Instantiate a compound skeleton, handling splice patterns.
+    """Instantiate a compound skeleton, handling splice patterns.
 
     When a splice pattern [":...", "name"] is encountered, its bound list
     is spliced into the result rather than inserted as a single element.
     """
+    coerced = _coerce_bindings(bindings) or Bindings.empty()
     if null(skeleton):
         return []
 
     first = car(skeleton)
     rest = cdr(skeleton)
 
-    # Check if first element is a splice pattern
     if skeleton_splice(first):
         name = car(cdr(first))
-        spliced = lookup(name, bindings)
-        # spliced should be a list - splice it in, then continue with rest
+        spliced = coerced.lookup(name)
+        rest_instantiated = instantiate_compound(rest, coerced, fold_funcs)
         if isinstance(spliced, list):
-            rest_instantiated = instantiate_compound(rest, bindings, fold_funcs)
             return spliced + rest_instantiated
-        else:
-            # If not a list, treat as single element (shouldn't normally happen)
-            rest_instantiated = instantiate_compound(rest, bindings, fold_funcs)
-            return [spliced] + rest_instantiated
+        return [spliced] + rest_instantiated
 
-    # Normal element - instantiate it and cons with rest
-    first_instantiated = instantiate(first, bindings, fold_funcs)
-    rest_instantiated = instantiate_compound(rest, bindings, fold_funcs)
+    first_instantiated = instantiate(first, coerced, fold_funcs)
+    rest_instantiated = instantiate_compound(rest, coerced, fold_funcs)
     return [first_instantiated] + rest_instantiated
 
 
@@ -859,12 +890,23 @@ def rewriter(
     active_fold_funcs: FoldFuncsType = fold_funcs if fold_funcs is not None else {}
 
     def simplify(exp: ExprType) -> ExprType:
-        """Simplify an expression using the rules."""
+        """Simplify an expression using the rules.
+
+        Uses a visited set to detect cycles. Non-confluent rule sets (such as
+        rules with `<=>` semantics, or pairs like `a => b` plus `b => a`) cycle
+        back to a previously seen state; the loop terminates at the first
+        repeat and returns the current expression deterministically.
+        """
+        visited = set()
         max_iterations = 1000
         iterations = 0
 
         while iterations < max_iterations:
             iterations += 1
+            key = _expr_key(exp)
+            if key in visited:
+                break
+            visited.add(key)
             old_exp = deepcopy(exp)
 
             # Try applying rules
@@ -938,15 +980,19 @@ def rewriter(
             return exp
 
     def try_rules(exp: ExprType) -> ExprType:
-        """Try applying rules to an expression."""
+        """Apply the first matching rule to an expression.
+
+        Returns the rewritten expression after a single rule application,
+        or the input unchanged if no rule matches. The outer fixpoint loop
+        in `simplify` drives convergence and detects cycles.
+        """
         for rule in rules:
             pat = rule[0]
             skel = rule[1]
 
-            bindings = match(pat, exp, [])
-            if bindings != "failed":
-                result = instantiate(skel, bindings, active_fold_funcs)
-                return simplify(result)
+            bindings = match(pat, exp)
+            if bindings is not None:
+                return instantiate(skel, bindings, active_fold_funcs)
 
         return exp
 

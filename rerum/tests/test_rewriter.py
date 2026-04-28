@@ -6,6 +6,7 @@ from rerum.rewriter import (
     free_in, extend_bindings, lookup,
     ARITHMETIC_PRELUDE, MATH_PRELUDE, FULL_PRELUDE,
     constant, variable, compound,
+    Bindings,
 )
 
 
@@ -41,32 +42,42 @@ class TestFreeIn:
 
 
 class TestExtendBindings:
-    """Tests for extend_bindings function."""
+    """Tests for extend_bindings function.
+
+    The internal pipeline returns ``Bindings | None``; the public function
+    still accepts the legacy list-of-pairs and ``"failed"`` for backward
+    compatibility, returning a ``Bindings`` or ``None``.
+    """
 
     def test_extend_empty(self):
         """Extend empty bindings."""
         result = extend_bindings(["?", "x"], 42, [])
-        assert result == [["x", 42]]
+        assert result == Bindings([["x", 42]])
 
     def test_extend_existing(self):
         """Extend with new binding."""
         result = extend_bindings(["?", "y"], 10, [["x", 5]])
-        assert result == [["x", 5], ["y", 10]]
+        assert result == Bindings([["x", 5], ["y", 10]])
 
     def test_extend_consistent(self):
         """Consistent rebinding returns same bindings."""
         result = extend_bindings(["?", "x"], 5, [["x", 5]])
-        assert result == [["x", 5]]
+        assert result == Bindings([["x", 5]])
 
     def test_extend_inconsistent(self):
-        """Inconsistent rebinding returns failed."""
+        """Inconsistent rebinding returns None (failure sentinel)."""
         result = extend_bindings(["?", "x"], 10, [["x", 5]])
-        assert result == "failed"
+        assert result is None
 
     def test_extend_failed_bindings(self):
-        """Extending failed bindings returns failed."""
-        result = extend_bindings(["?", "x"], 42, "failed")
-        assert result == "failed"
+        """Extending None / legacy 'failed' returns None."""
+        assert extend_bindings(["?", "x"], 42, None) is None
+        assert extend_bindings(["?", "x"], 42, "failed") is None
+
+    def test_extend_with_bindings_instance(self):
+        """Accepts a Bindings instance directly."""
+        result = extend_bindings(["?", "y"], 10, Bindings([["x", 5]]))
+        assert result == Bindings([["x", 5], ["y", 10]])
 
 
 class TestLookup:
@@ -81,8 +92,13 @@ class TestLookup:
         assert lookup("z", [["x", 42]]) == "z"
 
     def test_lookup_failed_bindings(self):
-        """Lookup on failed returns variable name."""
+        """Lookup on None / legacy 'failed' returns the variable name."""
+        assert lookup("x", None) == "x"
         assert lookup("x", "failed") == "x"
+
+    def test_lookup_with_bindings_instance(self):
+        """Accepts a Bindings instance directly."""
+        assert lookup("x", Bindings([["x", 42]])) == 42
 
 
 class TestHelperPredicates:
@@ -111,48 +127,58 @@ class TestHelperPredicates:
 
 
 class TestMatch:
-    """Tests for the match function."""
+    """Tests for the match function.
+
+    Returns ``Bindings`` on success and ``None`` on failure. Callers should
+    use ``if bindings is not None:`` (or simple truthiness, since Bindings
+    is truthy and None is falsy).
+    """
 
     def test_match_constant(self):
         """Match constant to constant."""
-        result = match(5, 5, [])
-        assert result == []
+        result = match(5, 5)
+        assert result == Bindings([])
 
     def test_match_constant_fail(self):
         """Match different constants fails."""
-        result = match(5, 10, [])
-        assert result == "failed"
+        result = match(5, 10)
+        assert result is None
 
     def test_match_variable_pattern(self):
         """Match with variable pattern."""
-        result = match(["?", "x"], 42, [])
-        assert result == [["x", 42]]
+        result = match(["?", "x"], 42)
+        assert result == Bindings([["x", 42]])
 
     def test_match_const_pattern(self):
         """Match with const pattern."""
-        result = match(["?c", "n"], 42, [])
-        assert result == [["n", 42]]
+        result = match(["?c", "n"], 42)
+        assert result == Bindings([["n", 42]])
 
-        result = match(["?c", "n"], "x", [])
-        assert result == "failed"
+        result = match(["?c", "n"], "x")
+        assert result is None
 
     def test_match_var_pattern(self):
         """Match with var pattern."""
-        result = match(["?v", "v"], "x", [])
-        assert result == [["v", "x"]]
+        result = match(["?v", "v"], "x")
+        assert result == Bindings([["v", "x"]])
 
-        result = match(["?v", "v"], 42, [])
-        assert result == "failed"
+        result = match(["?v", "v"], 42)
+        assert result is None
 
     def test_match_compound(self):
         """Match compound expression."""
-        result = match(["+", ["?", "x"], 1], ["+", "y", 1], [])
-        assert result == [["x", "y"]]
+        result = match(["+", ["?", "x"], 1], ["+", "y", 1])
+        assert result == Bindings([["x", "y"]])
 
     def test_match_rest_pattern(self):
         """Match rest pattern captures remaining args."""
-        result = match(["+", ["?...", "xs"]], ["+", 1, 2, 3], [])
-        assert result == [["xs", [1, 2, 3]]]
+        result = match(["+", ["?...", "xs"]], ["+", 1, 2, 3])
+        assert result == Bindings([["xs", [1, 2, 3]]])
+
+    def test_match_legacy_initial_bindings(self):
+        """Backward compat: passing [] as initial bindings still works."""
+        result = match(["?", "x"], 42, [])
+        assert result == Bindings([["x", 42]])
 
 
 class TestInstantiate:

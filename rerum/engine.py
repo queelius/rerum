@@ -63,261 +63,15 @@ from .rewriter import (
 # Expression Builder
 # ============================================================
 
-class _ExprBuilder:
-    """
-    Expression builder for RERUM.
-
-    Provides convenient ways to construct expressions without
-    privileging any particular operators.
-
-    Examples:
-        from rerum import E
-
-        # Parse s-expression string
-        expr = E("(+ x (* 2 y))")
-
-        # Build programmatically with E.op()
-        expr = E.op("+", "x", E.op("*", 2, "y"))
-
-        # Create variables
-        x, y = E.vars("x", "y")
-        expr = E.op("+", x, E.op("*", 2, y))
-
-        # Any operator works - no privileged operations
-        E.op("dd", E.op("^", "x", 2), "x")
-        E.op("my-custom-op", "a", "b", "c")
-    """
-
-    def __call__(self, s: str) -> ExprType:
-        """
-        Parse an s-expression string.
-
-        Examples:
-            E("(+ x 1)") -> ["+", "x", 1]
-            E("(dd (^ x 2) x)") -> ["dd", ["^", "x", 2], "x"]
-        """
-        return parse_sexpr(s)
-
-    def op(self, name: str, *args) -> List:
-        """
-        Build a compound expression with the given operator and arguments.
-
-        This is the universal constructor for compound expressions.
-        No operators are privileged - use this for any operation.
-
-        Examples:
-            E.op("+", "x", 1) -> ["+", "x", 1]
-            E.op("*", 2, "y") -> ["*", 2, "y"]
-            E.op("dd", E.op("^", "x", 2), "x") -> ["dd", ["^", "x", 2], "x"]
-            E.op("my-func", "a", "b") -> ["my-func", "a", "b"]
-        """
-        return [name] + list(args)
-
-    def var(self, name: str) -> str:
-        """
-        Create a variable.
-
-        Variables are just strings. This method exists for clarity
-        and to document intent.
-
-        Example:
-            E.var("x") -> "x"
-        """
-        return name
-
-    def vars(self, *names: str) -> Tuple[str, ...]:
-        """
-        Create multiple variables for unpacking.
-
-        Example:
-            x, y, z = E.vars("x", "y", "z")
-            expr = E.op("+", x, E.op("*", y, z))
-        """
-        return names
-
-    def const(self, value: Union[int, float]) -> Union[int, float]:
-        """
-        Create a constant.
-
-        Constants are just numbers. This method exists for clarity
-        and to document intent in code that constructs expressions.
-
-        Example:
-            E.const(5) -> 5
-            E.const(3.14) -> 3.14
-        """
-        return value
-
-    def __repr__(self) -> str:
-        return "E (expression builder)"
-
-
-# Singleton instance
-E = _ExprBuilder()
-
-
-def parse_sexpr(s: str) -> ExprType:
-    """
-    Parse an S-expression string into a nested list.
-
-    Examples:
-        "(+ x 1)" -> ["+", "x", 1]
-        "(dd (^ x 2) x)" -> ["dd", ["^", "x", 2], "x"]
-    """
-    s = s.strip()
-    if not s:
-        return None
-
-    if s.startswith('('):
-        # Parse list
-        depth = 0
-        parts = []
-        current = ''
-        i = 1  # Skip opening paren
-
-        while i < len(s):
-            c = s[i]
-            if c == '(':
-                depth += 1
-                current += c
-            elif c == ')':
-                if depth == 0:
-                    if current.strip():
-                        parts.append(parse_sexpr(current.strip()))
-                    break
-                depth -= 1
-                current += c
-            elif c in ' \t\n' and depth == 0:
-                if current.strip():
-                    parts.append(parse_sexpr(current.strip()))
-                current = ''
-            else:
-                current += c
-            i += 1
-
-        return parts
-
-    # Parse atom
-    # Try number first
-    try:
-        return int(s)
-    except ValueError:
-        try:
-            return float(s)
-        except ValueError:
-            pass
-
-    # Pattern variable syntax conversion
-    # Support both old syntax (?c name) and new typed syntax (?name:const)
-    if s.startswith('?'):
-        rest = s[1:]
-
-        # Check for rest pattern (ends with ...)
-        is_rest = rest.endswith('...')
-        if is_rest:
-            rest = rest[:-3]  # Remove trailing ...
-
-        # New typed syntax: ?name:type or ?name:free(var)
-        if ':' in rest:
-            name_part, type_part = rest.split(':', 1)
-            name = name_part.strip() or 'x'
-
-            if is_rest:
-                # Rest pattern with type constraint: ?x:const... or ?x:var...
-                if type_part == 'const':
-                    return ["?...", name, "const"]
-                elif type_part == 'var':
-                    return ["?...", name, "var"]
-                else:
-                    # Unknown type constraint, unconstrained rest
-                    return ["?...", name]
-            else:
-                # Single-element typed pattern
-                if type_part == 'const':
-                    return ["?c", name]
-                elif type_part == 'var':
-                    return ["?v", name]
-                elif type_part == 'expr':
-                    return ["?", name]
-                elif type_part.startswith('free(') and type_part.endswith(')'):
-                    # ?name:free(var)
-                    var = type_part[5:-1].strip()
-                    return ["?free", name, var]
-                else:
-                    # Unknown type, treat as plain pattern
-                    return ["?", name]
-
-        else:
-            # Plain pattern variable: ?x or ?x...
-            name = rest.strip() or 'x'
-            if is_rest:
-                return ["?...", name]
-            return ["?", name]
-
-    elif s.startswith(':'):
-        rest = s[1:].strip()
-        # Check for splice (ends with ...)
-        if rest.endswith('...'):
-            name = rest[:-3].strip()
-            return [":...", name]
-        else:
-            return [":", rest]
-
-    # Plain symbol
-    return s
-
-
-def format_sexpr(expr: ExprType, dsl_syntax: bool = True) -> str:
-    """
-    Format an expression as an S-expression string.
-
-    Args:
-        expr: Expression to format
-        dsl_syntax: If True, use DSL syntax for patterns (?x, :x).
-                    If False, use raw list syntax ((? x), (: x)).
-
-    Examples:
-        ["+", "x", 1] -> "(+ x 1)"
-        ["?", "x"] -> "?x" (with dsl_syntax=True)
-        [":", "x"] -> ":x" (with dsl_syntax=True)
-        ["?c", "n"] -> "?n:const" (with dsl_syntax=True)
-        ["?...", "xs"] -> "?xs..." (with dsl_syntax=True)
-        [":...", "xs"] -> ":xs..." (with dsl_syntax=True)
-    """
-    if isinstance(expr, list):
-        if not expr:
-            return "()"
-
-        # Handle pattern/skeleton DSL syntax
-        if dsl_syntax and len(expr) == 2:
-            op = expr[0]
-            if op == "?":
-                return f"?{expr[1]}"
-            elif op == ":":
-                return f":{expr[1]}"
-            elif op == "?c":
-                return f"?{expr[1]}:const"
-            elif op == "?v":
-                return f"?{expr[1]}:var"
-            elif op == "?...":
-                return f"?{expr[1]}..."
-            elif op == ":...":
-                return f":{expr[1]}..."
-
-        if dsl_syntax and len(expr) == 3:
-            op = expr[0]
-            if op == "?free":
-                return f"?{expr[1]}:free({expr[2]})"
-            elif op == "?...":
-                # Rest pattern with type constraint: ["?...", "name", "const"]
-                return f"?{expr[1]}:{expr[2]}..."
-
-        parts = [format_sexpr(e, dsl_syntax) for e in expr]
-        return "(" + " ".join(parts) + ")"
-    elif isinstance(expr, (int, float)):
-        return str(expr)
-    else:
-        return str(expr)
+# Expression model (parse_sexpr, format_sexpr, expr_to_tuple, E) lives in
+# `expr.py`. Re-exported below for backward compatibility.
+from .expr import (
+    parse_sexpr,
+    format_sexpr,
+    E,
+    _ExprBuilder,
+    expr_to_tuple as _expr_to_tuple,
+)
 
 
 class RuleMetadata:
@@ -352,142 +106,269 @@ class RuleMetadata:
         return base
 
 
-def _expr_to_tuple(expr: ExprType) -> tuple:
+class BidirectionalRule:
+    """A value object that pairs the ``-fwd`` and ``-rev`` halves of a `<=>`
+    rule for inspection and serialization.
+
+    The rule storage in :class:`RuleEngine` keeps the directions as two
+    separate entries (so the application loop, group filtering, and priority
+    sort all stay direction-symmetric). This wrapper aggregates them for
+    contexts where the user wants to think about a single logical rule:
+    listing source rules, formatting a DSL line, JSON export, or counting
+    "rules I wrote" rather than "rules in storage."
+
+    Construct via :meth:`RuleEngine.source_rules`. Read-only.
     """
-    Convert an expression to a hashable tuple form.
 
-    Used for deduplication in equivalence enumeration.
+    __slots__ = ("name", "description", "priority", "condition", "tags",
+                 "fwd_pattern", "fwd_skeleton", "rev_pattern", "rev_skeleton")
 
-    Examples:
-        ["+", "x", 1] -> ("+", "x", 1)
-        ["+", ["*", "a", "b"], "c"] -> ("+", ("*", "a", "b"), "c")
+    def __init__(self, *, name: Optional[str], description: Optional[str],
+                 priority: int, condition: Optional[ExprType],
+                 tags: Optional[List[str]],
+                 fwd_pattern: ExprType, fwd_skeleton: ExprType,
+                 rev_pattern: ExprType, rev_skeleton: ExprType):
+        self.name = name
+        self.description = description
+        self.priority = priority
+        self.condition = condition
+        self.tags = tags or []
+        self.fwd_pattern = fwd_pattern
+        self.fwd_skeleton = fwd_skeleton
+        self.rev_pattern = rev_pattern
+        self.rev_skeleton = rev_skeleton
+
+    @property
+    def bidirectional(self) -> bool:
+        return True
+
+    def __repr__(self) -> str:
+        n = self.name or "<anonymous>"
+        return f"BidirectionalRule(@{n}: <=>)"
+
+
+class UnidirectionalRule:
+    """A value object representing a single `=>` rule. Symmetric counterpart
+    to :class:`BidirectionalRule` for unified iteration over source rules.
     """
-    if isinstance(expr, list):
-        return tuple(_expr_to_tuple(e) for e in expr)
-    return expr
+
+    __slots__ = ("name", "description", "priority", "condition", "tags",
+                 "pattern", "skeleton")
+
+    def __init__(self, *, name: Optional[str], description: Optional[str],
+                 priority: int, condition: Optional[ExprType],
+                 tags: Optional[List[str]],
+                 pattern: ExprType, skeleton: ExprType):
+        self.name = name
+        self.description = description
+        self.priority = priority
+        self.condition = condition
+        self.tags = tags or []
+        self.pattern = pattern
+        self.skeleton = skeleton
+
+    @property
+    def bidirectional(self) -> bool:
+        return False
+
+    def __repr__(self) -> str:
+        n = self.name or "<anonymous>"
+        return f"UnidirectionalRule(@{n}: =>)"
 
 
-# ============================================================
-# Cost Functions for Optimization
-# ============================================================
-
-def expr_size(expr: ExprType) -> int:
-    """
-    Count total number of nodes in an expression.
-
-    Atoms count as 1, compound expressions count their elements recursively.
-
-    Examples:
-        expr_size("x") -> 1
-        expr_size(["+", "x", 1]) -> 3
-        expr_size(["+", ["*", "a", "b"], "c"]) -> 5
-    """
-    if isinstance(expr, list):
-        return sum(expr_size(e) for e in expr)
-    return 1
+# Cost functions and OptimizationResult live in `optimize.py`.
+# Re-exported below for backward compatibility.
+from .optimize import (
+    expr_size,
+    expr_depth,
+    expr_ops,
+    expr_atoms,
+    make_op_cost_fn,
+    COST_METRICS,
+    OptimizationResult,
+)
 
 
-def expr_depth(expr: ExprType) -> int:
-    """
-    Compute maximum nesting depth of an expression.
-
-    Atoms have depth 0, compound expressions have depth 1 + max child depth.
-
-    Examples:
-        expr_depth("x") -> 0
-        expr_depth(["+", "x", 1]) -> 1
-        expr_depth(["+", ["*", "a", "b"], "c"]) -> 2
-    """
-    if isinstance(expr, list):
-        if len(expr) == 0:
-            return 1
-        return 1 + max(expr_depth(e) for e in expr)
-    return 0
-
-
-def expr_ops(expr: ExprType) -> int:
-    """
-    Count number of operations (compound expressions) in an expression.
-
-    Atoms have 0 ops, each compound expression adds 1.
-
-    Examples:
-        expr_ops("x") -> 0
-        expr_ops(["+", "x", 1]) -> 1
-        expr_ops(["+", ["*", "a", "b"], "c"]) -> 2
-    """
-    if isinstance(expr, list):
-        return 1 + sum(expr_ops(e) for e in expr)
-    return 0
-
-
-def expr_atoms(expr: ExprType) -> int:
-    """
-    Count number of atoms (leaf operands) in an expression.
-
-    Operators are not counted, only leaf operands.
-
-    Examples:
-        expr_atoms("x") -> 1
-        expr_atoms(["+", "x", 1]) -> 2
-        expr_atoms(["+", ["*", "a", "b"], "c"]) -> 3
-    """
-    if isinstance(expr, list):
-        # Skip operator (first element), only count operands
-        return sum(expr_atoms(e) for e in expr[1:])
-    return 1
-
-
-def make_op_cost_fn(op_costs: Dict[str, float], default: float = 1.0) -> Callable[[ExprType], float]:
-    """
-    Create a cost function based on operator costs.
-
-    Args:
-        op_costs: Dictionary mapping operator names to costs
-        default: Default cost for operators not in the dictionary
-
-    Returns:
-        A cost function that sums operator costs
-
-    Example:
-        cost_fn = make_op_cost_fn({"+": 1, "*": 2, "/": 5, "^": 10})
-        cost_fn(["+", ["*", "a", "b"], "c"])  # 1 + 2 = 3
-    """
-    def cost_fn(expr: ExprType) -> float:
-        if isinstance(expr, list) and len(expr) > 0:
-            op = expr[0]
-            op_cost = op_costs.get(op, default) if isinstance(op, str) else default
-            return op_cost + sum(cost_fn(e) for e in expr[1:])
-        return 0
-    return cost_fn
-
-
-# Built-in metrics dictionary
-COST_METRICS: Dict[str, Callable[[ExprType], float]] = {
-    "size": expr_size,
-    "depth": expr_depth,
-    "ops": expr_ops,
-    "atoms": expr_atoms,
-}
-
-
-def _convert_skeleton_to_pattern(expr: ExprType) -> ExprType:
+def _convert_skeleton_to_pattern(expr: ExprType,
+                                  constraints: Optional[Dict[str, List]] = None) -> ExprType:
     """
     Convert a skeleton expression to a pattern expression.
 
     Transforms substitution markers to pattern variables:
-    - (: x) -> (? x)
+    - (: x) -> (? x)        (or restored constraint, e.g. (?c x), (?v x), (?free x v))
     - (:... x) -> (?... x)
+
+    When ``constraints`` is provided, restores type and free-variable
+    constraints attached to each variable name in the original pattern.
+    This is what makes a `<=>` rule sound: without restoration, the
+    reverse direction's pattern matches expressions that the forward
+    direction's pattern would have rejected.
     """
+    constraints = constraints or {}
     if isinstance(expr, list):
         if len(expr) == 2:
             if expr[0] == ":":
-                return ["?", expr[1]]
+                name = expr[1]
+                if name in constraints:
+                    return list(constraints[name])
+                return ["?", name]
             elif expr[0] == ":...":
-                return ["?...", expr[1]]
+                name = expr[1]
+                if name in constraints:
+                    return list(constraints[name])
+                return ["?...", name]
         # Recurse for compound expressions
-        return [_convert_skeleton_to_pattern(e) for e in expr]
+        return [_convert_skeleton_to_pattern(e, constraints) for e in expr]
     return expr
+
+
+def _validate_pattern_structure(pattern: ExprType, *, where: str = "pattern") -> None:
+    """Raise ``ValueError`` for structurally invalid patterns.
+
+    - At most one ``?...`` rest pattern per compound, and if present it
+      must be the last element. Otherwise `match_compound` raises lazily,
+      producing a confusing error far from the rule definition.
+    - ``(! ...)`` compute forms are not valid in pattern position; they
+      belong on the skeleton side. Detected here because the auto-derived
+      reverse pattern of a `<=>` rule whose original skeleton contained
+      a compute form would otherwise be silently broken.
+
+    The ``where`` argument disambiguates error messages between the
+    user-written pattern and the auto-derived reverse pattern.
+    """
+    if not isinstance(pattern, list):
+        return
+    if pattern and pattern[0] == "!":
+        raise ValueError(
+            f"Invalid {where}: compute form `(! ...)` is for skeletons, "
+            f"not patterns. Got: {pattern}. If this came from the reverse "
+            f"of a `<=>` rule, the original skeleton's compute form does "
+            f"not have a meaningful inverse; use two `=>` rules instead."
+        )
+    rest_seen = False
+    for idx, child in enumerate(pattern):
+        is_rest = (
+            isinstance(child, list)
+            and child
+            and isinstance(child[0], str)
+            and child[0] == "?..."
+        )
+        if is_rest:
+            if rest_seen:
+                raise ValueError(
+                    f"Invalid {where}: at most one `?...` rest pattern is "
+                    f"allowed per compound. Got: {pattern}"
+                )
+            rest_seen = True
+            if idx != len(pattern) - 1:
+                raise ValueError(
+                    f"Invalid {where}: `?...` rest pattern must be the last "
+                    f"element of the compound. Got: {pattern}"
+                )
+    for child in pattern:
+        _validate_pattern_structure(child, where=where)
+
+
+def _strip_bidirectional_naming(meta: "RuleMetadata") -> Tuple[Optional[str], Optional[str]]:
+    """Recover the ``(base_name, base_description)`` of a `<=>` source rule
+    from its -fwd metadata entry. Used when emitting paired rules back
+    out as a single bidirectional rule for roundtrip-safe serialization.
+    """
+    base_name = meta.name
+    if base_name and base_name.endswith("-fwd"):
+        base_name = base_name[:-4]
+    base_description = meta.description
+    if base_description and base_description.endswith(" (forward)"):
+        base_description = base_description[:-len(" (forward)")]
+    return base_name, base_description
+
+
+def _is_bidirectional_pair(metadata: List["RuleMetadata"], i: int) -> bool:
+    """True iff entries `i` and `i+1` form a `-fwd`/`-rev` pair (adjacent,
+    both bidirectional, with matching base names)."""
+    if i + 1 >= len(metadata):
+        return False
+    fwd, rev = metadata[i], metadata[i + 1]
+    if not (fwd.bidirectional and fwd.direction == "fwd"):
+        return False
+    if not (rev.bidirectional and rev.direction == "rev"):
+        return False
+    fwd_base, _ = _strip_bidirectional_naming(fwd)
+    rev_base = rev.name
+    if rev_base and rev_base.endswith("-rev"):
+        rev_base = rev_base[:-4]
+    # If both anonymous (None == None) accept; if either has a name, they
+    # must agree on base.
+    return fwd_base == rev_base
+
+
+def _build_bidirectional_rules(
+    base_name: Optional[str],
+    description: Optional[str],
+    priority: int,
+    condition: Optional[ExprType],
+    tags: Optional[List[str]],
+    pattern: ExprType,
+    skeleton: ExprType,
+) -> List[Tuple["RuleMetadata", ExprType, ExprType]]:
+    """Construct the forward and reverse `RuleMetadata` plus rule structures
+    from a single `<=>` rule. Used by both the DSL and JSON loaders so the
+    desugaring is identical regardless of source format.
+    """
+    fwd_metadata = RuleMetadata(
+        name=f"{base_name}-fwd" if base_name else None,
+        description=f"{description} (forward)" if description else None,
+        tags=tags,
+        priority=priority,
+        condition=condition,
+        bidirectional=True,
+        direction="fwd",
+    )
+    rev_metadata = RuleMetadata(
+        name=f"{base_name}-rev" if base_name else None,
+        description=f"{description} (reverse)" if description else None,
+        tags=tags,
+        priority=priority,
+        condition=condition,
+        bidirectional=True,
+        direction="rev",
+    )
+    constraints = _extract_pattern_constraints(pattern)
+    rev_pattern = _convert_skeleton_to_pattern(skeleton, constraints)
+    rev_skeleton = _convert_pattern_to_skeleton(pattern)
+    # Validate the auto-derived reverse pattern eagerly so that ill-formed
+    # `<=>` rules fail at parse/load time with a clear message rather than
+    # lazily inside the rule-application loop.
+    _validate_pattern_structure(rev_pattern, where="reverse pattern")
+    return [
+        (fwd_metadata, pattern, skeleton),
+        (rev_metadata, rev_pattern, rev_skeleton),
+    ]
+
+
+def _extract_pattern_constraints(pattern: ExprType) -> Dict[str, List]:
+    """Walk a pattern and return ``{var_name: full_pattern_var_form}``.
+
+    For each `?`-headed pattern variable in the input, records the full
+    form (including type constraint or free-of constraint) keyed by name.
+    Used by `_convert_skeleton_to_pattern` to restore constraints when
+    constructing the reverse direction of a bidirectional rule.
+    """
+    constraints: Dict[str, List] = {}
+
+    def walk(expr):
+        if isinstance(expr, list) and expr:
+            head = expr[0]
+            if isinstance(head, str) and head.startswith("?"):
+                if len(expr) >= 2 and isinstance(expr[1], str):
+                    constraints[expr[1]] = list(expr)
+                # Pattern variable forms don't have nested patterns to walk.
+                return
+            for e in expr:
+                walk(e)
+
+    walk(pattern)
+    return constraints
 
 
 def _convert_pattern_to_skeleton(expr: ExprType) -> ExprType:
@@ -626,33 +507,15 @@ def parse_rule_line(line: str) -> Optional[List[Tuple[RuleMetadata, ExprType, Ex
         return None
 
     if is_bidirectional:
-        # Create forward and reverse rules
-        fwd_metadata = RuleMetadata(
-            name=f"{base_name}-fwd" if base_name else None,
-            description=f"{description} (forward)" if description else None,
+        return _build_bidirectional_rules(
+            base_name=base_name,
+            description=description,
             priority=priority,
             condition=condition,
-            bidirectional=True,
-            direction='fwd'
+            tags=None,
+            pattern=pattern,
+            skeleton=skeleton,
         )
-        rev_metadata = RuleMetadata(
-            name=f"{base_name}-rev" if base_name else None,
-            description=f"{description} (reverse)" if description else None,
-            priority=priority,
-            condition=condition,
-            bidirectional=True,
-            direction='rev'
-        )
-
-        # Forward: pattern => skeleton (as written)
-        fwd_rule = (fwd_metadata, pattern, skeleton)
-
-        # Reverse: convert skeleton to pattern, pattern to skeleton
-        rev_pattern = _convert_skeleton_to_pattern(skeleton)
-        rev_skeleton = _convert_pattern_to_skeleton(pattern)
-        rev_rule = (rev_metadata, rev_pattern, rev_skeleton)
-
-        return [fwd_rule, rev_rule]
     else:
         # Single unidirectional rule
         metadata = RuleMetadata(
@@ -806,15 +669,31 @@ def load_rules_from_json(text: str) -> List[Tuple[RuleMetadata, List]]:
 
     for rule in data.get('rules', []):
         if isinstance(rule, dict):
+            pattern = rule['pattern']
+            skeleton = rule['skeleton']
+            # Bidirectional rules are stored once (with bidirectional=true) and
+            # expanded back into -fwd/-rev pairs at load time, mirroring the
+            # `<=>` desugaring path. This makes JSON roundtrip stable.
+            if rule.get('bidirectional'):
+                pairs = _build_bidirectional_rules(
+                    base_name=rule.get('name'),
+                    description=rule.get('description'),
+                    priority=rule.get('priority', 0),
+                    condition=rule.get('condition'),
+                    tags=rule.get('tags'),
+                    pattern=pattern,
+                    skeleton=skeleton,
+                )
+                for meta, pat, skel in pairs:
+                    rules.append((meta, [pat, skel]))
+                continue
             metadata = RuleMetadata(
                 name=rule.get('name'),
                 description=rule.get('description'),
                 tags=rule.get('tags'),
                 priority=rule.get('priority', 0),
-                condition=rule.get('condition')
+                condition=rule.get('condition'),
             )
-            pattern = rule['pattern']
-            skeleton = rule['skeleton']
         else:
             metadata = RuleMetadata()
             pattern, skeleton = rule[0], rule[1]
@@ -823,136 +702,9 @@ def load_rules_from_json(text: str) -> List[Tuple[RuleMetadata, List]]:
     return rules
 
 
-class RewriteStep:
-    """A single step in a rewriting trace."""
-
-    def __init__(self, rule_index: int, metadata: RuleMetadata,
-                 before: ExprType, after: ExprType):
-        self.rule_index = rule_index
-        self.metadata = metadata
-        self.before = before
-        self.after = after
-
-    def __repr__(self) -> str:
-        name = self.metadata.name or f"rule[{self.rule_index}]"
-        return f"{name}: {format_sexpr(self.before)} → {format_sexpr(self.after)}"
-
-    def to_dict(self) -> Dict:
-        """Convert step to dictionary for serialization."""
-        return {
-            "rule_index": self.rule_index,
-            "rule_name": self.metadata.name,
-            "description": self.metadata.description,
-            "before": self.before,
-            "after": self.after,
-        }
-
-
-class RewriteTrace:
-    """
-    A trace of all rewriting steps applied.
-
-    Provides multiple formatting options:
-        - Default repr: verbose multi-line format
-        - format("compact"): single line showing rule chain
-        - format("rules"): just the rule names applied
-        - format("verbose"): full details with before/after
-        - to_dict(): JSON-serializable dictionary
-    """
-
-    def __init__(self):
-        self.steps: List[RewriteStep] = []
-        self.initial: ExprType = None
-        self.final: ExprType = None
-
-    def add_step(self, step: RewriteStep):
-        self.steps.append(step)
-
-    def format(self, style: str = "verbose") -> str:
-        """
-        Format the trace in different styles.
-
-        Args:
-            style: One of "verbose", "compact", "rules", "chain"
-                - "verbose": Full multi-line format with before/after (default)
-                - "compact": Single line summary
-                - "rules": Just the list of rule names applied
-                - "chain": Show expression transformations as a chain
-
-        Returns:
-            Formatted string representation of the trace.
-        """
-        if style == "compact":
-            rules = [s.metadata.name or f"rule[{s.rule_index}]" for s in self.steps]
-            return f"{format_sexpr(self.initial)} --[{', '.join(rules)}]--> {format_sexpr(self.final)}"
-
-        elif style == "rules":
-            rules = [s.metadata.name or f"rule[{s.rule_index}]" for s in self.steps]
-            return " -> ".join(rules) if rules else "(no rules applied)"
-
-        elif style == "chain":
-            if not self.steps:
-                return format_sexpr(self.initial)
-            parts = [format_sexpr(self.initial)]
-            for step in self.steps:
-                name = step.metadata.name or f"rule[{step.rule_index}]"
-                parts.append(f"  --({name})-->")
-                parts.append(format_sexpr(step.after))
-            return "\n".join(parts)
-
-        else:  # verbose (default)
-            return repr(self)
-
-    def __repr__(self) -> str:
-        lines = [f"Initial: {format_sexpr(self.initial)}"]
-        for i, step in enumerate(self.steps, 1):
-            if step.metadata.description:
-                lines.append(f"  {i}. {step.metadata} ({step.metadata.description})")
-            else:
-                lines.append(f"  {i}. {step}")
-        lines.append(f"Final: {format_sexpr(self.final)}")
-        return "\n".join(lines)
-
-    def __len__(self) -> int:
-        return len(self.steps)
-
-    def __iter__(self):
-        """Iterate over rewrite steps."""
-        return iter(self.steps)
-
-    def __bool__(self) -> bool:
-        """True if any rewriting was done."""
-        return len(self.steps) > 0
-
-    def to_dict(self) -> Dict:
-        """Convert trace to dictionary for JSON serialization."""
-        return {
-            "initial": self.initial,
-            "final": self.final,
-            "steps": [step.to_dict() for step in self.steps],
-            "step_count": len(self.steps),
-        }
-
-    def rule_counts(self) -> Dict[str, int]:
-        """Count how many times each rule was applied."""
-        counts: Dict[str, int] = {}
-        for step in self.steps:
-            name = step.metadata.name or f"rule[{step.rule_index}]"
-            counts[name] = counts.get(name, 0) + 1
-        return counts
-
-    def rules_applied(self) -> List[str]:
-        """Get list of rule names in order of application."""
-        return [s.metadata.name or f"rule[{s.rule_index}]" for s in self.steps]
-
-    def summary(self) -> str:
-        """Get a brief summary of the rewriting."""
-        if not self.steps:
-            return "No rewriting performed"
-        counts = self.rule_counts()
-        most_used = max(counts.items(), key=lambda x: x[1])
-        return (f"{len(self.steps)} steps using {len(counts)} unique rules. "
-                f"Most used: {most_used[0]} ({most_used[1]}x)")
+# RewriteStep, RewriteTrace, and the listener protocol live in `trace.py`.
+# Re-exported below for backward compatibility.
+from .trace import RewriteStep, RewriteTrace, TraceListener
 
 
 class EqualityProof:
@@ -1060,69 +812,196 @@ class EqualityProof:
         return result
 
 
-class OptimizationResult:
+class RuleSet:
+    """An immutable view over a subset of an engine's rules.
+
+    Filters compose: ``engine.rule_set().bidirectional_only().in_groups(["algebra"])``.
+    Iteration yields ``(rule_idx, rule, metadata)`` triples in original
+    insertion order.
+
+    A ``RuleSet`` can be passed to equivalence-class methods
+    (``equivalents``, ``prove_equal``, ``minimize``, ``random_walk``, etc.)
+    via the ``rules=`` keyword to control which rules are considered without
+    cluttering each method with separate ``include_unidirectional`` /
+    ``groups`` knobs.
     """
-    Result of expression optimization.
 
-    Attributes:
-        expr: The optimized expression
-        cost: Cost of the optimized expression
-        original: The original expression
-        original_cost: Cost of the original expression
-        expressions_checked: Number of expressions evaluated
-    """
+    __slots__ = ("_engine", "_predicate")
 
-    def __init__(
-        self,
-        expr: ExprType,
-        cost: float,
-        original: ExprType,
-        original_cost: float,
-        expressions_checked: int = 0
-    ):
-        self.expr = expr
-        self.cost = cost
-        self.original = original
-        self.original_cost = original_cost
-        self.expressions_checked = expressions_checked
+    def __init__(self, engine: "RuleEngine",
+                 predicate: Optional[Callable[["RuleMetadata"], bool]] = None):
+        self._engine = engine
+        self._predicate = predicate or (lambda m: True)
 
-    @property
-    def improvement(self) -> float:
-        """Cost reduction (original_cost - cost)."""
-        return self.original_cost - self.cost
+    def __iter__(self) -> Iterator[Tuple[int, "RuleType", "RuleMetadata"]]:
+        for idx, (rule, meta) in enumerate(
+            zip(self._engine._rules, self._engine._metadata)
+        ):
+            if self._predicate(meta):
+                yield idx, rule, meta
 
-    @property
-    def cost_ratio(self) -> float:
-        """Retained cost as a ratio of the original (1.0 = no change, 0.5 = halved cost)."""
-        if self.original_cost == 0:
-            return 1.0 if self.cost == 0 else float('inf')
-        return self.cost / self.original_cost
-
-    @property
-    def improvement_ratio(self) -> float:
-        """Fractional improvement (0.0 = none, 0.5 = halved, 1.0 = eliminated)."""
-        if self.original_cost == 0:
-            return 0.0 if self.cost == 0 else float('-inf')
-        return 1.0 - (self.cost / self.original_cost)
-
-    def __repr__(self) -> str:
-        expr_str = format_sexpr(self.expr)
-        return f"OptimizationResult({expr_str}, cost={self.cost}, checked={self.expressions_checked})"
+    def __len__(self) -> int:
+        return sum(1 for _ in self)
 
     def __bool__(self) -> bool:
-        """True if any improvement was made."""
-        return self.cost < self.original_cost
+        for _ in self:
+            return True
+        return False
 
-    def to_dict(self) -> Dict:
-        """Convert to dictionary for serialization."""
-        return {
-            "expr": self.expr,
-            "cost": self.cost,
-            "original": self.original,
-            "original_cost": self.original_cost,
-            "improvement": self.improvement,
-            "expressions_checked": self.expressions_checked,
-        }
+    def _and(self, extra: Callable[["RuleMetadata"], bool]) -> "RuleSet":
+        prev = self._predicate
+        return RuleSet(self._engine, lambda m: prev(m) and extra(m))
+
+    def bidirectional_only(self) -> "RuleSet":
+        """Restrict to rules originating from `<=>` declarations."""
+        return self._and(lambda m: m.bidirectional)
+
+    def unidirectional_only(self) -> "RuleSet":
+        """Restrict to plain `=>` rules."""
+        return self._and(lambda m: not m.bidirectional)
+
+    def in_groups(self, groups: Optional[List[str]]) -> "RuleSet":
+        """Restrict to rules whose tags overlap with ``groups``.
+
+        Rules with no tags are kept (they are universal). When ``groups``
+        is None, returns ``self`` unchanged.
+        """
+        if groups is None:
+            return self
+        groups_set = set(groups)
+        return self._and(
+            lambda m: not m.tags or any(t in groups_set for t in m.tags)
+        )
+
+    def excluding_disabled(self, disabled_groups: Set[str]) -> "RuleSet":
+        """Drop rules whose tags overlap with the engine's disabled groups."""
+        if not disabled_groups:
+            return self
+        return self._and(
+            lambda m: not m.tags or not any(t in disabled_groups for t in m.tags)
+        )
+
+
+class EquivalenceClass:
+    """The equivalence class of an expression under a rule set.
+
+    Eight engine methods (``equivalents``, ``enumerate_equivalents``,
+    ``prove_equal``, ``are_equal``, ``minimize``, ``random_equivalent``,
+    ``sample_equivalents``, ``random_walk``) all answered the same
+    underlying question: "what is reachable from this expression under
+    these rules?" Each one took ``expr`` and ``rules``-related kwargs.
+    ``EquivalenceClass`` captures both at construction; the methods then
+    operate on the implicit class.
+
+    Construct via :meth:`RuleEngine.equivalence_class`. The starting
+    expression and rule subset are immutable on the value object.
+
+    Example::
+
+        cls = engine.equivalence_class(["+", "a", "b"])
+        assert cls.contains(["+", "b", "a"])
+        result = cls.minimum(metric="size")
+        for form in cls.iter(max_depth=3):
+            ...
+    """
+
+    __slots__ = ("_engine", "_expr", "_rules")
+
+    def __init__(self, engine: "RuleEngine", expr: ExprType,
+                 rules: Optional[RuleSet] = None):
+        self._engine = engine
+        self._expr = expr
+        # Default rules: full active set with bidirectional only, matching the
+        # historical default of `equivalents` and friends. Callers wanting
+        # `=>`-rules-too explicitly pass ``engine.rule_set()``.
+        self._rules = rules if rules is not None else engine.rule_set(bidirectional_only=True)
+
+    @property
+    def expr(self) -> ExprType:
+        return self._expr
+
+    @property
+    def rules(self) -> RuleSet:
+        return self._rules
+
+    def iter(self, max_depth: int = 10, max_count: Optional[int] = None,
+             strategy: str = "bfs") -> Iterator[ExprType]:
+        """Yield equivalents lazily; see ``RuleEngine.equivalents``."""
+        return self._engine.equivalents(
+            self._expr, max_depth=max_depth, max_count=max_count,
+            strategy=strategy, rules=self._rules,
+        )
+
+    def enumerate(self, max_depth: int = 10,
+                   max_count: Optional[int] = None) -> List[ExprType]:
+        """Eagerly collect equivalents into a list."""
+        return list(self.iter(max_depth=max_depth, max_count=max_count))
+
+    def contains(self, other: ExprType, max_depth: int = 10,
+                  max_expressions: Optional[int] = None) -> bool:
+        """True iff ``other`` is in this equivalence class."""
+        return self._engine.are_equal(
+            self._expr, other, max_depth=max_depth,
+            max_expressions=max_expressions, rules=self._rules,
+        )
+
+    def prove(self, other: ExprType, max_depth: int = 10,
+               max_expressions: Optional[int] = None,
+               trace: bool = False) -> Optional["EqualityProof"]:
+        """Return an ``EqualityProof`` if ``other`` is equivalent, else None."""
+        return self._engine.prove_equal(
+            self._expr, other, max_depth=max_depth,
+            max_expressions=max_expressions, trace=trace, rules=self._rules,
+        )
+
+    def minimum(self, cost: Optional[Callable[[ExprType], float]] = None,
+                metric: Optional[str] = None,
+                op_costs: Optional[Dict[str, float]] = None,
+                max_depth: int = 10,
+                max_count: Optional[int] = 10000) -> "OptimizationResult":
+        """Find the minimum-cost equivalent; see ``RuleEngine.minimize``."""
+        return self._engine.minimize(
+            self._expr, cost=cost, metric=metric, op_costs=op_costs,
+            max_depth=max_depth, max_count=max_count, rules=self._rules,
+        )
+
+    def sample(self, n: int = 10, steps: int = 10, unique: bool = True,
+               max_attempts: int = 100,
+               rng: "Optional[random.Random]" = None) -> List[ExprType]:
+        """Sample n random equivalents via random walk."""
+        return self._engine.sample_equivalents(
+            self._expr, n=n, steps=steps, unique=unique,
+            max_attempts=max_attempts, rng=rng, rules=self._rules,
+        )
+
+    def walk(self, max_steps: int = 100,
+             rng: "Optional[random.Random]" = None) -> Iterator[ExprType]:
+        """Lazy random walk through the class."""
+        return self._engine.random_walk(
+            self._expr, max_steps=max_steps, rng=rng, rules=self._rules,
+        )
+
+    def random(self, steps: int = 10,
+               rng: "Optional[random.Random]" = None) -> ExprType:
+        """Get a single random equivalent via ``steps`` random rewrites.
+
+        Note: defining ``random`` last means earlier methods' annotations
+        referring to ``random.Random`` resolve to the module, not this method.
+        """
+        return self._engine.random_equivalent(
+            self._expr, steps=steps, rng=rng, rules=self._rules,
+        )
+
+    def __contains__(self, other: ExprType) -> bool:
+        """Membership test: ``other in cls`` (uses default depth)."""
+        return self.contains(other)
+
+    def __iter__(self) -> Iterator[ExprType]:
+        """Default iteration uses BFS with default depth."""
+        return self.iter()
+
+    def __repr__(self) -> str:
+        return f"EquivalenceClass({format_sexpr(self._expr)}, rules={len(self._rules)} rules)"
 
 
 class RuleEngine:
@@ -1341,8 +1220,11 @@ class RuleEngine:
         if isinstance(pattern, str):
             pattern = parse_sexpr(pattern)
 
-        # Use internal match function
-        result = _match_internal(pattern, expr, [])
+        # Use internal match function. Public API still returns
+        # ``Bindings | NoMatch`` for backward compatibility; internally the
+        # match returns ``Bindings | None`` and wrap_bindings normalizes
+        # the failure case into the public ``NoMatch`` sentinel.
+        result = _match_internal(pattern, expr)
         return wrap_bindings(result)
 
     def _check_condition(self, condition: Optional[ExprType], bindings) -> bool:
@@ -1378,6 +1260,101 @@ class RuleEngine:
         # Default: truthy
         return True
 
+    def source_rules(self) -> Iterator[Union["BidirectionalRule", "UnidirectionalRule"]]:
+        """Iterate the engine's rules as a sequence of *source* rules.
+
+        Where ``len(engine)`` counts rule storage entries (a ``<=>`` rule
+        contributes 2: the ``-fwd`` and ``-rev``), ``source_rules()`` yields
+        one :class:`BidirectionalRule` per ``<=>`` declaration and one
+        :class:`UnidirectionalRule` per ``=>`` declaration. Useful for
+        listing, exporting, or counting "rules I wrote" rather than "rules
+        in storage."
+
+        Detection is by adjacency and the ``-fwd``/``-rev`` naming convention,
+        matching how :meth:`to_dsl` and :meth:`to_dict` already collapse pairs.
+        Rules added programmatically without the convention are emitted as
+        unidirectional.
+        """
+        i = 0
+        while i < len(self._rules):
+            meta = self._metadata[i]
+            rule = self._rules[i]
+            pattern, skeleton = rule
+
+            if _is_bidirectional_pair(self._metadata, i):
+                base_name, base_description = _strip_bidirectional_naming(meta)
+                rev_rule = self._rules[i + 1]
+                rev_pattern, rev_skeleton = rev_rule
+                yield BidirectionalRule(
+                    name=base_name,
+                    description=base_description,
+                    priority=meta.priority,
+                    condition=meta.condition,
+                    tags=meta.tags,
+                    fwd_pattern=pattern,
+                    fwd_skeleton=skeleton,
+                    rev_pattern=rev_pattern,
+                    rev_skeleton=rev_skeleton,
+                )
+                i += 2
+                continue
+
+            yield UnidirectionalRule(
+                name=meta.name,
+                description=meta.description,
+                priority=meta.priority,
+                condition=meta.condition,
+                tags=meta.tags,
+                pattern=pattern,
+                skeleton=skeleton,
+            )
+            i += 1
+
+    def equivalence_class(
+        self,
+        expr: ExprType,
+        *,
+        rules: Optional[RuleSet] = None,
+    ) -> "EquivalenceClass":
+        """Return an :class:`EquivalenceClass` value object for ``expr``.
+
+        The default ``rules`` is ``self.rule_set(bidirectional_only=True)``,
+        matching the historical default of ``equivalents``/``prove_equal``
+        and friends (strict equivalence only). Pass ``rules=self.rule_set()``
+        for the full set including ``=>`` rules.
+
+        Example::
+
+            cls = engine.equivalence_class(["+", "a", "b"])
+            assert cls.contains(["+", "b", "a"])
+            cls.minimum(metric="size")
+            for form in cls.iter(max_depth=3):
+                ...
+        """
+        return EquivalenceClass(self, expr, rules=rules)
+
+    def rule_set(
+        self,
+        *,
+        groups: Optional[List[str]] = None,
+        bidirectional_only: bool = False,
+    ) -> RuleSet:
+        """Return a ``RuleSet`` view over the engine's currently active rules.
+
+        By default the view excludes rules in disabled groups (matching the
+        behavior of strategy methods). Optional filters layer on top.
+
+        Use ``rules=engine.rule_set().bidirectional_only()`` (or
+        ``engine.rule_set(bidirectional_only=True)``) to restrict any
+        equivalence-class method to strict equivalence rules.
+        """
+        rs = RuleSet(self).excluding_disabled(self._disabled_groups)
+        if groups is not None:
+            rs = rs.in_groups(groups)
+        if bidirectional_only:
+            rs = rs.bidirectional_only()
+        return rs
+
     def apply_once(self, expr: ExprType, groups: Optional[List[str]] = None) -> Tuple[ExprType, Optional[RuleMetadata]]:
         """
         Apply at most one rule to the expression.
@@ -1406,12 +1383,12 @@ class RuleEngine:
             if not self._is_rule_active(metadata, groups):
                 continue
             pattern, skeleton = rule
-            raw_bindings = _match_internal(pattern, expr, [])
-            if wrap_bindings(raw_bindings):
+            bindings = _match_internal(pattern, expr)
+            if bindings is not None:
                 # Check condition if present
-                if not self._check_condition(metadata.condition, raw_bindings):
+                if not self._check_condition(metadata.condition, bindings):
                     continue
-                result = instantiate(skeleton, raw_bindings, self._fold_funcs)
+                result = instantiate(skeleton, bindings, self._fold_funcs)
                 return result, metadata
 
         return expr, None
@@ -1444,12 +1421,12 @@ class RuleEngine:
             if not self._is_rule_active(metadata, groups):
                 continue
             pattern, skeleton = rule
-            raw_bindings = _match_internal(pattern, expr, [])
-            if wrap_bindings(raw_bindings):
+            bindings = _match_internal(pattern, expr)
+            if bindings is not None:
                 # Check condition if requested
-                if check_conditions and not self._check_condition(metadata.condition, raw_bindings):
+                if check_conditions and not self._check_condition(metadata.condition, bindings):
                     continue
-                matching.append((metadata, Bindings(raw_bindings)))
+                matching.append((metadata, bindings))
         return matching
 
     @property
@@ -1528,10 +1505,26 @@ class RuleEngine:
 
         return expr
 
-    def _simplify_exhaustive(self, expr: ExprType, max_steps: int, groups: Optional[List[str]] = None) -> ExprType:
-        """Exhaustive strategy with condition and group support."""
+    def _simplify_exhaustive(self, expr: ExprType, max_steps: int,
+                              groups: Optional[List[str]] = None,
+                              listener: Optional[TraceListener] = None) -> ExprType:
+        """Exhaustive strategy with condition, group, and listener support.
+
+        Uses a visited set to terminate on cycles (e.g. bidirectional rules
+        like ``(+ ?x ?y) <=> (+ :y :x)`` that bounce between two equivalent
+        forms). Without this, max_steps would simply bound an oscillation.
+
+        If ``listener`` is provided, it is invoked with each successful
+        ``RewriteStep``. This is how ``simplify(trace=True)`` accumulates
+        a trace without duplicating the rule loop.
+        """
         current = expr
+        visited = set()
         for _ in range(max_steps):
+            key = _expr_to_tuple(current)
+            if key in visited:
+                break
+            visited.add(key)
             changed = False
 
             # Try rules at top level
@@ -1541,12 +1534,19 @@ class RuleEngine:
                 if not self._is_rule_active(metadata, groups):
                     continue
                 pattern, skeleton = rule
-                raw_bindings = _match_internal(pattern, current, [])
-                if wrap_bindings(raw_bindings):
-                    if not self._check_condition(metadata.condition, raw_bindings):
+                bindings = _match_internal(pattern, current)
+                if bindings is not None:
+                    if not self._check_condition(metadata.condition, bindings):
                         continue
-                    new_expr = instantiate(skeleton, raw_bindings, self._fold_funcs)
+                    new_expr = instantiate(skeleton, bindings, self._fold_funcs)
                     if new_expr != current:
+                        if listener is not None:
+                            listener(RewriteStep(
+                                rule_index=rule_idx,
+                                metadata=metadata,
+                                before=current,
+                                after=new_expr,
+                            ))
                         current = new_expr
                         changed = True
                         break
@@ -1557,7 +1557,9 @@ class RuleEngine:
                     new_children = []
                     subexpr_changed = False
                     for child in current:
-                        new_child = self._simplify_exhaustive(child, max_steps // 10 or 1, groups=groups)
+                        new_child = self._simplify_exhaustive(
+                            child, max_steps // 10 or 1, groups=groups, listener=listener,
+                        )
                         new_children.append(new_child)
                         if new_child != child:
                             subexpr_changed = True
@@ -1569,8 +1571,16 @@ class RuleEngine:
         return current
 
     def _simplify_bottomup(self, expr: ExprType, max_steps: int, groups: Optional[List[str]] = None) -> ExprType:
-        """Bottom-up strategy: simplify children first, then parent."""
+        """Bottom-up strategy: simplify children first, then parent.
+
+        Cycle-detected so non-confluent rule sets terminate cleanly.
+        """
+        visited = set()
         for _ in range(max_steps):
+            key = _expr_to_tuple(expr)
+            if key in visited:
+                break
+            visited.add(key)
             new_expr = self._bottomup_pass(expr, groups=groups)
             if new_expr == expr:
                 break
@@ -1594,20 +1604,28 @@ class RuleEngine:
             if not self._is_rule_active(metadata, groups):
                 continue
             pattern, skeleton = rule
-            raw_bindings = _match_internal(pattern, current, [])
-            if wrap_bindings(raw_bindings):
+            bindings = _match_internal(pattern, current)
+            if bindings is not None:
                 # Check condition if present
-                if not self._check_condition(metadata.condition, raw_bindings):
+                if not self._check_condition(metadata.condition, bindings):
                     continue
-                result = instantiate(skeleton, raw_bindings, self._fold_funcs)
+                result = instantiate(skeleton, bindings, self._fold_funcs)
                 if result != current:
                     return result
 
         return current
 
     def _simplify_topdown(self, expr: ExprType, max_steps: int, groups: Optional[List[str]] = None) -> ExprType:
-        """Top-down strategy: try parent first, then children."""
+        """Top-down strategy: try parent first, then children.
+
+        Cycle-detected so non-confluent rule sets terminate cleanly.
+        """
+        visited = set()
         for _ in range(max_steps):
+            key = _expr_to_tuple(expr)
+            if key in visited:
+                break
+            visited.add(key)
             new_expr = self._topdown_pass(expr, groups=groups)
             if new_expr == expr:
                 break
@@ -1624,12 +1642,12 @@ class RuleEngine:
             if not self._is_rule_active(metadata, groups):
                 continue
             pattern, skeleton = rule
-            raw_bindings = _match_internal(pattern, current, [])
-            if wrap_bindings(raw_bindings):
+            bindings = _match_internal(pattern, current)
+            if bindings is not None:
                 # Check condition if present
-                if not self._check_condition(metadata.condition, raw_bindings):
+                if not self._check_condition(metadata.condition, bindings):
                     continue
-                result = instantiate(skeleton, raw_bindings, self._fold_funcs)
+                result = instantiate(skeleton, bindings, self._fold_funcs)
                 if result != current:
                     return result  # Return immediately - will be called again
 
@@ -1643,59 +1661,22 @@ class RuleEngine:
 
     def _simplify_with_trace(self, expr: ExprType, max_steps: int,
                              groups: Optional[List[str]] = None) -> Tuple[ExprType, RewriteTrace]:
-        """Internal method for traced simplification."""
+        """Traced simplification, implemented as a thin wrapper around
+        ``_simplify_exhaustive`` with a ``RewriteTrace`` listener.
+
+        Pre-refactor this was a separate near-duplicate rule loop. Pulling
+        the trace into a listener removes the duplication and makes the
+        same trace machinery available to other callers
+        (``equivalents``, ``minimize``, etc. could pass a listener through).
+        """
         trace_obj = RewriteTrace()
         trace_obj.initial = expr
-
-        current = expr
-        for _ in range(max_steps):
-            changed = False
-            for rule_idx, rule in enumerate(self._rules):
-                metadata = self._metadata[rule_idx]
-                # Check group filter
-                if not self._is_rule_active(metadata, groups):
-                    continue
-                pattern, skeleton = rule
-                raw_bindings = _match_internal(pattern, current, [])
-                if wrap_bindings(raw_bindings):
-                    # Check condition if present
-                    if not self._check_condition(metadata.condition, raw_bindings):
-                        continue
-                    new_expr = instantiate(skeleton, raw_bindings, self._fold_funcs)
-                    if new_expr != current:
-                        step = RewriteStep(
-                            rule_index=rule_idx,
-                            metadata=metadata,
-                            before=current,
-                            after=new_expr
-                        )
-                        trace_obj.add_step(step)
-                        current = new_expr
-                        changed = True
-                        break  # Restart from first rule
-
-            if not changed:
-                # Try to simplify subexpressions
-                if isinstance(current, list) and len(current) > 0:
-                    new_list = [current[0]]
-                    subexpr_changed = False
-                    for sub in current[1:]:
-                        sub_result, sub_trace = self._simplify_with_trace(sub, max_steps // 10, groups=groups)
-                        new_list.append(sub_result)
-                        if sub_trace.steps:
-                            trace_obj.steps.extend(sub_trace.steps)
-                            subexpr_changed = True
-                    if subexpr_changed:
-                        current = new_list
-                        continue
-                break
-
-        # Apply constant folding if fold_funcs provided
+        result = self._simplify_exhaustive(expr, max_steps, groups=groups,
+                                            listener=trace_obj)
         if self._fold_funcs:
-            current = self._fold_constants(current)
-
-        trace_obj.final = current
-        return current, trace_obj
+            result = self._fold_constants(result)
+        trace_obj.final = result
+        return result, trace_obj
 
     def _fold_constants(self, expr: ExprType) -> ExprType:
         """Fold constant expressions using the configured fold_funcs."""
@@ -1773,6 +1754,10 @@ class RuleEngine:
         """
         Export rules to DSL format string.
 
+        Adjacent ``-fwd``/``-rev`` pairs are collapsed back into a single
+        ``<=>`` rule so that ``RuleEngine.from_dsl(engine.to_dsl())`` is a
+        roundtrip-stable identity for bidirectional rules.
+
         Args:
             name: Optional name to include as a comment header
 
@@ -1784,10 +1769,12 @@ class RuleEngine:
             lines.append(f"# {name}")
             lines.append("")
 
-        # Group rules by their first tag (group)
         current_group = None
-        for rule, meta in zip(self._rules, self._metadata):
-            # Check if we need a new group header
+        i = 0
+        while i < len(self._rules):
+            meta = self._metadata[i]
+            rule = self._rules[i]
+
             rule_group = meta.tags[0] if meta.tags else None
             if rule_group != current_group:
                 if rule_group:
@@ -1796,10 +1783,28 @@ class RuleEngine:
                     lines.append(f"[{rule_group}]")
                 current_group = rule_group
 
-            # Format the rule
             pattern, skeleton = rule
             pattern_str = format_sexpr(pattern)
             skeleton_str = format_sexpr(skeleton)
+
+            if _is_bidirectional_pair(self._metadata, i):
+                base_name, base_description = _strip_bidirectional_naming(meta)
+                arrow = "<=>"
+                if base_name:
+                    name_part = f"@{base_name}"
+                    if meta.priority != 0:
+                        name_part += f"[{meta.priority}]"
+                    if base_description:
+                        name_part += f" \"{base_description}\""
+                    name_part += ": "
+                else:
+                    name_part = ""
+                rule_str = f"{name_part}{pattern_str} {arrow} {skeleton_str}"
+                if meta.condition:
+                    rule_str += f" when {format_sexpr(meta.condition)}"
+                lines.append(rule_str)
+                i += 2
+                continue
 
             if meta.name:
                 if meta.priority != 0:
@@ -1817,6 +1822,7 @@ class RuleEngine:
                 rule_str += f" when {format_sexpr(meta.condition)}"
 
             lines.append(rule_str)
+            i += 1
 
         return "\n".join(lines)
 
@@ -1833,25 +1839,7 @@ class RuleEngine:
         Returns:
             JSON-formatted string compatible with load_rules_from_json().
         """
-        rules_list = []
-        for rule, meta in zip(self._rules, self._metadata):
-            pattern, skeleton = rule
-            rule_dict = {
-                "pattern": pattern,
-                "skeleton": skeleton,
-            }
-            if meta.name:
-                rule_dict["name"] = meta.name
-            if meta.description:
-                rule_dict["description"] = meta.description
-            if meta.priority != 0:
-                rule_dict["priority"] = meta.priority
-            if meta.condition:
-                rule_dict["condition"] = meta.condition
-            if meta.tags:
-                rule_dict["tags"] = meta.tags
-
-            rules_list.append(rule_dict)
+        rules_list = self._rules_as_dicts()
 
         result = {"rules": rules_list}
         if name:
@@ -1865,12 +1853,50 @@ class RuleEngine:
         """
         Export rules to a dictionary.
 
+        Adjacent ``-fwd``/``-rev`` pairs are collapsed into a single rule
+        with ``"bidirectional": true`` so JSON roundtrip preserves the
+        original `<=>` form.
+
         Returns:
             Dictionary compatible with JSON serialization.
         """
-        rules_list = []
-        for rule, meta in zip(self._rules, self._metadata):
+        return {"rules": self._rules_as_dicts()}
+
+    def _rules_as_dicts(self) -> List[Dict]:
+        """Build the JSON-shaped list of rule dicts.
+
+        Adjacent ``-fwd``/``-rev`` pairs are emitted as a single dict with
+        ``"bidirectional": true``; the loader expands them back into a pair
+        via `_build_bidirectional_rules`.
+        """
+        rules_list: List[Dict] = []
+        i = 0
+        while i < len(self._rules):
+            meta = self._metadata[i]
+            rule = self._rules[i]
             pattern, skeleton = rule
+
+            if _is_bidirectional_pair(self._metadata, i):
+                base_name, base_description = _strip_bidirectional_naming(meta)
+                rule_dict: Dict = {
+                    "pattern": pattern,
+                    "skeleton": skeleton,
+                    "bidirectional": True,
+                }
+                if base_name:
+                    rule_dict["name"] = base_name
+                if base_description:
+                    rule_dict["description"] = base_description
+                if meta.priority != 0:
+                    rule_dict["priority"] = meta.priority
+                if meta.condition:
+                    rule_dict["condition"] = meta.condition
+                if meta.tags:
+                    rule_dict["tags"] = meta.tags
+                rules_list.append(rule_dict)
+                i += 2
+                continue
+
             rule_dict = {
                 "pattern": pattern,
                 "skeleton": skeleton,
@@ -1886,8 +1912,9 @@ class RuleEngine:
             if meta.tags:
                 rule_dict["tags"] = meta.tags
             rules_list.append(rule_dict)
+            i += 1
 
-        return {"rules": rules_list}
+        return rules_list
 
     def __len__(self) -> int:
         return len(self._rules)
@@ -1967,21 +1994,28 @@ class RuleEngine:
         self,
         expr: ExprType,
         bidirectional_only: bool = True,
-        groups: Optional[List[str]] = None
+        groups: Optional[List[str]] = None,
+        rules: Optional[RuleSet] = None,
     ) -> List[ExprType]:
-        """
-        Find all expressions reachable by applying exactly one rule.
+        """Find all expressions reachable by applying exactly one rule.
 
         Tries every rule at every position in the expression tree.
 
         Args:
-            expr: Expression to rewrite
-            bidirectional_only: If True, only use rules from <=> declarations
-            groups: If specified, only use rules from these groups
+            expr: Expression to rewrite.
+            bidirectional_only: If True (default), only use rules from `<=>`
+                declarations. Ignored when ``rules`` is provided.
+            groups: If specified, only use rules from these groups.
+                Ignored when ``rules`` is provided.
+            rules: A ``RuleSet`` view that supersedes ``bidirectional_only``
+                and ``groups``. The recommended way to scope rule subsets.
 
         Returns:
-            List of all distinct one-step rewrites
+            List of all distinct one-step rewrites.
         """
+        if rules is None:
+            rules = self.rule_set(groups=groups, bidirectional_only=bidirectional_only)
+
         results = []
         seen: Set[tuple] = set()
 
@@ -1992,33 +2026,20 @@ class RuleEngine:
                 results.append(new_expr)
 
         # Try rules at top level
-        for rule_idx, rule in enumerate(self._rules):
-            metadata = self._metadata[rule_idx]
-
-            # Filter by bidirectional flag
-            if bidirectional_only and not metadata.bidirectional:
-                continue
-
-            # Filter by groups
-            if not self._is_rule_active(metadata, groups):
-                continue
-
+        for rule_idx, rule, metadata in rules:
             pattern, skeleton = rule
-            raw_bindings = _match_internal(pattern, expr, [])
-            if wrap_bindings(raw_bindings):
-                # Check condition if present
-                if not self._check_condition(metadata.condition, raw_bindings):
+            bindings = _match_internal(pattern, expr)
+            if bindings is not None:
+                if not self._check_condition(metadata.condition, bindings):
                     continue
-                result = instantiate(skeleton, raw_bindings, self._fold_funcs)
+                result = instantiate(skeleton, bindings, self._fold_funcs)
                 if result != expr:
                     add_if_new(result)
 
         # Recursively try rules in subexpressions
         if isinstance(expr, list) and len(expr) > 0:
             for i, child in enumerate(expr):
-                child_rewrites = self._all_single_rewrites(
-                    child, bidirectional_only, groups
-                )
+                child_rewrites = self._all_single_rewrites(child, rules=rules)
                 for new_child in child_rewrites:
                     new_expr = expr[:i] + [new_child] + expr[i+1:]
                     add_if_new(new_expr)
@@ -2032,7 +2053,8 @@ class RuleEngine:
         max_count: Optional[int] = None,
         strategy: str = "bfs",
         include_unidirectional: bool = False,
-        groups: Optional[List[str]] = None
+        groups: Optional[List[str]] = None,
+        rules: Optional[RuleSet] = None,
     ) -> Iterator[ExprType]:
         """
         Enumerate all expressions equivalent to the given expression.
@@ -2100,7 +2122,7 @@ class RuleEngine:
 
             # Find all single-step rewrites
             rewrites = self._all_single_rewrites(
-                current, bidirectional_only, groups
+                current, bidirectional_only, groups, rules=rules
             )
 
             for new_expr in rewrites:
@@ -2151,7 +2173,8 @@ class RuleEngine:
         max_expressions: Optional[int] = None,
         trace: bool = False,
         include_unidirectional: bool = False,
-        groups: Optional[List[str]] = None
+        groups: Optional[List[str]] = None,
+        rules: Optional[RuleSet] = None,
     ) -> Optional[EqualityProof]:
         """
         Prove two expressions are equivalent by finding a common form.
@@ -2247,7 +2270,7 @@ class RuleEngine:
                 if depth < max_depth:
                     current_key = _expr_to_tuple(current)
                     rewrites = self._all_single_rewrites(
-                        current, bidirectional_only, groups
+                        current, bidirectional_only, groups, rules=rules
                     )
                     for new_expr in rewrites:
                         new_key = _expr_to_tuple(new_expr)
@@ -2281,7 +2304,7 @@ class RuleEngine:
                 if depth < max_depth:
                     current_key = _expr_to_tuple(current)
                     rewrites = self._all_single_rewrites(
-                        current, bidirectional_only, groups
+                        current, bidirectional_only, groups, rules=rules
                     )
                     for new_expr in rewrites:
                         new_key = _expr_to_tuple(new_expr)
@@ -2352,7 +2375,8 @@ class RuleEngine:
         max_depth: int = 10,
         max_count: Optional[int] = 10000,
         include_unidirectional: bool = True,
-        groups: Optional[List[str]] = None
+        groups: Optional[List[str]] = None,
+        rules: Optional[RuleSet] = None,
     ) -> OptimizationResult:
         """
         Find the minimum-cost equivalent expression.
@@ -2414,7 +2438,8 @@ class RuleEngine:
             max_depth=max_depth,
             max_count=max_count,
             include_unidirectional=include_unidirectional,
-            groups=groups
+            groups=groups,
+            rules=rules,
         ):
             count += 1
             equiv_cost = cost_fn(equiv)
@@ -2440,7 +2465,8 @@ class RuleEngine:
         steps: int = 10,
         include_unidirectional: bool = False,
         groups: Optional[List[str]] = None,
-        rng: Optional[random.Random] = None
+        rng: Optional[random.Random] = None,
+        rules: Optional[RuleSet] = None,
     ) -> ExprType:
         """
         Generate a random equivalent expression via random walk.
@@ -2473,7 +2499,7 @@ class RuleEngine:
         current = expr
 
         for _ in range(steps):
-            rewrites = self._all_single_rewrites(current, bidirectional_only, groups)
+            rewrites = self._all_single_rewrites(current, bidirectional_only, groups, rules=rules)
             if not rewrites:
                 break
             current = rng.choice(rewrites)
@@ -2489,7 +2515,8 @@ class RuleEngine:
         max_attempts: int = 100,
         include_unidirectional: bool = False,
         groups: Optional[List[str]] = None,
-        rng: Optional[random.Random] = None
+        rng: Optional[random.Random] = None,
+        rules: Optional[RuleSet] = None,
     ) -> List[ExprType]:
         """
         Sample multiple random equivalent expressions.
@@ -2525,7 +2552,7 @@ class RuleEngine:
                 sample = self.random_equivalent(
                     expr, steps=steps,
                     include_unidirectional=include_unidirectional,
-                    groups=groups, rng=rng
+                    groups=groups, rng=rng, rules=rules,
                 )
                 key = _expr_to_tuple(sample)
                 if key not in seen:
@@ -2538,7 +2565,7 @@ class RuleEngine:
                 self.random_equivalent(
                     expr, steps=steps,
                     include_unidirectional=include_unidirectional,
-                    groups=groups, rng=rng
+                    groups=groups, rng=rng, rules=rules,
                 )
                 for _ in range(n)
             ]
@@ -2549,7 +2576,8 @@ class RuleEngine:
         max_steps: int = 100,
         include_unidirectional: bool = False,
         groups: Optional[List[str]] = None,
-        rng: Optional[random.Random] = None
+        rng: Optional[random.Random] = None,
+        rules: Optional[RuleSet] = None,
     ) -> Iterator[ExprType]:
         """
         Generate a lazy random walk through the equivalence class.
@@ -2579,7 +2607,7 @@ class RuleEngine:
         yield current
 
         for _ in range(max_steps):
-            rewrites = self._all_single_rewrites(current, bidirectional_only, groups)
+            rewrites = self._all_single_rewrites(current, bidirectional_only, groups, rules=rules)
             if not rewrites:
                 break
             current = rng.choice(rewrites)

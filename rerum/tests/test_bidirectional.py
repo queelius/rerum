@@ -249,15 +249,19 @@ class TestBidirectionalEngine:
         assert any("commute-fwd" in r for r in rules)
         assert any("commute-rev" in r for r in rules)
 
-    def test_to_dsl_exports_both_rules(self):
-        """to_dsl() exports both directions as separate rules."""
+    def test_to_dsl_emits_bidirectional_form(self):
+        """to_dsl() collapses adjacent -fwd/-rev pairs back into a single
+        `<=>` rule for roundtrip-safe serialization."""
         engine = RuleEngine.from_dsl("""
             @commute: (+ ?x ?y) <=> (+ :y :x)
         """)
 
         dsl = engine.to_dsl()
-        assert "commute-fwd" in dsl
-        assert "commute-rev" in dsl
+        assert "<=>" in dsl
+        # Source name, not internal -fwd/-rev split
+        assert "@commute:" in dsl
+        assert "commute-fwd" not in dsl
+        assert "commute-rev" not in dsl
 
     def test_bidirectional_with_when_clause(self):
         """Bidirectional rules with conditions."""
@@ -329,3 +333,229 @@ class TestBidirectionalMetadata:
         meta, _, _ = results[0]
         assert meta.bidirectional == False
         assert meta.direction is None
+
+
+class TestBidirectionalPatternValidation:
+    """The reverse direction of a `<=>` rule is auto-derived from the
+    original skeleton. If that derivation produces a structurally invalid
+    pattern (multiple rest patterns, compute forms in pattern position),
+    the rule must be rejected at load time, not lazily during rewriting
+    (review finding C-3)."""
+
+    def test_two_rest_patterns_at_same_level_rejected(self):
+        """`(+ (+ ?x...) ?y...) <=> (+ :x... :y...)` desugars to a rev
+        pattern with two `?...` at the same compound level. Reject."""
+        with pytest.raises(ValueError, match="rest pattern"):
+            parse_rule_line("@flatten: (+ (+ ?x...) ?y...) <=> (+ :x... :y...)")
+
+    def test_compute_form_on_rhs_of_bidirectional_rejected(self):
+        """`(+ ?x ?y) <=> (! + :x :y)` would create a rev pattern with
+        a `(! ...)` compute form in pattern position. Reject."""
+        with pytest.raises(ValueError, match="compute form"):
+            parse_rule_line("@bad: (+ ?x ?y) <=> (! + :x :y)")
+
+    def test_well_formed_bidirectional_with_rest_pattern_accepted(self):
+        """A `<=>` rule whose rev pattern keeps the rest at the end is fine."""
+        # Forward: (f ?x ?xs...) <=> (g :x :xs...)
+        # Rev pattern: (g ?x ?xs...) -- single rest at end, OK
+        results = parse_rule_line("@foo: (f ?x ?xs...) <=> (g :x :xs...)")
+        assert len(results) == 2
+
+    def test_unidirectional_rule_with_compute_in_skeleton_unchanged(self):
+        """Compute forms in the skeleton of a `=>` rule are fine."""
+        results = parse_rule_line("@fold: (+ ?a:const ?b:const) => (! + :a :b)")
+        assert len(results) == 1
+
+
+class TestBidirectionalRoundtrip:
+    """Bidirectional rules must survive serialize/deserialize cycles. Before
+    the fix, to_dsl/to_json emitted -fwd/-rev as plain `=>` rules and the
+    `bidirectional` flag was silently lost (review finding C-4)."""
+
+    def test_to_dsl_roundtrips_preserves_bidirectional_metadata(self):
+        engine1 = RuleEngine.from_dsl("@commute: (+ ?x ?y) <=> (+ :y :x)")
+        engine2 = RuleEngine.from_dsl(engine1.to_dsl())
+        assert "commute-fwd" in engine2
+        assert "commute-rev" in engine2
+        _, fwd_meta = engine2["commute-fwd"]
+        _, rev_meta = engine2["commute-rev"]
+        assert fwd_meta.bidirectional is True
+        assert rev_meta.bidirectional is True
+
+    def test_to_dsl_roundtrip_preserves_equivalents(self):
+        """The equivalence class of a roundtripped engine must match the
+        original. Pre-fix, to_dsl lost the `bidirectional` flag, so
+        `equivalents()` returned only the trivial result after roundtrip."""
+        engine1 = RuleEngine.from_dsl("@commute: (+ ?x ?y) <=> (+ :y :x)")
+        engine2 = RuleEngine.from_dsl(engine1.to_dsl())
+        forms1 = set(map(tuple, engine1.enumerate_equivalents(["+", "a", "b"])))
+        forms2 = set(map(tuple, engine2.enumerate_equivalents(["+", "a", "b"])))
+        assert forms1 == forms2
+        assert len(forms1) == 2  # (+ a b) and (+ b a)
+
+    def test_to_dsl_anonymous_bidirectional_roundtrip(self):
+        """Anonymous `<=>` rules also roundtrip safely."""
+        engine1 = RuleEngine.from_dsl("(+ ?x ?y) <=> (+ :y :x)")
+        engine2 = RuleEngine.from_dsl(engine1.to_dsl())
+        assert len(engine2) == 2
+        # Both should be bidirectional after roundtrip
+        for _, meta in engine2:
+            assert meta.bidirectional is True
+
+    def test_to_dsl_with_priority_and_description_roundtrips(self):
+        engine1 = RuleEngine.from_dsl(
+            '@assoc[100] "Associativity": (+ (+ ?x ?y) ?z) <=> (+ :x (+ :y :z))'
+        )
+        dsl = engine1.to_dsl()
+        engine2 = RuleEngine.from_dsl(dsl)
+        _, fwd_meta = engine2["assoc-fwd"]
+        assert fwd_meta.priority == 100
+        # Description should be on both halves after roundtrip
+        assert fwd_meta.description == "Associativity (forward)"
+
+    def test_to_json_roundtrip_preserves_bidirectional_flag(self):
+        engine1 = RuleEngine.from_dsl("@commute: (+ ?x ?y) <=> (+ :y :x)")
+        json_str = engine1.to_json()
+        # The JSON should mark the rule as bidirectional, not duplicate it
+        import json as _json
+        parsed = _json.loads(json_str)
+        assert len(parsed["rules"]) == 1
+        assert parsed["rules"][0].get("bidirectional") is True
+
+        engine2 = RuleEngine.from_dsl(json_str) if json_str.lstrip().startswith("{") else None
+        # Use the proper loader entry for JSON
+        from rerum.engine import load_rules_from_json
+        loaded = load_rules_from_json(json_str)
+        # Loaded should produce two rules (fwd and rev)
+        assert len(loaded) == 2
+        names = [m.name for m, _ in loaded]
+        assert "commute-fwd" in names
+        assert "commute-rev" in names
+
+    def test_to_dict_emits_bidirectional_flag(self):
+        engine = RuleEngine.from_dsl("@commute: (+ ?x ?y) <=> (+ :y :x)")
+        d = engine.to_dict()
+        assert len(d["rules"]) == 1
+        assert d["rules"][0]["bidirectional"] is True
+        assert d["rules"][0]["name"] == "commute"
+
+
+class TestBidirectionalConstraintPreservation:
+    """The reverse direction of a `<=>` rule must carry the same type and
+    free-variable constraints as the forward direction. Otherwise the rev
+    rule fires on expressions the fwd rule would have rejected, producing
+    unsound equivalence classes (see review finding C-2)."""
+
+    def test_const_constraint_preserved_in_rev_pattern(self):
+        results = parse_rule_line("@foo: (f ?x:const) <=> (g :x)")
+        _, rev_pattern, rev_skeleton = results[1]
+        assert rev_pattern == ["g", ["?c", "x"]]
+        assert rev_skeleton == ["f", [":", "x"]]
+
+    def test_var_constraint_preserved_in_rev_pattern(self):
+        results = parse_rule_line("@foo: (f ?x:var) <=> (g :x)")
+        _, rev_pattern, _ = results[1]
+        assert rev_pattern == ["g", ["?v", "x"]]
+
+    def test_free_constraint_preserved_in_rev_pattern(self):
+        results = parse_rule_line("@foo: (f ?x:free(y)) <=> (g :x)")
+        _, rev_pattern, _ = results[1]
+        assert rev_pattern == ["g", ["?free", "x", "y"]]
+
+    def test_mixed_constraints_in_multi_var_rule(self):
+        """Constraints follow the variable name, not the position."""
+        results = parse_rule_line("@foo: (f ?x:const ?y) <=> (g :y :x)")
+        _, rev_pattern, _ = results[1]
+        # In the rev pattern, x retains its const constraint even though
+        # its position changed in the rule body.
+        assert rev_pattern == ["g", ["?", "y"], ["?c", "x"]]
+
+    def test_unconstrained_vars_unchanged(self):
+        """Unconstrained variables don't gain a spurious constraint."""
+        results = parse_rule_line("@foo: (f ?x ?y) <=> (g :y :x)")
+        _, rev_pattern, _ = results[1]
+        assert rev_pattern == ["g", ["?", "y"], ["?", "x"]]
+
+    def test_rev_rule_const_constraint_actually_filters(self):
+        """Soundness: rev rule with const constraint must reject non-const inputs."""
+        engine = RuleEngine.from_dsl("@cancel: (f ?x:const) <=> (g :x)")
+        # Forward: (f 5) -> (g 5)
+        assert engine.simplify(["f", 5], strategy="once") == ["g", 5]
+        # Reverse: (g 5) -> (f 5) because 5 is const
+        assert engine.simplify(["g", 5], strategy="once") == ["f", 5]
+        # Reverse with non-const variable: (g a) must NOT fire
+        assert engine.simplify(["g", "a"], strategy="once") == ["g", "a"]
+
+    def test_rev_rule_free_constraint_actually_filters(self):
+        """Soundness: rev rule with free constraint must reject inputs containing the var."""
+        engine = RuleEngine.from_dsl("@foo: (f ?x:free(y)) <=> (g :x)")
+        # Reverse on (g a) -- a is free of y, so rev fires
+        assert engine.simplify(["g", "a"], strategy="once") == ["f", "a"]
+        # Reverse on (g (h y)) -- contains y, rev must NOT fire
+        assert engine.simplify(["g", ["h", "y"]], strategy="once") == ["g", ["h", "y"]]
+
+
+class TestSimplifyTerminatesOnBidirectionalCycle:
+    """Regression: bidirectional rules form a cycle (fwd output matches rev,
+    rev output matches fwd). simplify() must terminate, not raise
+    RecursionError. The fast path in rewriter.try_rules previously called
+    simplify(result) recursively without cycle detection."""
+
+    def test_simplify_default_strategy_with_commute_only(self):
+        """Default strategy (exhaustive) on a single <=> rule must not crash.
+        The result is in the equivalence class of the input."""
+        engine = RuleEngine.from_dsl("@commute: (+ ?x ?y) <=> (+ :y :x)")
+        result = engine.simplify(["+", "a", "b"])
+        assert result in (["+", "a", "b"], ["+", "b", "a"])
+
+    def test_simplify_default_strategy_with_assoc_only(self):
+        """Default strategy on a <=> associativity rule must terminate."""
+        engine = RuleEngine.from_dsl(
+            "@assoc: (+ (+ ?x ?y) ?z) <=> (+ :x (+ :y :z))"
+        )
+        result = engine.simplify(["+", ["+", "a", "b"], "c"])
+        assert result in (
+            ["+", ["+", "a", "b"], "c"],
+            ["+", "a", ["+", "b", "c"]],
+        )
+
+    def test_simplify_default_with_mixed_uni_and_bidirectional(self):
+        """Mixed => and <=> rules: simplify must not loop forever and the
+        unidirectional simplification still applies where reachable."""
+        engine = RuleEngine.from_dsl(
+            """
+            @add-zero: (+ ?x 0) => :x
+            @commute: (+ ?x ?y) <=> (+ :y :x)
+            """
+        )
+        # add-zero is declared first, so on (+ a 0) it fires immediately to a.
+        assert engine.simplify(["+", "a", 0]) == "a"
+
+    def test_simplify_pure_unidirectional_unchanged(self):
+        """Cycle-detection fix must not regress unidirectional simplification."""
+        engine = RuleEngine.from_dsl(
+            """
+            @add-zero: (+ ?x 0) => :x
+            @mul-one: (* ?x 1) => :x
+            """
+        )
+        assert engine.simplify(["+", ["*", "a", 1], 0]) == "a"
+
+    def test_simplify_with_groups_active_terminates_on_bidirectional(self):
+        """The slow-path (_simplify_exhaustive) must also terminate on cycles."""
+        engine = RuleEngine.from_dsl(
+            """
+            [algebra]
+            @commute: (+ ?x ?y) <=> (+ :y :x)
+            """
+        )
+        result = engine.simplify(["+", "a", "b"], groups=["algebra"])
+        assert result in (["+", "a", "b"], ["+", "b", "a"])
+
+    def test_simplify_with_trace_terminates_on_bidirectional(self):
+        """Traced simplification must also terminate, not loop max_steps."""
+        engine = RuleEngine.from_dsl("@commute: (+ ?x ?y) <=> (+ :y :x)")
+        result, trace = engine.simplify(["+", "a", "b"], trace=True)
+        assert result in (["+", "a", "b"], ["+", "b", "a"])
+        # Trace should be bounded - not max_steps long
+        assert len(trace.steps) < 10
