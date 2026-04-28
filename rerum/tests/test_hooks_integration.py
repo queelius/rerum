@@ -573,3 +573,48 @@ class TestNoMatchResolverRulesPath:
         assert result == ["foo", "bar"]
         # Bound is max_steps; T14 will tighten this.
         assert len(engine._rules) <= 5
+
+
+class TestUndefinedOpResolver:
+    def test_value_resolution_used_as_fold_result(self):
+        from rerum.hooks import Resolution
+        engine = RuleEngine.from_dsl("@compute: (foo ?x) => (! my-op :x)")
+
+        @engine.on_undefined_op
+        def resolver(op, args, ctx):
+            if op == "my-op":
+                return Resolution(value=args[0])  # identity
+            return None
+
+        result = engine.simplify(["foo", 42])
+        assert result == 42
+
+    def test_fold_funcs_resolution_installs_handler(self):
+        from rerum.hooks import Resolution
+        engine = RuleEngine.from_dsl("@compute: (square ?x) => (! my-square :x)")
+
+        @engine.on_undefined_op
+        def resolver(op, args, ctx):
+            if op == "my-square":
+                return Resolution(fold_funcs={"my-square": lambda xs: xs[0] * xs[0]})
+            return None
+
+        # First call installs handler.
+        result1 = engine.simplify(["square", 3])
+        assert result1 == 9
+
+        # Second call: handler already installed, resolver doesn't fire.
+        result2 = engine.simplify(["square", 5])
+        assert result2 == 25
+
+    def test_no_resolver_falls_through_to_compound(self):
+        engine = RuleEngine.from_dsl("@compute: (foo ?x) => (! my-op :x)")
+        # No resolver registered. Existing behavior: (! my-op 42) becomes [my-op, 42].
+        result = engine.simplify(["foo", 42])
+        assert result == ["my-op", 42]
+
+    def test_resolver_returning_none_falls_through(self):
+        engine = RuleEngine.from_dsl("@compute: (foo ?x) => (! my-op :x)")
+        engine.on_undefined_op(lambda op, args, ctx: None)
+        result = engine.simplify(["foo", 42])
+        assert result == ["my-op", 42]

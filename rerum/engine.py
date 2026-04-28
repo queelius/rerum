@@ -1255,7 +1255,8 @@ class RuleEngine:
             return True
 
         # Instantiate the condition with bindings
-        result = instantiate(condition, bindings, self._fold_funcs)
+        result = instantiate(condition, bindings, self._fold_funcs,
+                             undefined_op_resolver=self._undefined_op_resolver)
 
         # Check truthiness
         # Numbers: 0 is falsy
@@ -1403,7 +1404,8 @@ class RuleEngine:
                     continue
                 if not self._check_should_fire(rule, metadata, expr, bindings):
                     continue
-                result = instantiate(skeleton, bindings, self._fold_funcs)
+                result = instantiate(skeleton, bindings, self._fold_funcs,
+                                     undefined_op_resolver=self._undefined_op_resolver)
                 if result != expr:
                     step = RewriteStep(
                         rule_index=rule_idx,
@@ -1600,6 +1602,40 @@ class RuleEngine:
             self._cancel_requested = True
         return resolution
 
+    def _undefined_op_resolver(self, op: str, args) -> Optional[Resolution]:
+        """Bridge from rewriter.instantiate to the on_undefined_op hooks.
+
+        When ``instantiate`` encounters a (! op args) form and ``op`` is
+        not in ``fold_funcs``, it calls this method (passed in via the
+        ``undefined_op_resolver`` parameter). Returns the Resolution if a
+        resolver provided one, else None.
+
+        When a ``Resolution(fold_funcs=...)`` is returned, this bridge also
+        installs the handlers into ``self._fold_funcs`` (initializing it to
+        an empty dict if it was ``None``) and invalidates the cached
+        simplifier. This ensures the next call does not re-fire the resolver
+        for the same op.
+        """
+        if not self._hooks.count("undefined_op"):
+            return None
+        ctx = HookContext(
+            engine=self,
+            expr_path=[],
+            depth=0,
+            step_count=0,
+            event_name="undefined_op",
+        )
+        resolution = self._hooks.run_resolvers("undefined_op", op, args, ctx)
+        if ctx.cancelled:
+            self._cancel_requested = True
+        if resolution is not None and resolution.fold_funcs is not None:
+            # Permanent install at the engine level.
+            if self._fold_funcs is None:
+                self._fold_funcs = {}
+            self._fold_funcs.update(resolution.fold_funcs)
+            self._simplifier = None  # Invalidate fast-path cache.
+        return resolution
+
     def _install_resolver_rules(self, rules,
                                 metadata: Optional[Dict[str, Any]] = None) -> int:
         """Install rules provided by a Resolver mid-rewrite.
@@ -1719,7 +1755,8 @@ class RuleEngine:
                         continue
                     if not self._check_should_fire(rule, metadata, current, bindings):
                         continue
-                    new_expr = instantiate(skeleton, bindings, self._fold_funcs)
+                    new_expr = instantiate(skeleton, bindings, self._fold_funcs,
+                                           undefined_op_resolver=self._undefined_op_resolver)
                     if new_expr != current:
                         step = RewriteStep(
                             rule_index=rule_idx,
@@ -1830,7 +1867,8 @@ class RuleEngine:
                     continue
                 if not self._check_should_fire(rule, metadata, current, bindings):
                     continue
-                result = instantiate(skeleton, bindings, self._fold_funcs)
+                result = instantiate(skeleton, bindings, self._fold_funcs,
+                                     undefined_op_resolver=self._undefined_op_resolver)
                 if result != current:
                     step = RewriteStep(
                         rule_index=rule_idx,
@@ -1882,7 +1920,8 @@ class RuleEngine:
                     continue
                 if not self._check_should_fire(rule, metadata, current, bindings):
                     continue
-                result = instantiate(skeleton, bindings, self._fold_funcs)
+                result = instantiate(skeleton, bindings, self._fold_funcs,
+                                     undefined_op_resolver=self._undefined_op_resolver)
                 if result != current:
                     step = RewriteStep(
                         rule_index=rule_idx,
@@ -2280,7 +2319,8 @@ class RuleEngine:
                     continue
                 if not self._check_should_fire(rule, metadata, expr, bindings):
                     continue
-                result = instantiate(skeleton, bindings, self._fold_funcs)
+                result = instantiate(skeleton, bindings, self._fold_funcs,
+                                     undefined_op_resolver=self._undefined_op_resolver)
                 if result != expr:
                     add_if_new(result)
 

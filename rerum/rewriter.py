@@ -766,6 +766,7 @@ def instantiate(
     skeleton: ExprType,
     bindings,
     fold_funcs: Optional[FoldFuncsType] = None,
+    undefined_op_resolver: Optional[Callable] = None,
 ) -> ExprType:
     """
     Instantiate a skeleton with bindings.
@@ -780,6 +781,12 @@ def instantiate(
         skeleton: The skeleton to instantiate
         bindings: ``Bindings`` instance (legacy list-of-pairs also accepted)
         fold_funcs: Optional fold functions for compute (!) evaluation
+        undefined_op_resolver: Optional callable ``(op, args) -> Resolution|None``
+            called when ``op`` is not in ``fold_funcs``. A
+            ``Resolution(value=v)`` returns ``v`` directly; a
+            ``Resolution(fold_funcs={op: handler})`` installs the handler into
+            ``fold_funcs`` in place and retries the fold; ``None`` falls
+            through to the existing "leave as compound" behavior.
 
     Returns:
         The instantiated expression
@@ -799,9 +806,26 @@ def instantiate(
             op = s[1]
             raw_args = s[2:]
             args = [loop(arg) for arg in raw_args]
-            if fold_funcs and op in fold_funcs:
+            handler = fold_funcs.get(op) if fold_funcs else None
+            if handler is None and undefined_op_resolver is not None:
+                resolution = undefined_op_resolver(op, args)
+                if resolution is not None:
+                    if resolution.value is not None:
+                        return resolution.value
+                    if resolution.fold_funcs is not None:
+                        # Install into fold_funcs in-place when a dict is
+                        # available; the engine passes its own _fold_funcs
+                        # reference, so a live dict means permanent install.
+                        # When fold_funcs is None (no prelude configured),
+                        # the engine bridge is responsible for the permanent
+                        # side-effect; here we just grab the handler for this
+                        # single call.
+                        if fold_funcs is not None:
+                            fold_funcs.update(resolution.fold_funcs)
+                        handler = resolution.fold_funcs.get(op)
+            if handler is not None:
                 try:
-                    result = fold_funcs[op](args)
+                    result = handler(args)
                     if result is not None:
                         if isinstance(result, float) and result.is_integer():
                             return int(result)
@@ -809,7 +833,7 @@ def instantiate(
                 except Exception:
                     pass
             return [op] + args
-        return instantiate_compound(s, coerced, fold_funcs)
+        return instantiate_compound(s, coerced, fold_funcs, undefined_op_resolver)
 
     return loop(skeleton)
 
@@ -818,6 +842,7 @@ def instantiate_compound(
     skeleton: List,
     bindings,
     fold_funcs: Optional[FoldFuncsType] = None,
+    undefined_op_resolver: Optional[Callable] = None,
 ) -> List:
     """Instantiate a compound skeleton, handling splice patterns.
 
@@ -834,13 +859,13 @@ def instantiate_compound(
     if skeleton_splice(first):
         name = car(cdr(first))
         spliced = coerced.lookup(name)
-        rest_instantiated = instantiate_compound(rest, coerced, fold_funcs)
+        rest_instantiated = instantiate_compound(rest, coerced, fold_funcs, undefined_op_resolver)
         if isinstance(spliced, list):
             return spliced + rest_instantiated
         return [spliced] + rest_instantiated
 
-    first_instantiated = instantiate(first, coerced, fold_funcs)
-    rest_instantiated = instantiate_compound(rest, coerced, fold_funcs)
+    first_instantiated = instantiate(first, coerced, fold_funcs, undefined_op_resolver)
+    rest_instantiated = instantiate_compound(rest, coerced, fold_funcs, undefined_op_resolver)
     return [first_instantiated] + rest_instantiated
 
 
