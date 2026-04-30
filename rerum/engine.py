@@ -84,13 +84,21 @@ from .expr import (
 
 
 class RuleMetadata:
-    """Metadata for a rule including name, description, priority, and condition."""
+    """Metadata for a rule including name, description, priority, condition, and v0.7 fields."""
 
-    def __init__(self, name: Optional[str] = None, description: Optional[str] = None,
-                 tags: Optional[List[str]] = None, condition: Optional[ExprType] = None,
-                 priority: int = 0, bidirectional: bool = False,
+    def __init__(self, name: Optional[str] = None,
+                 description: Optional[str] = None,
+                 tags: Optional[List[str]] = None,
+                 condition: Optional[ExprType] = None,
+                 priority: int = 0,
+                 bidirectional: bool = False,
                  direction: Optional[str] = None,
-                 extra: Optional[Dict[str, Any]] = None):
+                 extra: Optional[Dict[str, Any]] = None,
+                 category: Optional[str] = None,
+                 reasoning: Optional[str] = None,
+                 examples: Optional[List[Dict[str, Any]]] = None,
+                 fwd_label: Optional[str] = None,
+                 rev_label: Optional[str] = None):
         self.name = name
         self.description = description
         self.tags = tags or []
@@ -99,6 +107,11 @@ class RuleMetadata:
         self.bidirectional = bidirectional  # True if from a <=> rule
         self.direction = direction  # 'fwd' or 'rev' for bidirectional rules
         self.extra = extra or {}  # Resolver-provided metadata (provenance, model, confidence)
+        self.category = category  # Semantic category label (e.g. "identity", "commutativity")
+        self.reasoning = reasoning  # Human-readable explanation of why the rule is valid
+        self.examples = examples  # List of {"in": ..., "out": ...} worked examples
+        self.fwd_label = fwd_label  # Override name suffix for the forward half of a <=> rule
+        self.rev_label = rev_label  # Override name suffix for the reverse half of a <=> rule
 
     def __repr__(self) -> str:
         base = ""
