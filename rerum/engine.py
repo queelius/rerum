@@ -464,27 +464,64 @@ def _split_annotation_pairs(inner: str) -> List[str]:
     pair = ''.join(current).strip()
     if pair:
         pairs.append(pair)
+    if in_quote is not None:
+        raise ValueError(
+            f"unclosed quote ({in_quote!r}) in annotation: {inner!r}"
+        )
     return pairs
 
 
-def _extract_annotation(line: str) -> Tuple[str, Dict[str, str]]:
-    """Extract a ``{key=value}`` annotation block from *line*.
+def _find_arrow(line: str) -> Tuple[int, int]:
+    """Find the position and length of the rule arrow (=> or <=>) at paren-depth 0.
 
-    The annotation must appear after the optional name/priority/description
-    and before the ``:`` colon that separates the header from the rule body.
-    If no annotation is present returns ``(line, {})``.
+    Returns (-1, 0) if no arrow is found at depth 0.
+    """
+    depth = 0
+    in_quote = None
+    i = 0
+    while i < len(line):
+        c = line[i]
+        if in_quote is not None:
+            if c == in_quote:
+                in_quote = None
+            i += 1
+            continue
+        if c in ('"', "'"):
+            in_quote = c
+            i += 1
+            continue
+        if c == '(':
+            depth += 1
+        elif c == ')':
+            depth -= 1
+        elif depth == 0:
+            # Check for <=> first (longer match).
+            if line[i:i+3] == '<=>':
+                return i, 3
+            if line[i:i+2] == '=>':
+                return i, 2
+        i += 1
+    return -1, 0
+
+
+def _extract_annotation(header: str) -> Tuple[str, Dict[str, str]]:
+    """Extract a ``{key=value}`` annotation block from *header* (header only).
+
+    The annotation must appear in the header portion of the rule line (before
+    the arrow). If no annotation is present returns ``(header, {})``.
 
     Whitespace is permitted inside the braces. Values may be quoted strings
-    (for multi-word values) or bare tokens. Unknown keys raise
-    ``ValueError``. A missing closing brace raises ``ValueError``.
+    (for multi-word values or values containing special characters like ``}``)
+    or bare tokens. Unknown keys raise ``ValueError``. A missing closing brace
+    raises ``ValueError``.
 
-    Returns the line with the annotation block removed and a dict of parsed
+    Returns the header with the annotation block removed and a dict of parsed
     key-value pairs.
     """
     # Locate a ``{`` that is not inside an s-expression (paren-depth == 0).
     depth = 0
     brace_start = -1
-    for i, c in enumerate(line):
+    for i, c in enumerate(header):
         if c == '(':
             depth += 1
         elif c == ')':
@@ -494,24 +531,44 @@ def _extract_annotation(line: str) -> Tuple[str, Dict[str, str]]:
             break
 
     if brace_start < 0:
-        return line, {}
+        return header, {}
 
-    # Find the matching closing brace.
+    # Find the matching closing brace at depth 0, respecting quotes.
     brace_end = -1
-    for j in range(brace_start + 1, len(line)):
-        if line[j] == '}':
+    in_quote = None
+    for j in range(brace_start + 1, len(header)):
+        c = header[j]
+        if in_quote is not None:
+            if c == in_quote:
+                in_quote = None
+            continue
+        if c in ('"', "'"):
+            in_quote = c
+            continue
+        if c == '}':
             brace_end = j
             break
     if brace_end < 0:
-        raise ValueError(f"malformed annotation: missing '}}' in {line!r}")
+        if in_quote is not None:
+            raise ValueError(
+                f"unclosed quote ({in_quote!r}) in annotation: {header!r}"
+            )
+        raise ValueError(f"malformed annotation: missing '}}' in {header!r}")
 
-    inner = line[brace_start + 1:brace_end].strip()
-    remaining = (line[:brace_start] + line[brace_end + 1:]).strip()
+    inner = header[brace_start + 1:brace_end].strip()
+    remaining = (header[:brace_start] + header[brace_end + 1:]).strip()
+
+    # Detect a stray second annotation block in the remaining header.
+    for ch in remaining:
+        if ch == '{':
+            raise ValueError(
+                f"multiple annotation blocks in {header!r}; only one is allowed"
+            )
 
     annotations: Dict[str, str] = {}
     for pair in _split_annotation_pairs(inner):
         if '=' not in pair:
-            raise ValueError(f"malformed annotation pair {pair!r} in {line!r}")
+            raise ValueError(f"malformed annotation pair {pair!r} in {header!r}")
         key, value = pair.split('=', 1)
         key = key.strip()
         value = value.strip()
@@ -550,14 +607,28 @@ def parse_rule_line(line: str) -> Optional[List[Tuple[RuleMetadata, ExprType, Ex
     if not line or line.startswith('#'):
         return None
 
-    # Fast-exit if the line cannot be a rule line: rules always contain '=>'.
-    # This also guards _extract_annotation against stray '{' in non-rule input
-    # (e.g., JSON object lines passed by from_dsl accidentally).
-    if '=>' not in line:
+    # Find the arrow position (=> or <=>). Annotation extraction operates
+    # only on the header portion (before the arrow); the body is left
+    # untouched.
+    arrow_pos, arrow_len = _find_arrow(line)
+    if arrow_pos < 0:
+        # No arrow found at paren-depth 0. If the raw string contains '=>'
+        # the most likely cause is an unclosed quote inside an annotation
+        # block that consumed the arrow. Attempt annotation extraction on
+        # the full line so that _split_annotation_pairs can raise its
+        # "unclosed quote" error rather than silently returning None.
+        if '=>' in line:
+            _extract_annotation(line)  # raises ValueError on malformed input
         return None
 
-    # Extract optional {key=val} annotation block (v0.7).
-    line, annotations = _extract_annotation(line)
+    header = line[:arrow_pos]
+    body_with_arrow = line[arrow_pos:]
+
+    # Extract optional `{key=val}` annotation from the header only.
+    header, annotations = _extract_annotation(header)
+
+    # Reconstruct the line for the existing regex-based header parsing.
+    line = header + ' ' + body_with_arrow
 
     # Extract name, optional priority, and optional description if present
     base_name = None
@@ -565,6 +636,9 @@ def parse_rule_line(line: str) -> Optional[List[Tuple[RuleMetadata, ExprType, Ex
     priority = 0
 
     if line.startswith('@'):
+        # Header regex patterns: `\s*:` allows whitespace between the last token
+        # and the colon, which is left over after `_extract_annotation` strips
+        # the `{...}` block.
         # Try format: @name[priority] "description": ...
         match_obj = re.match(r'@([\w-]+)\[(\d+)\]\s+"([^"]+)"\s*:\s*(.+)', line)
         if match_obj:

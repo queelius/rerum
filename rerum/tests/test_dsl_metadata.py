@@ -89,3 +89,29 @@ class TestSingleLineAnnotation:
         # Missing closing brace
         with pytest.raises(ValueError, match="malformed annotation"):
             parse_rule_line('@r1 {category=identity: (a ?x) => :x')
+
+    def test_quote_with_close_brace_inside(self):
+        # Closing brace inside a quoted value should not terminate the
+        # annotation early.
+        results = parse_rule_line(
+            '@r1 {category="has } in it"}: (a ?x) => :x'
+        )
+        meta, _, _ = results[0]
+        assert meta.category == "has } in it"
+
+    def test_unclosed_quote_raises(self):
+        with pytest.raises(ValueError, match="unclosed quote"):
+            parse_rule_line('@r1 {category="unclosed}: (a ?x) => :x')
+
+    def test_two_annotation_blocks_raises(self):
+        with pytest.raises(ValueError, match="multiple annotation blocks"):
+            parse_rule_line('@r1 {category=foo} {category=bar}: (a ?x) => :x')
+
+    def test_annotation_only_in_header(self):
+        # An `{` after the arrow is left in the body untouched.
+        # The annotation extractor must operate on the header only.
+        results = parse_rule_line('@r1 {category=foo}: (a ?x) => :x')
+        meta, pat, skel = results[0]
+        assert meta.category == "foo"
+        assert pat == ["a", ["?", "x"]]
+        assert skel == [":", "x"]
