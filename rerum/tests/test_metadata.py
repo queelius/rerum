@@ -267,3 +267,74 @@ class TestRoundtripNewFields:
         assert rule["category"] == "cat"
         assert rule["reasoning"] == "because X"
         assert rule["examples"] == [{"in": "(a 5)", "out": "5"}]
+
+
+class TestSidecarLoad:
+    def test_sidecar_fills_missing_category(self):
+        from rerum import RuleEngine
+        engine = RuleEngine.from_dsl('@r1: (a ?x) => :x')
+        engine.load_metadata_json('{"r1": {"category": "identity"}}')
+        _, meta = engine["r1"]
+        assert meta.category == "identity"
+
+    def test_sidecar_fills_reasoning_and_examples(self):
+        from rerum import RuleEngine
+        engine = RuleEngine.from_dsl('@r1: (a ?x) => :x')
+        engine.load_metadata_json('''{
+            "r1": {
+                "reasoning": "Because identity",
+                "examples": [{"in": "(a 5)", "out": "5"}]
+            }
+        }''')
+        _, meta = engine["r1"]
+        assert meta.reasoning == "Because identity"
+        assert meta.examples == [{"in": "(a 5)", "out": "5"}]
+
+    def test_sidecar_conflict_raises(self):
+        from rerum import RuleEngine
+        engine = RuleEngine.from_dsl(
+            '@r1 {category=existing}: (a ?x) => :x'
+        )
+        with pytest.raises(ValueError, match="conflict"):
+            engine.load_metadata_json('{"r1": {"category": "different"}}')
+
+    def test_sidecar_same_value_is_ok(self):
+        # Setting the same value via sidecar is harmless (no conflict).
+        from rerum import RuleEngine
+        engine = RuleEngine.from_dsl(
+            '@r1 {category=identity}: (a ?x) => :x'
+        )
+        # Same value, no error.
+        engine.load_metadata_json('{"r1": {"category": "identity"}}')
+
+    def test_sidecar_orphan_raises(self):
+        from rerum import RuleEngine
+        engine = RuleEngine.from_dsl('@r1: (a ?x) => :x')
+        with pytest.raises(ValueError, match="no rule named"):
+            engine.load_metadata_json('{"nonexistent": {"category": "x"}}')
+
+    def test_sidecar_validates_examples(self):
+        from rerum import RuleEngine
+        from rerum import ExampleValidationError
+        engine = RuleEngine.from_dsl('@r1: (a ?x) => :x')
+        with pytest.raises(ExampleValidationError):
+            engine.load_metadata_json('''{
+                "r1": {"examples": [{"in": "(a 5)", "out": "wrong"}]}
+            }''')
+
+    def test_sidecar_validate_examples_false_skips(self):
+        from rerum import RuleEngine
+        engine = RuleEngine.from_dsl('@r1: (a ?x) => :x')
+        # Should not raise.
+        engine.load_metadata_json('''{
+            "r1": {"examples": [{"in": "(a 5)", "out": "wrong"}]}
+        }''', validate_examples=False)
+        _, meta = engine["r1"]
+        assert meta.examples == [{"in": "(a 5)", "out": "wrong"}]
+
+    def test_sidecar_unknown_field_lands_in_extra(self):
+        from rerum import RuleEngine
+        engine = RuleEngine.from_dsl('@r1: (a ?x) => :x')
+        engine.load_metadata_json('{"r1": {"weird_field": "value"}}')
+        _, meta = engine["r1"]
+        assert meta.extra.get("weird_field") == "value"

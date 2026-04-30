@@ -1526,6 +1526,72 @@ class RuleEngine:
         for rule, metadata in zip(self._rules, self._metadata):
             self._validate_rule_examples(rule, metadata)
 
+    def load_metadata_json(self, text: str,
+                           validate_examples: bool = True) -> 'RuleEngine':
+        """Merge a metadata-only JSON sidecar onto already-loaded rules.
+
+        The JSON shape is ``{rule_name: {field: value, ...}}``. Each top-level
+        key must match an ``@name`` already in the engine. Each inner field
+        merges onto the existing RuleMetadata: only fields that are currently
+        None (or empty list, for examples) are filled. A conflict (sidecar
+        tries to set a field already set on the rule with a different value)
+        raises ValueError. Setting the same value is harmless.
+
+        Unknown fields land in ``RuleMetadata.extra``.
+
+        After merging, examples are validated by default (validate_examples
+        kwarg).
+        """
+        import json as _json
+        data = _json.loads(text)
+        if not isinstance(data, dict):
+            raise ValueError(
+                "sidecar JSON must be an object mapping name -> metadata"
+            )
+
+        # Known RuleMetadata field names. Mirror the ``known`` set in
+        # load_rules_from_json. Adding a new field requires updating this
+        # set so it is not routed to extra.
+        known_fields = {
+            "name", "description", "tags", "priority", "condition",
+            "bidirectional", "direction",
+            "category", "reasoning", "examples",
+            "fwd_label", "rev_label",
+        }
+
+        for rule_name, fields in data.items():
+            if rule_name not in self._rule_names:
+                raise ValueError(
+                    f"sidecar references no rule named {rule_name!r}"
+                )
+            idx = self._rule_names[rule_name]
+            metadata = self._metadata[idx]
+
+            for field, value in fields.items():
+                if field not in known_fields:
+                    metadata.extra[field] = value
+                    continue
+                existing = getattr(metadata, field)
+                # Treat empty list as "not set" for examples (M1 normalised
+                # examples=None to []; this lets sidecar fill it).
+                is_empty = (existing is None
+                            or (isinstance(existing, list) and not existing))
+                if not is_empty:
+                    if existing != value:
+                        raise ValueError(
+                            f"sidecar conflict on rule {rule_name!r} "
+                            f"field {field!r}: existing={existing!r}, "
+                            f"sidecar={value!r}"
+                        )
+                    # Same value; harmless.
+                    continue
+                setattr(metadata, field, value)
+
+            if validate_examples:
+                self._validate_rule_examples(self._rules[idx], metadata)
+
+        return self
+
     def load_dsl(self, text: str, validate_examples: bool = True) -> 'RuleEngine':
         """Load rules from DSL text. Validates examples by default."""
         parsed = load_rules_from_dsl(text)
