@@ -178,3 +178,14 @@ class TestMultiLineAnnotation:
         # Only r2 has a category.
         cats = [m.category for m, _ in rules]
         assert cats == [None, "cat", None]
+
+    def test_multi_line_with_apostrophe_via_double_quote(self):
+        # The documented workaround for apostrophes: use double quotes.
+        text = '''
+@r1 {
+  category="it's fine"
+}: (a ?x) => :x
+'''
+        rules = load_rules_from_dsl(text)
+        meta, _ = rules[0]
+        assert meta.category == "it's fine"

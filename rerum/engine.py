@@ -517,6 +517,10 @@ def _extract_annotation(header: str) -> Tuple[str, Dict[str, str]]:
 
     Returns the header with the annotation block removed and a dict of parsed
     key-value pairs.
+
+    Limitations:
+    - Backslash escapes inside quoted values are not recognized. Use the
+      alternate quote character to embed the conflicting quote.
     """
     # Locate a ``{`` that is not inside an s-expression (paren-depth == 0).
     depth = 0
@@ -624,6 +628,13 @@ def _join_multi_line_annotations(lines: List[str]) -> List[str]:
     s-expression depth 0 and outside quoted strings) is joined with subsequent
     lines until the matching ``}`` is found. The joined result is a single
     space-separated string.
+
+    Limitations:
+    - ``#`` comments are not stripped inside a multi-line block. Use a
+      single-line annotation if you want to comment alongside it.
+    - Backslash escapes inside quoted values are not recognized. Use the
+      alternate quote character (double for values with apostrophes,
+      single for values with double-quotes).
     """
     joined: List[str] = []
     buffer: List[str] = []
