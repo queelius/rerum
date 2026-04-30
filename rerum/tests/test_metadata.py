@@ -167,3 +167,82 @@ class TestJSONLoaderNewFields:
         rules = load_rules_from_json(text)
         rules[0][0].extra["new"] = "fwd-only"
         assert "new" not in rules[1][0].extra
+
+
+class TestRoundtripNewFields:
+    def test_to_dsl_emits_category(self):
+        from rerum import RuleEngine
+        engine = RuleEngine.from_dsl(
+            '@r1 {category=identity}: (a ?x) => :x'
+        )
+        dsl = engine.to_dsl()
+        assert "{category=identity}" in dsl
+
+    def test_to_dsl_no_category_no_annotation(self):
+        from rerum import RuleEngine
+        engine = RuleEngine.from_dsl('@r1: (a ?x) => :x')
+        dsl = engine.to_dsl()
+        # No annotation block when category is None.
+        assert "{category=" not in dsl
+
+    def test_dsl_roundtrip_preserves_category(self):
+        from rerum import RuleEngine
+        engine1 = RuleEngine.from_dsl(
+            '@r1 {category=identity}: (a ?x) => :x'
+        )
+        engine2 = RuleEngine.from_dsl(engine1.to_dsl())
+        _, meta = engine2["r1"]
+        assert meta.category == "identity"
+
+    def test_to_json_emits_all_four_fields(self):
+        from rerum import RuleEngine
+        engine = RuleEngine()
+        engine.add_rule(
+            pattern=["a", ["?", "x"]],
+            skeleton=[":", "x"],
+            name="r1",
+        )
+        # Manually set the new fields (add_rule kwargs come in M10).
+        engine._metadata[0].category = "identity"
+        engine._metadata[0].reasoning = "Because zero"
+        engine._metadata[0].examples = [{"in": "(a 5)", "out": "5"}]
+        d = engine.to_dict()
+        rule = d["rules"][0]
+        assert rule["category"] == "identity"
+        assert rule["reasoning"] == "Because zero"
+        assert rule["examples"] == [{"in": "(a 5)", "out": "5"}]
+
+    def test_to_json_omits_none_fields(self):
+        from rerum import RuleEngine
+        engine = RuleEngine.from_dsl('@r1: (a ?x) => :x')
+        d = engine.to_dict()
+        rule = d["rules"][0]
+        # Fields with None values are not in the output.
+        assert "category" not in rule
+        assert "reasoning" not in rule
+        # examples is normalized to [] in M1; either omit or empty list is fine.
+        assert rule.get("examples", []) == []
+
+    def test_bidirectional_roundtrip_preserves_labels(self):
+        from rerum import RuleEngine
+        from rerum.engine import load_rules_from_json
+        import json
+        text = json.dumps({"rules": [{
+            "name": "assoc", "bidirectional": True,
+            "fwd_label": "regroup-right", "rev_label": "regroup-left",
+            "pattern": ["+", ["+", ["?", "x"], ["?", "y"]], ["?", "z"]],
+            "skeleton": ["+", [":", "x"], ["+", [":", "y"], [":", "z"]]],
+        }]})
+        engine = RuleEngine()
+        for meta, rule in load_rules_from_json(text):
+            engine._rules.append(rule)
+            engine._metadata.append(meta)
+            if meta.name:
+                engine._rule_names[meta.name] = len(engine._rules) - 1
+        engine._sort_by_priority()
+        # Roundtrip: serialize and reload.
+        d = engine.to_dict()
+        rule = d["rules"][0]
+        assert rule["fwd_label"] == "regroup-right"
+        assert rule["rev_label"] == "regroup-left"
+        assert rule["bidirectional"] is True

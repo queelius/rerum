@@ -2653,15 +2653,20 @@ class RuleEngine:
                 base_name, base_description = _strip_bidirectional_naming(meta)
                 arrow = "<=>"
                 if base_name:
-                    name_part = f"@{base_name}"
+                    hdr = f"@{base_name}"
                     if meta.priority != 0:
-                        name_part += f"[{meta.priority}]"
+                        hdr += f"[{meta.priority}]"
                     if base_description:
-                        name_part += f" \"{base_description}\""
-                    name_part += ": "
+                        hdr += f" \"{base_description}\""
+                    if meta.category is not None:
+                        hdr += f" {{category={meta.category}}}"
+                    hdr += ": "
                 else:
-                    name_part = ""
-                rule_str = f"{name_part}{pattern_str} {arrow} {skeleton_str}"
+                    if meta.category is not None:
+                        hdr = f"{{category={meta.category}}}: "
+                    else:
+                        hdr = ""
+                rule_str = f"{hdr}{pattern_str} {arrow} {skeleton_str}"
                 if meta.condition:
                     rule_str += f" when {format_sexpr(meta.condition)}"
                 lines.append(rule_str)
@@ -2669,17 +2674,21 @@ class RuleEngine:
                 continue
 
             if meta.name:
+                hdr = f"@{meta.name}"
                 if meta.priority != 0:
-                    name_part = f"@{meta.name}[{meta.priority}]"
-                else:
-                    name_part = f"@{meta.name}"
+                    hdr += f"[{meta.priority}]"
                 if meta.description:
-                    name_part += f" \"{meta.description}\""
-                name_part += ": "
+                    hdr += f" \"{meta.description}\""
+                if meta.category is not None:
+                    hdr += f" {{category={meta.category}}}"
+                hdr += ": "
             else:
-                name_part = ""
+                if meta.category is not None:
+                    hdr = f"{{category={meta.category}}}: "
+                else:
+                    hdr = ""
 
-            rule_str = f"{name_part}{pattern_str} => {skeleton_str}"
+            rule_str = f"{hdr}{pattern_str} => {skeleton_str}"
             if meta.condition:
                 rule_str += f" when {format_sexpr(meta.condition)}"
 
@@ -2755,6 +2764,19 @@ class RuleEngine:
                     rule_dict["condition"] = meta.condition
                 if meta.tags:
                     rule_dict["tags"] = meta.tags
+                # v0.7 metadata fields.
+                if meta.category is not None:
+                    rule_dict["category"] = meta.category
+                if meta.reasoning is not None:
+                    rule_dict["reasoning"] = meta.reasoning
+                if meta.examples:
+                    rule_dict["examples"] = meta.examples
+                # Direction labels (fwd half carries fwd_label; rev half carries rev_label).
+                if meta.fwd_label is not None:
+                    rule_dict["fwd_label"] = meta.fwd_label
+                rev_meta = self._metadata[i + 1]
+                if rev_meta.rev_label is not None:
+                    rule_dict["rev_label"] = rev_meta.rev_label
                 rules_list.append(rule_dict)
                 i += 2
                 continue
@@ -2773,6 +2795,13 @@ class RuleEngine:
                 rule_dict["condition"] = meta.condition
             if meta.tags:
                 rule_dict["tags"] = meta.tags
+            # v0.7 metadata fields.
+            if meta.category is not None:
+                rule_dict["category"] = meta.category
+            if meta.reasoning is not None:
+                rule_dict["reasoning"] = meta.reasoning
+            if meta.examples:
+                rule_dict["examples"] = meta.examples
             rules_list.append(rule_dict)
             i += 1
 
