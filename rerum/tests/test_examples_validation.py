@@ -100,3 +100,85 @@ class TestValidateExampleHelper:
         skeleton = [":", "x"]
         with pytest.raises(ExampleValidationError, match="must be a dict"):
             _validate_example(pattern, skeleton, meta, "not a dict", fold_funcs={})
+
+
+class TestLoaderValidation:
+    def test_load_rules_with_valid_examples_passes(self):
+        from rerum import RuleEngine
+        text = '''{"rules": [{
+            "name": "add-zero",
+            "pattern": ["+", ["?", "x"], 0],
+            "skeleton": [":", "x"],
+            "examples": [{"in": "(+ y 0)", "out": "y"}]
+        }]}'''
+        engine = RuleEngine()
+        engine.load_rules_from_json(text)  # method on engine; should not raise
+        _, meta = engine["add-zero"]
+        assert meta.examples == [{"in": "(+ y 0)", "out": "y"}]
+
+    def test_load_rules_with_bad_example_raises(self):
+        from rerum import RuleEngine
+        text = '''{"rules": [{
+            "name": "broken",
+            "pattern": ["+", ["?", "x"], 0],
+            "skeleton": [":", "x"],
+            "examples": [{"in": "(+ y 0)", "out": "z"}]
+        }]}'''
+        engine = RuleEngine()
+        with pytest.raises(ExampleValidationError, match="produced"):
+            engine.load_rules_from_json(text)
+
+    def test_validate_examples_false_skips_validation(self):
+        from rerum import RuleEngine
+        text = '''{"rules": [{
+            "name": "broken",
+            "pattern": ["+", ["?", "x"], 0],
+            "skeleton": [":", "x"],
+            "examples": [{"in": "(+ y 0)", "out": "z"}]
+        }]}'''
+        engine = RuleEngine()
+        # No validation; should load.
+        engine.load_rules_from_json(text, validate_examples=False)
+        _, meta = engine["broken"]
+        assert meta.examples == [{"in": "(+ y 0)", "out": "z"}]
+
+    def test_first_failing_example_reported_loud(self):
+        from rerum import RuleEngine
+        text = '''{"rules": [{
+            "name": "rule-a",
+            "pattern": ["a", ["?", "x"]],
+            "skeleton": [":", "x"],
+            "examples": [{"in": "(a 1)", "out": "1"}, {"in": "(a 2)", "out": "wrong"}]
+        }]}'''
+        engine = RuleEngine()
+        with pytest.raises(ExampleValidationError) as exc_info:
+            engine.load_rules_from_json(text)
+        # Second example is the failing one.
+        assert exc_info.value.example == {"in": "(a 2)", "out": "wrong"}
+
+    def test_bidirectional_example_with_rev_direction(self):
+        from rerum import RuleEngine
+        text = '''{"rules": [{
+            "name": "commute",
+            "bidirectional": true,
+            "pattern": ["+", ["?", "x"], ["?", "y"]],
+            "skeleton": ["+", [":", "y"], [":", "x"]],
+            "examples": [
+                {"in": "(+ a b)", "out": "(+ b a)", "direction": "fwd"},
+                {"in": "(+ a b)", "out": "(+ b a)", "direction": "rev"}
+            ]
+        }]}'''
+        engine = RuleEngine()
+        engine.load_rules_from_json(text)  # both directions valid
+
+    def test_load_dsl_validates_examples_via_sidecar(self):
+        # Examples can't appear in DSL syntax, but rules added via
+        # add_rule with examples (M10) or via load_rules_from_json
+        # validate at load time. This test confirms load_dsl path is
+        # not broken by the validation hook (no examples = no validation).
+        from rerum import RuleEngine
+        engine = RuleEngine()
+        engine.load_dsl('@r1 {category=identity}: (a ?x) => :x')
+        # Should not raise.
+        _, meta = engine["r1"]
+        assert meta.category == "identity"

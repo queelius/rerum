@@ -1495,10 +1495,32 @@ class RuleEngine:
             if meta.name:
                 self._rule_names[meta.name] = idx
 
-    def load_dsl(self, text: str) -> 'RuleEngine':
-        """Load rules from DSL text."""
+    def _validate_rule_examples(self, rule, metadata) -> None:
+        """Validate every example for a rule. Raises ExampleValidationError on
+        the first failing example.
+
+        For bidirectional rules, examples may carry a ``direction`` field
+        ("fwd" or "rev") to select which pattern/skeleton pair to test
+        against. Default is "fwd".
+        """
+        if not metadata.examples:
+            return
+        pattern, skeleton = rule
+        for example in metadata.examples:
+            direction = example.get("direction", "fwd")
+            if metadata.bidirectional and direction != metadata.direction:
+                # This example is not for this half of the bidirectional pair.
+                continue
+            _validate_example(
+                pattern, skeleton, metadata, example, self._fold_funcs or {}
+            )
+
+    def load_dsl(self, text: str, validate_examples: bool = True) -> 'RuleEngine':
+        """Load rules from DSL text. Validates examples by default."""
         parsed = load_rules_from_dsl(text)
         for metadata, rule in parsed:
+            if validate_examples:
+                self._validate_rule_examples(rule, metadata)
             idx = len(self._rules)
             self._rules.append(rule)
             self._metadata.append(metadata)
@@ -1508,10 +1530,13 @@ class RuleEngine:
         self._simplifier = None  # Invalidate cached simplifier
         return self
 
-    def load_file(self, path: Union[str, Path]) -> 'RuleEngine':
-        """Load rules from a file (.rules or .json)."""
+    def load_file(self, path: Union[str, Path],
+                  validate_examples: bool = True) -> 'RuleEngine':
+        """Load rules from a file (.rules or .json). Validates examples by default."""
         parsed = load_rules_from_file(path)
         for metadata, rule in parsed:
+            if validate_examples:
+                self._validate_rule_examples(rule, metadata)
             idx = len(self._rules)
             self._rules.append(rule)
             self._metadata.append(metadata)
@@ -1526,6 +1551,26 @@ class RuleEngine:
         for rule in rules:
             self._rules.append(rule)
             self._metadata.append(RuleMetadata())
+        self._sort_by_priority()
+        self._simplifier = None
+        return self
+
+    def load_rules_from_json(self, text: str,
+                             validate_examples: bool = True) -> 'RuleEngine':
+        """Load rules from JSON text. Validates examples by default.
+
+        The module-level ``load_rules_from_json`` function is pure (no
+        validation); this engine method is the validation entry point.
+        """
+        parsed = load_rules_from_json(text)
+        for metadata, rule in parsed:
+            if validate_examples:
+                self._validate_rule_examples(rule, metadata)
+            idx = len(self._rules)
+            self._rules.append(rule)
+            self._metadata.append(metadata)
+            if metadata.name:
+                self._rule_names[metadata.name] = idx
         self._sort_by_priority()
         self._simplifier = None
         return self
