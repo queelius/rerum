@@ -342,6 +342,7 @@ def _build_bidirectional_rules(
     tags: Optional[List[str]],
     pattern: ExprType,
     skeleton: ExprType,
+    category: Optional[str] = None,
 ) -> List[Tuple["RuleMetadata", ExprType, ExprType]]:
     """Construct the forward and reverse `RuleMetadata` plus rule structures
     from a single `<=>` rule. Used by both the DSL and JSON loaders so the
@@ -355,6 +356,7 @@ def _build_bidirectional_rules(
         condition=condition,
         bidirectional=True,
         direction="fwd",
+        category=category,
     )
     rev_metadata = RuleMetadata(
         name=f"{base_name}-rev" if base_name else None,
@@ -364,6 +366,7 @@ def _build_bidirectional_rules(
         condition=condition,
         bidirectional=True,
         direction="rev",
+        category=category,
     )
     constraints = _extract_pattern_constraints(pattern)
     rev_pattern = _convert_skeleton_to_pattern(skeleton, constraints)
@@ -435,6 +438,96 @@ def _convert_pattern_to_skeleton(expr: ExprType) -> ExprType:
     return expr
 
 
+_ANNOTATION_KEYS = frozenset({"category"})
+
+
+def _split_annotation_pairs(inner: str) -> List[str]:
+    """Split ``key=value, key=value`` accounting for quoted values."""
+    pairs: List[str] = []
+    current: List[str] = []
+    in_quote = None
+    for c in inner:
+        if in_quote is not None:
+            if c == in_quote:
+                in_quote = None
+            current.append(c)
+        elif c in ('"', "'"):
+            in_quote = c
+            current.append(c)
+        elif c == ',':
+            pair = ''.join(current).strip()
+            if pair:
+                pairs.append(pair)
+            current = []
+        else:
+            current.append(c)
+    pair = ''.join(current).strip()
+    if pair:
+        pairs.append(pair)
+    return pairs
+
+
+def _extract_annotation(line: str) -> Tuple[str, Dict[str, str]]:
+    """Extract a ``{key=value}`` annotation block from *line*.
+
+    The annotation must appear after the optional name/priority/description
+    and before the ``:`` colon that separates the header from the rule body.
+    If no annotation is present returns ``(line, {})``.
+
+    Whitespace is permitted inside the braces. Values may be quoted strings
+    (for multi-word values) or bare tokens. Unknown keys raise
+    ``ValueError``. A missing closing brace raises ``ValueError``.
+
+    Returns the line with the annotation block removed and a dict of parsed
+    key-value pairs.
+    """
+    # Locate a ``{`` that is not inside an s-expression (paren-depth == 0).
+    depth = 0
+    brace_start = -1
+    for i, c in enumerate(line):
+        if c == '(':
+            depth += 1
+        elif c == ')':
+            depth -= 1
+        elif c == '{' and depth == 0:
+            brace_start = i
+            break
+
+    if brace_start < 0:
+        return line, {}
+
+    # Find the matching closing brace.
+    brace_end = -1
+    for j in range(brace_start + 1, len(line)):
+        if line[j] == '}':
+            brace_end = j
+            break
+    if brace_end < 0:
+        raise ValueError(f"malformed annotation: missing '}}' in {line!r}")
+
+    inner = line[brace_start + 1:brace_end].strip()
+    remaining = (line[:brace_start] + line[brace_end + 1:]).strip()
+
+    annotations: Dict[str, str] = {}
+    for pair in _split_annotation_pairs(inner):
+        if '=' not in pair:
+            raise ValueError(f"malformed annotation pair {pair!r} in {line!r}")
+        key, value = pair.split('=', 1)
+        key = key.strip()
+        value = value.strip()
+        if key not in _ANNOTATION_KEYS:
+            raise ValueError(
+                f"unknown annotation key {key!r} (known: {sorted(_ANNOTATION_KEYS)})"
+            )
+        # Strip surrounding quotes from value.
+        if (len(value) >= 2 and value[0] == value[-1]
+                and value[0] in ('"', "'")):
+            value = value[1:-1]
+        annotations[key] = value
+
+    return remaining, annotations
+
+
 def parse_rule_line(line: str) -> Optional[List[Tuple[RuleMetadata, ExprType, ExprType]]]:
     """
     Parse a single rule line, potentially returning multiple rules.
@@ -457,6 +550,15 @@ def parse_rule_line(line: str) -> Optional[List[Tuple[RuleMetadata, ExprType, Ex
     if not line or line.startswith('#'):
         return None
 
+    # Fast-exit if the line cannot be a rule line: rules always contain '=>'.
+    # This also guards _extract_annotation against stray '{' in non-rule input
+    # (e.g., JSON object lines passed by from_dsl accidentally).
+    if '=>' not in line:
+        return None
+
+    # Extract optional {key=val} annotation block (v0.7).
+    line, annotations = _extract_annotation(line)
+
     # Extract name, optional priority, and optional description if present
     base_name = None
     description = None
@@ -464,7 +566,7 @@ def parse_rule_line(line: str) -> Optional[List[Tuple[RuleMetadata, ExprType, Ex
 
     if line.startswith('@'):
         # Try format: @name[priority] "description": ...
-        match_obj = re.match(r'@([\w-]+)\[(\d+)\]\s+"([^"]+)":\s*(.+)', line)
+        match_obj = re.match(r'@([\w-]+)\[(\d+)\]\s+"([^"]+)"\s*:\s*(.+)', line)
         if match_obj:
             base_name = match_obj.group(1)
             priority = int(match_obj.group(2))
@@ -472,21 +574,21 @@ def parse_rule_line(line: str) -> Optional[List[Tuple[RuleMetadata, ExprType, Ex
             line = match_obj.group(4)
         else:
             # Try format: @name[priority]: ...
-            match_obj = re.match(r'@([\w-]+)\[(\d+)\]:\s*(.+)', line)
+            match_obj = re.match(r'@([\w-]+)\[(\d+)\]\s*:\s*(.+)', line)
             if match_obj:
                 base_name = match_obj.group(1)
                 priority = int(match_obj.group(2))
                 line = match_obj.group(3)
             else:
                 # Try format: @name "description": ...
-                match_obj = re.match(r'@([\w-]+)\s+"([^"]+)":\s*(.+)', line)
+                match_obj = re.match(r'@([\w-]+)\s+"([^"]+)"\s*:\s*(.+)', line)
                 if match_obj:
                     base_name = match_obj.group(1)
                     description = match_obj.group(2)
                     line = match_obj.group(3)
                 else:
                     # Try format: @name: ...
-                    match_obj = re.match(r'@([\w-]+):\s*(.+)', line)
+                    match_obj = re.match(r'@([\w-]+)\s*:\s*(.+)', line)
                     if match_obj:
                         base_name = match_obj.group(1)
                         line = match_obj.group(2)
@@ -547,6 +649,7 @@ def parse_rule_line(line: str) -> Optional[List[Tuple[RuleMetadata, ExprType, Ex
             tags=None,
             pattern=pattern,
             skeleton=skeleton,
+            category=annotations.get("category"),
         )
     else:
         # Single unidirectional rule
@@ -554,7 +657,8 @@ def parse_rule_line(line: str) -> Optional[List[Tuple[RuleMetadata, ExprType, Ex
             name=base_name,
             description=description,
             priority=priority,
-            condition=condition
+            condition=condition,
+            category=annotations.get("category"),
         )
         return [(metadata, pattern, skeleton)]
 

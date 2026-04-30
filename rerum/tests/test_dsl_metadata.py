@@ -1,0 +1,91 @@
+"""Tests for DSL `{category=X}` annotation parsing."""
+
+import pytest
+from rerum.engine import parse_rule_line, load_rules_from_dsl
+
+
+class TestSingleLineAnnotation:
+    def test_annotation_with_name_priority_description(self):
+        results = parse_rule_line(
+            '@add-zero[100] "x + 0 = x" {category=identity}: (+ ?x 0) => :x'
+        )
+        assert len(results) == 1
+        meta, pat, skel = results[0]
+        assert meta.name == "add-zero"
+        assert meta.priority == 100
+        assert meta.description == "x + 0 = x"
+        assert meta.category == "identity"
+
+    def test_annotation_with_name_only(self):
+        results = parse_rule_line(
+            '@distrib {category=distributivity}: (* ?x (+ ?y ?z)) => (+ (* :x :y) (* :x :z))'
+        )
+        assert len(results) == 1
+        meta, _, _ = results[0]
+        assert meta.name == "distrib"
+        assert meta.category == "distributivity"
+        assert meta.description is None
+
+    def test_annotation_with_name_and_description(self):
+        results = parse_rule_line(
+            '@r1 "desc" {category=cat}: (a ?x) => :x'
+        )
+        meta, _, _ = results[0]
+        assert meta.name == "r1"
+        assert meta.description == "desc"
+        assert meta.category == "cat"
+
+    def test_annotation_with_name_and_priority(self):
+        results = parse_rule_line(
+            '@r1[50] {category=cat}: (a ?x) => :x'
+        )
+        meta, _, _ = results[0]
+        assert meta.name == "r1"
+        assert meta.priority == 50
+        assert meta.category == "cat"
+
+    def test_anonymous_rule_with_annotation(self):
+        results = parse_rule_line(
+            '{category=fold-constant}: (* ?a:const ?b:const) => (! * :a :b)'
+        )
+        assert len(results) == 1
+        meta, _, _ = results[0]
+        assert meta.name is None
+        assert meta.category == "fold-constant"
+
+    def test_bidirectional_with_annotation(self):
+        results = parse_rule_line(
+            '@commute {category=commutativity}: (+ ?x ?y) <=> (+ :y :x)'
+        )
+        assert len(results) == 2  # fwd and rev
+        for meta, _, _ in results:
+            assert meta.category == "commutativity"
+
+    def test_quoted_value(self):
+        results = parse_rule_line(
+            '@r1 {category="multi word"}: (a ?x) => :x'
+        )
+        meta, _, _ = results[0]
+        assert meta.category == "multi word"
+
+    def test_whitespace_in_annotation(self):
+        results = parse_rule_line(
+            '@r1 { category = identity }: (a ?x) => :x'
+        )
+        meta, _, _ = results[0]
+        assert meta.category == "identity"
+
+    def test_no_annotation_still_parses(self):
+        results = parse_rule_line('@r1: (a ?x) => :x')
+        meta, _, _ = results[0]
+        assert meta.name == "r1"
+        assert meta.category is None
+
+    def test_unknown_annotation_key_raises(self):
+        with pytest.raises(ValueError, match="unknown annotation key"):
+            parse_rule_line('@r1 {ref="paper"}: (a ?x) => :x')
+
+    def test_malformed_annotation_raises(self):
+        # Missing closing brace
+        with pytest.raises(ValueError, match="malformed annotation"):
+            parse_rule_line('@r1 {category=identity: (a ?x) => :x')
