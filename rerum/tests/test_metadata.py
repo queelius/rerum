@@ -54,3 +54,86 @@ class TestRuleMetadataFields:
         assert m.tags == ["g1"]
         assert m.bidirectional is True
         assert m.direction == "fwd"
+
+
+class TestJSONLoaderNewFields:
+    def test_load_category(self):
+        from rerum.engine import load_rules_from_json
+        text = '{"rules": [{"name": "r1", "category": "identity",' \
+               ' "pattern": ["a", ["?", "x"]], "skeleton": [":", "x"]}]}'
+        rules = load_rules_from_json(text)
+        meta, _ = rules[0]
+        assert meta.category == "identity"
+
+    def test_load_reasoning(self):
+        from rerum.engine import load_rules_from_json
+        text = '{"rules": [{"name": "r1", "reasoning": "Because zero",' \
+               ' "pattern": ["a", ["?", "x"]], "skeleton": [":", "x"]}]}'
+        rules = load_rules_from_json(text)
+        meta, _ = rules[0]
+        assert meta.reasoning == "Because zero"
+
+    def test_load_examples(self):
+        from rerum.engine import load_rules_from_json
+        text = '{"rules": [{"name": "r1",' \
+               ' "examples": [{"in": "(a 5)", "out": "5"}],' \
+               ' "pattern": ["a", ["?", "x"]], "skeleton": [":", "x"]}]}'
+        rules = load_rules_from_json(text)
+        meta, _ = rules[0]
+        assert meta.examples == [{"in": "(a 5)", "out": "5"}]
+
+    def test_load_bidirectional_with_labels(self):
+        from rerum.engine import load_rules_from_json
+        text = '{"rules": [{"name": "assoc", "bidirectional": true,' \
+               ' "fwd_label": "regroup-right", "rev_label": "regroup-left",' \
+               ' "pattern": ["+", ["+", ["?", "x"], ["?", "y"]], ["?", "z"]],' \
+               ' "skeleton": ["+", [":", "x"], ["+", [":", "y"], [":", "z"]]]}]}'
+        rules = load_rules_from_json(text)
+        # Bidirectional yields fwd and rev pair.
+        assert len(rules) == 2
+        # Fwd metadata carries fwd_label; rev carries rev_label.
+        fwd_meta = next(m for m, _ in rules if m.direction == "fwd")
+        rev_meta = next(m for m, _ in rules if m.direction == "rev")
+        assert fwd_meta.fwd_label == "regroup-right"
+        assert rev_meta.rev_label == "regroup-left"
+
+    def test_load_unidirectional_with_label_raises(self):
+        from rerum.engine import load_rules_from_json
+        text = '{"rules": [{"name": "r1",' \
+               ' "fwd_label": "x", "bidirectional": false,' \
+               ' "pattern": ["a", ["?", "x"]], "skeleton": [":", "x"]}]}'
+        with pytest.raises(ValueError, match="fwd_label"):
+            load_rules_from_json(text)
+
+    def test_missing_new_fields_default_to_none_or_empty(self):
+        from rerum.engine import load_rules_from_json
+        text = '{"rules": [{"name": "r1",' \
+               ' "pattern": ["a", ["?", "x"]], "skeleton": [":", "x"]}]}'
+        rules = load_rules_from_json(text)
+        meta, _ = rules[0]
+        assert meta.category is None
+        assert meta.reasoning is None
+        # examples normalizes to [] (M1 fix); some callers may still see None
+        # if not normalized. Accept either.
+        assert meta.examples in (None, [])
+        assert meta.fwd_label is None
+        assert meta.rev_label is None
+
+    def test_unknown_fields_preserved_in_extra(self):
+        from rerum.engine import load_rules_from_json
+        text = '{"rules": [{"name": "r1", "weird_field": "value",' \
+               ' "pattern": ["a", ["?", "x"]], "skeleton": [":", "x"]}]}'
+        rules = load_rules_from_json(text)
+        meta, _ = rules[0]
+        assert meta.extra.get("weird_field") == "value"
+
+    def test_bidirectional_propagates_category(self):
+        from rerum.engine import load_rules_from_json
+        text = '{"rules": [{"name": "commute", "bidirectional": true,' \
+               ' "category": "commutativity",' \
+               ' "pattern": ["+", ["?", "x"], ["?", "y"]],' \
+               ' "skeleton": ["+", [":", "y"], [":", "x"]]}]}'
+        rules = load_rules_from_json(text)
+        # Both fwd and rev carry the category.
+        for meta, _ in rules:
+            assert meta.category == "commutativity"

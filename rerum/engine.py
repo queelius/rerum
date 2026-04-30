@@ -975,16 +975,49 @@ def load_rules_from_json(text: str) -> List[Tuple[RuleMetadata, List]]:
                     tags=rule.get('tags'),
                     pattern=pattern,
                     skeleton=skeleton,
+                    category=rule.get('category'),
                 )
+                fwd_label = rule.get('fwd_label')
+                rev_label = rule.get('rev_label')
+                reasoning = rule.get('reasoning')
+                examples = rule.get('examples')
                 for meta, pat, skel in pairs:
+                    if meta.direction == 'fwd':
+                        meta.fwd_label = fwd_label
+                    if meta.direction == 'rev':
+                        meta.rev_label = rev_label
+                    meta.reasoning = reasoning
+                    if examples is not None:
+                        meta.examples = examples
                     rules.append((meta, [pat, skel]))
                 continue
+
+            # Validate that fwd_label/rev_label are not set on unidirectional rules.
+            if rule.get('fwd_label') is not None or rule.get('rev_label') is not None:
+                raise ValueError(
+                    f"fwd_label/rev_label only valid on bidirectional rules; "
+                    f"got rule {rule.get('name')!r}"
+                )
+
+            # Known fields; everything else lands in `extra`.
+            known = {
+                'name', 'description', 'tags', 'priority', 'condition',
+                'bidirectional', 'pattern', 'skeleton',
+                'category', 'reasoning', 'examples',
+                'fwd_label', 'rev_label',
+            }
+            extra = {k: v for k, v in rule.items() if k not in known}
+
             metadata = RuleMetadata(
                 name=rule.get('name'),
                 description=rule.get('description'),
                 tags=rule.get('tags'),
                 priority=rule.get('priority', 0),
                 condition=rule.get('condition'),
+                category=rule.get('category'),
+                reasoning=rule.get('reasoning'),
+                examples=rule.get('examples'),
+                extra=extra or None,
             )
         else:
             metadata = RuleMetadata()
