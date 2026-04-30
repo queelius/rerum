@@ -115,3 +115,66 @@ class TestSingleLineAnnotation:
         assert meta.category == "foo"
         assert pat == ["a", ["?", "x"]]
         assert skel == [":", "x"]
+
+
+class TestMultiLineAnnotation:
+    def test_multi_line_annotation(self):
+        text = """
+@distrib {
+  category=distributivity
+}: (* ?x (+ ?y ?z)) => (+ (* :x :y) (* :x :z))
+"""
+        rules = load_rules_from_dsl(text)
+        assert len(rules) == 1
+        meta, _ = rules[0]
+        assert meta.name == "distrib"
+        assert meta.category == "distributivity"
+
+    def test_multi_line_with_priority_and_description(self):
+        text = """
+@assoc[50] "Associativity" {
+  category=associativity
+}: (+ (+ ?x ?y) ?z) <=> (+ :x (+ :y :z))
+"""
+        rules = load_rules_from_dsl(text)
+        assert len(rules) == 2  # fwd and rev
+        for meta, _ in rules:
+            assert meta.priority == 50
+            assert meta.category == "associativity"
+
+    def test_multi_line_compact_form_still_works(self):
+        text = """
+@r1 {category=cat}: (a ?x) => :x
+"""
+        rules = load_rules_from_dsl(text)
+        meta, _ = rules[0]
+        assert meta.category == "cat"
+
+    def test_multi_line_with_braces_in_quoted_value(self):
+        # Multi-line annotation with a `}` inside a quoted value should not
+        # terminate the block early.
+        text = '''
+@r1 {
+  category="has } inside"
+}: (a ?x) => :x
+'''
+        rules = load_rules_from_dsl(text)
+        meta, _ = rules[0]
+        assert meta.category == "has } inside"
+
+    def test_multi_line_with_other_rules(self):
+        # Multi-line block doesn't interfere with surrounding rules.
+        text = """
+@r1: (a ?x) => :x
+@r2 {
+  category=cat
+}: (b ?x) => :x
+@r3: (c ?x) => :x
+"""
+        rules = load_rules_from_dsl(text)
+        assert len(rules) == 3
+        names = [m.name for m, _ in rules]
+        assert names == ["r1", "r2", "r3"]
+        # Only r2 has a category.
+        cats = [m.category for m, _ in rules]
+        assert cats == [None, "cat", None]

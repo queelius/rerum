@@ -585,6 +585,77 @@ def _extract_annotation(header: str) -> Tuple[str, Dict[str, str]]:
     return remaining, annotations
 
 
+def _count_unbalanced_braces(line: str) -> int:
+    """Return ``open - close`` brace count for *line*, ignoring ``{``/``}``
+    inside s-expressions (paren depth > 0) and inside quoted strings.
+
+    A positive result means the line opens more braces than it closes; negative
+    means it closes more than it opens; zero means balanced (or no braces at all).
+    """
+    paren_depth = 0
+    open_count = 0
+    close_count = 0
+    in_quote: Optional[str] = None
+    for c in line:
+        if in_quote is not None:
+            if c == in_quote:
+                in_quote = None
+            continue
+        if c in ('"', "'"):
+            in_quote = c
+            continue
+        if c == '(':
+            paren_depth += 1
+        elif c == ')':
+            paren_depth -= 1
+        elif paren_depth == 0:
+            if c == '{':
+                open_count += 1
+            elif c == '}':
+                close_count += 1
+    return open_count - close_count
+
+
+def _join_multi_line_annotations(lines: List[str]) -> List[str]:
+    """Join lines so multi-line ``{ ... }`` annotation blocks become single-line
+    entries ready for ``parse_rule_line``.
+
+    A line that opens a ``{`` without a matching ``}`` on the same line (at
+    s-expression depth 0 and outside quoted strings) is joined with subsequent
+    lines until the matching ``}`` is found. The joined result is a single
+    space-separated string.
+    """
+    joined: List[str] = []
+    buffer: List[str] = []
+    open_depth = 0  # net unbalanced open braces accumulated so far
+
+    for line in lines:
+        delta = _count_unbalanced_braces(line)
+        if buffer:
+            buffer.append(line)
+            open_depth += delta
+            if open_depth <= 0:
+                # Block closed: emit the joined line and reset.
+                joined.append(' '.join(buffer))
+                buffer = []
+                open_depth = 0
+            continue
+
+        if delta > 0:
+            # This line starts a multi-line block.
+            buffer = [line]
+            open_depth = delta
+        else:
+            joined.append(line)
+
+    if buffer:
+        # Unbalanced at end of input; pass through so the downstream parser
+        # raises a clear error.
+        joined.append(' '.join(buffer))
+
+    return joined
+
+
 def parse_rule_line(line: str) -> Optional[List[Tuple[RuleMetadata, ExprType, ExprType]]]:
     """
     Parse a single rule line, potentially returning multiple rules.
@@ -773,7 +844,7 @@ def load_rules_from_dsl(
     if _included_files is None:
         _included_files = set()
 
-    for line in text.split('\n'):
+    for line in _join_multi_line_annotations(text.split('\n')):
         line_stripped = line.strip()
 
         # Check for group declaration: [groupname]
