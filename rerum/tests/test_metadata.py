@@ -338,3 +338,89 @@ class TestSidecarLoad:
         engine.load_metadata_json('{"r1": {"weird_field": "value"}}')
         _, meta = engine["r1"]
         assert meta.extra.get("weird_field") == "value"
+
+
+class TestAddRuleExtended:
+    def test_add_rule_with_category(self):
+        from rerum import RuleEngine
+        engine = RuleEngine()
+        engine.add_rule(
+            pattern=["a", ["?", "x"]],
+            skeleton=[":", "x"],
+            name="r1",
+            category="identity",
+        )
+        _, meta = engine["r1"]
+        assert meta.category == "identity"
+
+    def test_add_rule_with_reasoning(self):
+        from rerum import RuleEngine
+        engine = RuleEngine()
+        engine.add_rule(
+            pattern=["a", ["?", "x"]],
+            skeleton=[":", "x"],
+            name="r1",
+            reasoning="Because zero",
+        )
+        _, meta = engine["r1"]
+        assert meta.reasoning == "Because zero"
+
+    def test_add_rule_with_examples_validates(self):
+        from rerum import RuleEngine
+        engine = RuleEngine()
+        engine.add_rule(
+            pattern=["a", ["?", "x"]],
+            skeleton=[":", "x"],
+            name="r1",
+            examples=[{"in": "(a 5)", "out": "5"}],
+        )
+        _, meta = engine["r1"]
+        assert meta.examples == [{"in": "(a 5)", "out": "5"}]
+
+    def test_add_rule_bad_examples_raises(self):
+        from rerum import RuleEngine
+        from rerum import ExampleValidationError
+        engine = RuleEngine()
+        with pytest.raises(ExampleValidationError):
+            engine.add_rule(
+                pattern=["a", ["?", "x"]],
+                skeleton=[":", "x"],
+                name="r1",
+                examples=[{"in": "(a 5)", "out": "wrong"}],
+            )
+
+    def test_add_rule_validate_examples_false(self):
+        from rerum import RuleEngine
+        engine = RuleEngine()
+        # Should not raise even with bad example.
+        engine.add_rule(
+            pattern=["a", ["?", "x"]],
+            skeleton=[":", "x"],
+            name="r1",
+            examples=[{"in": "(a 5)", "out": "wrong"}],
+            validate_examples=False,
+        )
+
+    def test_add_rule_with_priority(self):
+        from rerum import RuleEngine
+        engine = RuleEngine()
+        engine.add_rule(
+            pattern=["a", ["?", "x"]],
+            skeleton=[":", "x"],
+            name="r1",
+            priority=42,
+        )
+        _, meta = engine["r1"]
+        assert meta.priority == 42
+
+    def test_add_rule_with_tags(self):
+        from rerum import RuleEngine
+        engine = RuleEngine()
+        engine.add_rule(
+            pattern=["a", ["?", "x"]],
+            skeleton=[":", "x"],
+            name="r1",
+            tags=["mygroup"],
+        )
+        _, meta = engine["r1"]
+        assert meta.tags == ["mygroup"]

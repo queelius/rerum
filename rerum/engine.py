@@ -1674,15 +1674,44 @@ class RuleEngine:
 
     def add_rule(self, pattern: ExprType, skeleton: ExprType,
                  name: Optional[str] = None,
-                 description: Optional[str] = None) -> 'RuleEngine':
-        """Add a single rule with optional metadata."""
+                 description: Optional[str] = None,
+                 priority: int = 0,
+                 condition: Optional[ExprType] = None,
+                 tags: Optional[List[str]] = None,
+                 category: Optional[str] = None,
+                 reasoning: Optional[str] = None,
+                 examples: Optional[List[Dict[str, Any]]] = None,
+                 validate_examples: bool = True) -> 'RuleEngine':
+        """Add a single rule with optional metadata.
+
+        v0.7 fields: ``category``, ``reasoning``, ``examples``. When
+        ``examples`` are provided and ``validate_examples`` is True
+        (default), each example is checked against the rule before
+        installation.
+
+        For bidirectional rule construction, use ``load_dsl``,
+        ``load_rules_from_json``, or ``_build_bidirectional_rules`` directly.
+        ``add_rule`` is for unidirectional rules only.
+        """
         rule = [pattern, skeleton]
+        metadata = RuleMetadata(
+            name=name,
+            description=description,
+            priority=priority,
+            condition=condition,
+            tags=tags,
+            category=category,
+            reasoning=reasoning,
+            examples=examples,
+        )
+        if validate_examples:
+            self._validate_rule_examples(rule, metadata)
         idx = len(self._rules)
         self._rules.append(rule)
-        metadata = RuleMetadata(name=name, description=description)
         self._metadata.append(metadata)
         if name:
             self._rule_names[name] = idx
+        self._sort_by_priority()
         self._simplifier = None
         return self
 
