@@ -1515,6 +1515,17 @@ class RuleEngine:
                 pattern, skeleton, metadata, example, self._fold_funcs or {}
             )
 
+    def validate_examples(self) -> None:
+        """Validate every example for every rule in the engine.
+
+        Raises ExampleValidationError on the first failing example. Useful
+        after a prelude change (rules loaded with validate_examples=False
+        when the prelude was not yet configured) or as an explicit audit
+        step before relying on rule documentation.
+        """
+        for rule, metadata in zip(self._rules, self._metadata):
+            self._validate_rule_examples(rule, metadata)
+
     def load_dsl(self, text: str, validate_examples: bool = True) -> 'RuleEngine':
         """Load rules from DSL text. Validates examples by default."""
         parsed = load_rules_from_dsl(text)

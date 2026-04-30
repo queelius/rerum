@@ -182,3 +182,55 @@ class TestLoaderValidation:
         # Should not raise.
         _, meta = engine["r1"]
         assert meta.category == "identity"
+
+
+class TestOnDemandValidation:
+    def test_validate_examples_walks_all_rules(self):
+        from rerum import RuleEngine
+        text = '''{"rules": [
+            {"name": "r1",
+             "pattern": ["a", ["?", "x"]], "skeleton": [":", "x"],
+             "examples": [{"in": "(a 5)", "out": "5"}]},
+            {"name": "r2",
+             "pattern": ["b", ["?", "x"]], "skeleton": [":", "x"],
+             "examples": [{"in": "(b 7)", "out": "7"}]}
+        ]}'''
+        engine = RuleEngine()
+        engine.load_rules_from_json(text)
+        # Should not raise; both rules' examples are valid.
+        engine.validate_examples()
+
+    def test_validate_examples_after_prelude_change(self):
+        # Load rules without a prelude; load with validate_examples=False
+        # because the example needs folding. Then set the prelude and
+        # call validate_examples().
+        from rerum import RuleEngine, ARITHMETIC_PRELUDE
+        text = '''{"rules": [{
+            "name": "fold-add",
+            "pattern": ["+", ["?c", "a"], ["?c", "b"]],
+            "skeleton": ["!", "+", [":", "a"], [":", "b"]],
+            "examples": [{"in": "(+ 2 3)", "out": "5"}]
+        }]}'''
+        engine = RuleEngine()
+        engine.load_rules_from_json(text, validate_examples=False)
+        # Without fold_funcs, validation would fail.
+        engine._fold_funcs = ARITHMETIC_PRELUDE
+        engine.validate_examples()  # should pass now
+
+    def test_validate_examples_raises_on_bad(self):
+        from rerum import RuleEngine
+        text = '''{"rules": [{
+            "name": "bad",
+            "pattern": ["a", ["?", "x"]], "skeleton": [":", "x"],
+            "examples": [{"in": "(a 1)", "out": "wrong"}]
+        }]}'''
+        engine = RuleEngine()
+        engine.load_rules_from_json(text, validate_examples=False)
+        with pytest.raises(ExampleValidationError):
+            engine.validate_examples()
+
+    def test_validate_examples_no_rules_with_examples_passes(self):
+        from rerum import RuleEngine
+        engine = RuleEngine.from_dsl('@r1: (a ?x) => :x')
+        # No examples on any rule; should be a no-op.
+        engine.validate_examples()
