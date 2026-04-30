@@ -45,6 +45,13 @@ The package is split into a *pure functional core* (`rewriter.py`) and a *high-l
 - Cost minimization: `minimize`, `OptimizationResult`, `expr_size`, `expr_depth`, `expr_ops`, `expr_atoms`, `make_op_cost_fn`, `COST_METRICS`.
 - Stochastic: `random_equivalent`, `sample_equivalents`, `random_walk`.
 - Tracing: `RewriteTrace`, `RewriteStep`. Engine sequencing: `SequencedEngine` via `>>`.
+- Metadata layer (v0.7): ``RuleMetadata`` carries ``category`` (free-form
+  string, populated via DSL ``{category=X}`` annotation or JSON),
+  ``reasoning`` (JSON only), ``examples`` (validated at load time, may
+  carry an optional ``direction`` field for bidirectional rules), and
+  ``fwd_label``/``rev_label`` (JSON only). ``ExampleValidationError``
+  raised on validation failure. ``engine.load_metadata_json()`` merges
+  a sidecar JSON file onto already-loaded rules.
 
 ### `cli.py`, the command-line interface
 - `RerumREPL` (interactive), `ScriptRunner` (`.rerum` files), one-shot via `-e`, pipe via stdin with `-q`.
@@ -96,6 +103,13 @@ The package is split into a *pure functional core* (`rewriter.py`) and a *high-l
   doesn't increment the counter). Anonymous rules without progress
   trigger the cap. Default cap is not currently configurable; future
   work may expose it.
+- **Examples validation needs the prelude**: rules whose examples use
+  ``(! op ...)`` compute forms require ``fold_funcs`` to be set before
+  the example is validated. Load with ``validate_examples=False`` if
+  loading rules before configuring the prelude, then call
+  ``engine.validate_examples()`` after the prelude is set. Default DSL
+  loaders validate eagerly, so an unconfigured prelude with examples
+  using fold ops will raise ``ExampleValidationError`` at load.
 - **Cancellation propagation**: ``ctx.cancel()`` from within a hook
   sets ``self._cancel_requested``. Strategy drivers
   (``_simplify_exhaustive``, ``_simplify_bottomup``, ``_simplify_topdown``)

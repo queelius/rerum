@@ -5,7 +5,34 @@ All notable changes to RERUM are documented here. Format follows
 [SemVer](https://semver.org/) with the caveat that while `0.x`, minor bumps
 may include breaking changes.
 
-## [Unreleased]
+## [0.7.0]
+
+### Added (metadata layer)
+- ``RuleMetadata`` gains four new fields: ``category`` (free-form string,
+  for LLM paraphrasing), ``reasoning`` (free text justification),
+  ``examples`` (list of ``{in, out}`` s-expression strings, validated on
+  load), and ``fwd_label``/``rev_label`` (direction semantics for
+  ``<=>`` rules).
+- DSL annotation ``{category=X}`` between description and colon.
+  Multi-line form supported. Closing-brace and quote handling robust to
+  edge cases.
+- JSON schema extends with the four new fields. Bidirectional rules carry
+  ``fwd_label``/``rev_label`` once on the source-rule entry; the loader
+  routes to the appropriate ``-fwd``/``-rev`` half. JSON roundtrip
+  preserves all four fields.
+- Examples validation at load time. Each engine loader (``load_dsl``,
+  ``load_file``, ``load_rules_from_json``, ``add_rule``) accepts a
+  ``validate_examples=True`` kwarg. ``engine.validate_examples()`` runs
+  on demand (useful after a prelude change).
+- ``ExampleValidationError`` raised on pattern mismatch, condition
+  failure, or output mismatch. Carries ``rule_name`` and the offending
+  example.
+- ``engine.load_metadata_json(text)`` merges a metadata-only sidecar
+  (shape: ``{rule_name: {field: value}}``) onto already-loaded rules.
+  Sidecar fills missing fields only; conflicts raise ``ValueError``.
+- ``add_rule`` extended to accept ``category``, ``reasoning``, ``examples``,
+  ``priority``, ``condition``, ``tags``, plus the ``validate_examples``
+  kwarg.
 
 ### Fixed
 - **Critical**: `simplify()` no longer raises `RecursionError` on bidirectional
