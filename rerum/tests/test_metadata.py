@@ -137,3 +137,33 @@ class TestJSONLoaderNewFields:
         # Both fwd and rev carry the category.
         for meta, _ in rules:
             assert meta.category == "commutativity"
+
+    def test_load_unidirectional_with_label_raises_when_bidirectional_absent(self):
+        # When bidirectional is omitted entirely, label fields are still rejected.
+        from rerum.engine import load_rules_from_json
+        text = '{"rules": [{"name": "r1", "fwd_label": "x",' \
+               ' "pattern": ["a", ["?", "x"]], "skeleton": [":", "x"]}]}'
+        with pytest.raises(ValueError, match="fwd_label"):
+            load_rules_from_json(text)
+
+    def test_bidirectional_unknown_fields_preserved_in_extra(self):
+        from rerum.engine import load_rules_from_json
+        text = '{"rules": [{"name": "commute", "bidirectional": true,' \
+               ' "weird_field": "value",' \
+               ' "pattern": ["+", ["?", "x"], ["?", "y"]],' \
+               ' "skeleton": ["+", [":", "y"], [":", "x"]]}]}'
+        rules = load_rules_from_json(text)
+        # Both fwd and rev should carry the extra field.
+        for meta, _ in rules:
+            assert meta.extra.get("weird_field") == "value"
+
+    def test_bidirectional_extras_are_independent_per_half(self):
+        # Mutating one half's extra dict should not affect the other.
+        from rerum.engine import load_rules_from_json
+        text = '{"rules": [{"name": "commute", "bidirectional": true,' \
+               ' "weird_field": "value",' \
+               ' "pattern": ["+", ["?", "x"], ["?", "y"]],' \
+               ' "skeleton": ["+", [":", "y"], [":", "x"]]}]}'
+        rules = load_rules_from_json(text)
+        rules[0][0].extra["new"] = "fwd-only"
+        assert "new" not in rules[1][0].extra

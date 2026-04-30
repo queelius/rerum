@@ -963,6 +963,20 @@ def load_rules_from_json(text: str) -> List[Tuple[RuleMetadata, List]]:
         if isinstance(rule, dict):
             pattern = rule['pattern']
             skeleton = rule['skeleton']
+
+            # Known fields list. Keep in sync with RuleMetadata.__init__
+            # parameters. Adding a new RuleMetadata field requires:
+            #   1. Add to RuleMetadata.__init__ (rerum/engine.py near line 326)
+            #   2. Add to this `known` set so it's not routed to `extra`
+            #   3. Read it from `rule.get(...)` and pass to RuleMetadata(...)
+            known = {
+                'name', 'description', 'tags', 'priority', 'condition',
+                'bidirectional', 'pattern', 'skeleton',
+                'category', 'reasoning', 'examples',
+                'fwd_label', 'rev_label',
+            }
+            extra = {k: v for k, v in rule.items() if k not in known}
+
             # Bidirectional rules are stored once (with bidirectional=true) and
             # expanded back into -fwd/-rev pairs at load time, mirroring the
             # `<=>` desugaring path. This makes JSON roundtrip stable.
@@ -989,6 +1003,8 @@ def load_rules_from_json(text: str) -> List[Tuple[RuleMetadata, List]]:
                     meta.reasoning = reasoning
                     if examples is not None:
                         meta.examples = examples
+                    if extra:
+                        meta.extra = dict(extra)  # one independent copy per half
                     rules.append((meta, [pat, skel]))
                 continue
 
@@ -999,15 +1015,6 @@ def load_rules_from_json(text: str) -> List[Tuple[RuleMetadata, List]]:
                     f"got rule {rule.get('name')!r}"
                 )
 
-            # Known fields; everything else lands in `extra`.
-            known = {
-                'name', 'description', 'tags', 'priority', 'condition',
-                'bidirectional', 'pattern', 'skeleton',
-                'category', 'reasoning', 'examples',
-                'fwd_label', 'rev_label',
-            }
-            extra = {k: v for k, v in rule.items() if k not in known}
-
             metadata = RuleMetadata(
                 name=rule.get('name'),
                 description=rule.get('description'),
@@ -1017,7 +1024,7 @@ def load_rules_from_json(text: str) -> List[Tuple[RuleMetadata, List]]:
                 category=rule.get('category'),
                 reasoning=rule.get('reasoning'),
                 examples=rule.get('examples'),
-                extra=extra or None,
+                extra=extra,
             )
         else:
             metadata = RuleMetadata()
