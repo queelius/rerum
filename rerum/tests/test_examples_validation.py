@@ -79,3 +79,24 @@ class TestValidateExampleHelper:
             _validate_example(pattern, skeleton, meta, example, fold_funcs={})
         assert exc_info.value.rule_name == "my-rule"
         assert exc_info.value.example == example
+
+    def test_missing_in_key_raises_validation_error(self):
+        meta = RuleMetadata(name="r1")
+        pattern = ["a", ["?", "x"]]
+        skeleton = [":", "x"]
+        with pytest.raises(ExampleValidationError, match="must be a dict"):
+            _validate_example(pattern, skeleton, meta, {"out": "x"}, fold_funcs={})
+
+    def test_missing_out_key_raises_validation_error(self):
+        meta = RuleMetadata(name="r1")
+        pattern = ["a", ["?", "x"]]
+        skeleton = [":", "x"]
+        with pytest.raises(ExampleValidationError, match="must be a dict"):
+            _validate_example(pattern, skeleton, meta, {"in": "(a 1)"}, fold_funcs={})
+
+    def test_non_dict_example_raises_validation_error(self):
+        meta = RuleMetadata(name="r1")
+        pattern = ["a", ["?", "x"]]
+        skeleton = [":", "x"]
+        with pytest.raises(ExampleValidationError, match="must be a dict"):
+            _validate_example(pattern, skeleton, meta, "not a dict", fold_funcs={})

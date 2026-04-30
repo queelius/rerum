@@ -343,6 +343,13 @@ def _validate_example(pattern, skeleton, metadata, example, fold_funcs):
     ``fold_funcs`` is the engine's prelude; needed for ``(! op ...)`` evaluation
     in skeletons or conditions.
     """
+    if not isinstance(example, dict) or "in" not in example or "out" not in example:
+        raise ExampleValidationError(
+            f"Rule {metadata.name!r}: example must be a dict with 'in' and 'out' keys; "
+            f"got {example!r}",
+            rule_name=metadata.name,
+            example=example,
+        )
     in_expr = parse_sexpr(example["in"])
     expected_out = parse_sexpr(example["out"])
 
