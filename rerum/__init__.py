@@ -79,6 +79,7 @@ from .engine import (
     RewriteTrace,
     EqualityProof,
     OptimizationResult,
+    ExampleValidationError,
     E,
     parse_sexpr,
     format_sexpr,
@@ -146,6 +147,7 @@ __all__ = [
     "RewriteTrace",
     "EqualityProof",
     "OptimizationResult",
+    "ExampleValidationError",
     # Expression builder
     "E",
     # DSL utilities

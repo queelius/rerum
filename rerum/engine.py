@@ -301,6 +301,80 @@ def _validate_pattern_structure(pattern: ExprType, *, where: str = "pattern") ->
         _validate_pattern_structure(child, where=where)
 
 
+class ExampleValidationError(ValueError):
+    """Raised when an example in a rule's metadata does not match the rule.
+
+    Carries ``rule_name``, ``example``, and a description of the mismatch
+    (pattern doesn't match, condition fails, or output mismatch).
+    """
+
+    def __init__(self, message: str, *, rule_name: Optional[str] = None,
+                 example: Optional[Dict] = None):
+        super().__init__(message)
+        self.rule_name = rule_name
+        self.example = example
+
+
+def _condition_truthy(result) -> bool:
+    """Truthiness rule for condition expressions.
+
+    Mirrors RuleEngine._check_condition's truthiness logic, but as a
+    standalone helper so it works without an engine instance.
+    """
+    if isinstance(result, bool):
+        return result
+    if isinstance(result, (int, float)):
+        return result != 0
+    if isinstance(result, str):
+        return len(result) > 0
+    if isinstance(result, list):
+        return len(result) > 0
+    return True
+
+
+def _validate_example(pattern, skeleton, metadata, example, fold_funcs):
+    """Validate one example against a rule. Raises ExampleValidationError on mismatch.
+
+    ``example`` is a dict with ``in`` (s-expr string), ``out`` (s-expr string),
+    and an optional ``direction`` field which is informational only; the
+    caller is responsible for selecting the right (pattern, skeleton)
+    pair for bidirectional rules.
+
+    ``fold_funcs`` is the engine's prelude; needed for ``(! op ...)`` evaluation
+    in skeletons or conditions.
+    """
+    in_expr = parse_sexpr(example["in"])
+    expected_out = parse_sexpr(example["out"])
+
+    bindings = _match_internal(pattern, in_expr)
+    if bindings is None:
+        raise ExampleValidationError(
+            f"Rule {metadata.name!r}: pattern does not match input "
+            f"{example['in']!r}",
+            rule_name=metadata.name,
+            example=example,
+        )
+
+    if metadata.condition is not None:
+        cond_result = instantiate(metadata.condition, bindings, fold_funcs)
+        if not _condition_truthy(cond_result):
+            raise ExampleValidationError(
+                f"Rule {metadata.name!r}: condition fails on input "
+                f"{example['in']!r}",
+                rule_name=metadata.name,
+                example=example,
+            )
+
+    actual = instantiate(skeleton, bindings, fold_funcs)
+    if actual != expected_out:
+        raise ExampleValidationError(
+            f"Rule {metadata.name!r}: input {example['in']!r} produced "
+            f"{format_sexpr(actual)!r}, expected {example['out']!r}",
+            rule_name=metadata.name,
+            example=example,
+        )
+
+
 def _strip_bidirectional_naming(meta: "RuleMetadata") -> Tuple[Optional[str], Optional[str]]:
     """Recover the ``(base_name, base_description)`` of a `<=>` source rule
     from its -fwd metadata entry. Used when emitting paired rules back
