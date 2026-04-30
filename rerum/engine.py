@@ -84,7 +84,15 @@ from .expr import (
 
 
 class RuleMetadata:
-    """Metadata for a rule including name, description, priority, condition, and v0.7 fields."""
+    """Metadata for a rule.
+
+    Beyond the original name/description/priority/tags/condition/bidirectional
+    fields, this carries v0.7 metadata: ``category`` (free-form label for
+    LLM paraphrasing), ``reasoning`` (free-text justification), ``examples``
+    (list of {in, out} s-expression strings, validated on load), and
+    ``fwd_label``/``rev_label`` (direction semantics for ``<=>`` rules,
+    surfaced through JSON only).
+    """
 
     def __init__(self, name: Optional[str] = None,
                  description: Optional[str] = None,
@@ -109,9 +117,9 @@ class RuleMetadata:
         self.extra = extra or {}  # Resolver-provided metadata (provenance, model, confidence)
         self.category = category  # Semantic category label (e.g. "identity", "commutativity")
         self.reasoning = reasoning  # Human-readable explanation of why the rule is valid
-        self.examples = examples  # List of {"in": ..., "out": ...} worked examples
-        self.fwd_label = fwd_label  # Override name suffix for the forward half of a <=> rule
-        self.rev_label = rev_label  # Override name suffix for the reverse half of a <=> rule
+        self.examples = examples if examples is not None else []  # List of {"in": ..., "out": ...} worked examples
+        self.fwd_label = fwd_label  # Direction-label metadata; surfaced via JSON in M5
+        self.rev_label = rev_label  # Direction-label metadata; surfaced via JSON in M5
 
     def __repr__(self) -> str:
         base = ""

@@ -13,9 +13,9 @@ class TestRuleMetadataFields:
         m = RuleMetadata()
         assert m.reasoning is None
 
-    def test_examples_defaults_to_none(self):
+    def test_examples_defaults_to_empty_list(self):
         m = RuleMetadata()
-        assert m.examples is None
+        assert m.examples == []
 
     def test_fwd_label_defaults_to_none(self):
         m = RuleMetadata()
