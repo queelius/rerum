@@ -2620,6 +2620,12 @@ class RuleEngine:
         ``<=>`` rule so that ``RuleEngine.from_dsl(engine.to_dsl())`` is a
         roundtrip-stable identity for bidirectional rules.
 
+        Note: ``to_dsl`` serializes only the fields the DSL syntax supports
+        (name, priority, description, category, condition, pattern,
+        skeleton). ``reasoning`` and ``examples`` are JSON-only metadata
+        and are silently omitted on DSL serialization. For lossless
+        roundtripping, use ``to_json``/``to_dict``.
+
         Args:
             name: Optional name to include as a comment header
 
@@ -2774,6 +2780,10 @@ class RuleEngine:
                 # Direction labels (fwd half carries fwd_label; rev half carries rev_label).
                 if meta.fwd_label is not None:
                     rule_dict["fwd_label"] = meta.fwd_label
+                assert i + 1 < len(self._metadata), (
+                    "bidirectional pair invariant violated: fwd at index "
+                    f"{i} has no rev half"
+                )
                 rev_meta = self._metadata[i + 1]
                 if rev_meta.rev_label is not None:
                     rule_dict["rev_label"] = rev_meta.rev_label

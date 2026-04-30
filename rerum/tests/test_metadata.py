@@ -246,3 +246,24 @@ class TestRoundtripNewFields:
         assert rule["fwd_label"] == "regroup-right"
         assert rule["rev_label"] == "regroup-left"
         assert rule["bidirectional"] is True
+
+    def test_to_dsl_omits_reasoning_and_examples(self):
+        # Documented: DSL syntax has no annotation for reasoning or examples.
+        # to_dsl is therefore lossy for those fields. to_json preserves them.
+        from rerum import RuleEngine
+        engine = RuleEngine.from_dsl('@r1 {category=cat}: (a ?x) => :x')
+        engine._metadata[0].reasoning = "because X"
+        engine._metadata[0].examples = [{"in": "(a 5)", "out": "5"}]
+
+        dsl = engine.to_dsl()
+        assert "reasoning" not in dsl
+        assert "(a 5)" not in dsl  # examples not in DSL
+        # category survives.
+        assert "{category=cat}" in dsl
+
+        # JSON preserves all three.
+        d = engine.to_dict()
+        rule = d["rules"][0]
+        assert rule["category"] == "cat"
+        assert rule["reasoning"] == "because X"
+        assert rule["examples"] == [{"in": "(a 5)", "out": "5"}]
