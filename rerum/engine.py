@@ -46,6 +46,7 @@ Tracing:
     Use RuleEngine.simplify(expr, trace=True) to see which rules are applied.
 """
 
+import inspect
 import json
 import random
 import re
@@ -136,6 +137,25 @@ class RuleMetadata:
         if self.condition:
             base += f" when {format_sexpr(self.condition)}"
         return base
+
+
+# Single source of truth for which keys name a RuleMetadata field. Derived from
+# the constructor signature so adding a field to RuleMetadata.__init__ updates
+# every loader automatically (no hand-maintained, drift-prone parallel sets).
+# ``extra`` is excluded: it is the catch-all bucket for *unknown* keys, not a
+# settable named field.
+_METADATA_FIELDS = frozenset(
+    name for name in inspect.signature(RuleMetadata.__init__).parameters
+    if name not in ("self", "extra")
+)
+
+# A metadata sidecar (load_metadata_json) may DESCRIBE a rule but not redefine
+# its identity or structure: name and the bidirectional/direction pairing are
+# off-limits. Everything else in _METADATA_FIELDS is mergeable. (priority is
+# mergeable but additionally guarded on bidirectional halves, where changing it
+# would split the stored -fwd/-rev pair; see load_metadata_json.)
+_SIDECAR_PROTECTED_FIELDS = frozenset({"name", "bidirectional", "direction"})
+_SIDECAR_MERGEABLE_FIELDS = _METADATA_FIELDS - _SIDECAR_PROTECTED_FIELDS
 
 
 class BidirectionalRule:
@@ -332,7 +352,8 @@ def _condition_truthy(result) -> bool:
     return True
 
 
-def _validate_example(pattern, skeleton, metadata, example, fold_funcs):
+def _validate_example(pattern, skeleton, metadata, example, fold_funcs,
+                      undefined_op_resolver=None, fold_error_resolver=None):
     """Validate one example against a rule. Raises ExampleValidationError on mismatch.
 
     ``example`` is a dict with ``in`` (s-expr string), ``out`` (s-expr string),
@@ -341,7 +362,9 @@ def _validate_example(pattern, skeleton, metadata, example, fold_funcs):
     pair for bidirectional rules.
 
     ``fold_funcs`` is the engine's prelude; needed for ``(! op ...)`` evaluation
-    in skeletons or conditions.
+    in skeletons or conditions. ``undefined_op_resolver``/``fold_error_resolver``
+    are the engine's hook bridges, threaded through so that validation evaluates
+    ``(! op ...)`` exactly as live rewriting would (matching ``_check_condition``).
     """
     if not isinstance(example, dict) or "in" not in example or "out" not in example:
         raise ExampleValidationError(
@@ -363,7 +386,9 @@ def _validate_example(pattern, skeleton, metadata, example, fold_funcs):
         )
 
     if metadata.condition is not None:
-        cond_result = instantiate(metadata.condition, bindings, fold_funcs)
+        cond_result = instantiate(metadata.condition, bindings, fold_funcs,
+                                  undefined_op_resolver=undefined_op_resolver,
+                                  fold_error_resolver=fold_error_resolver)
         if not _condition_truthy(cond_result):
             raise ExampleValidationError(
                 f"Rule {metadata.name!r}: condition fails on input "
@@ -372,7 +397,9 @@ def _validate_example(pattern, skeleton, metadata, example, fold_funcs):
                 example=example,
             )
 
-    actual = instantiate(skeleton, bindings, fold_funcs)
+    actual = instantiate(skeleton, bindings, fold_funcs,
+                         undefined_op_resolver=undefined_op_resolver,
+                         fold_error_resolver=fold_error_resolver)
     if actual != expected_out:
         raise ExampleValidationError(
             f"Rule {metadata.name!r}: input {example['in']!r} produced "
@@ -668,6 +695,73 @@ def _extract_annotation(header: str) -> Tuple[str, Dict[str, str]]:
         annotations[key] = value
 
     return remaining, annotations
+
+
+def _format_annotation_value(value: str) -> str:
+    """Render an annotation value so it round-trips through ``_extract_annotation``.
+
+    The DSL annotation grammar splits pairs on ``,`` and terminates the block at
+    ``}`` (both respected inside quotes), and trims surrounding whitespace from
+    bare values. So a value containing any of those — or surrounding whitespace,
+    or a leading quote — must be quoted. The grammar has no escape mechanism, so
+    we pick whichever quote character is absent from the value (preferring ``"``).
+    A value containing *both* quote characters cannot be represented losslessly;
+    we fall back to double quotes (consistent with the documented limitation).
+    """
+    needs_quote = (
+        value == ""
+        or value != value.strip()
+        or any(ch in value for ch in (",", "{", "}", "\"", "'"))
+    )
+    if not needs_quote:
+        return value
+    if '"' not in value:
+        return f'"{value}"'
+    if "'" not in value:
+        return f"'{value}'"
+    return f'"{value}"'
+
+
+def _format_dsl_header(name: Optional[str], priority: int,
+                       description: Optional[str],
+                       category: Optional[str]) -> str:
+    """Build the ``@name[priority] "description" {category=...}: `` DSL header
+    prefix shared by the ``=>`` and ``<=>`` serialization branches.
+
+    Returns ``""`` for an anonymous, category-less rule.
+    """
+    if name:
+        hdr = f"@{name}"
+        if priority != 0:
+            hdr += f"[{priority}]"
+        if description:
+            hdr += f" \"{description}\""
+        if category is not None:
+            hdr += f" {{category={_format_annotation_value(category)}}}"
+        return hdr + ": "
+    if category is not None:
+        return f"{{category={_format_annotation_value(category)}}}: "
+    return ""
+
+
+def _emit_metadata_fields(rule_dict: Dict, meta: "RuleMetadata") -> None:
+    """Append the v0.7 descriptive metadata (``category``/``reasoning``/
+    ``examples``) plus any resolver-provided ``extra`` keys onto a serialized
+    rule dict. Shared by the unidirectional and bidirectional branches of
+    ``_rules_as_dicts`` so the two stay in lock-step.
+
+    ``extra`` is emitted last via ``setdefault`` so it can never clobber a known
+    field (by construction ``extra`` only holds keys outside the known set, but
+    ``setdefault`` keeps that guarantee local and obvious).
+    """
+    if meta.category is not None:
+        rule_dict["category"] = meta.category
+    if meta.reasoning is not None:
+        rule_dict["reasoning"] = meta.reasoning
+    if meta.examples:
+        rule_dict["examples"] = meta.examples
+    for key, value in meta.extra.items():
+        rule_dict.setdefault(key, value)
 
 
 def _count_unbalanced_braces(line: str) -> int:
@@ -1045,17 +1139,11 @@ def load_rules_from_json(text: str) -> List[Tuple[RuleMetadata, List]]:
             pattern = rule['pattern']
             skeleton = rule['skeleton']
 
-            # Known fields list. Keep in sync with RuleMetadata.__init__
-            # parameters. Adding a new RuleMetadata field requires:
-            #   1. Add to RuleMetadata.__init__ (rerum/engine.py near line 326)
-            #   2. Add to this `known` set so it's not routed to `extra`
-            #   3. Read it from `rule.get(...)` and pass to RuleMetadata(...)
-            known = {
-                'name', 'description', 'tags', 'priority', 'condition',
-                'bidirectional', 'pattern', 'skeleton',
-                'category', 'reasoning', 'examples',
-                'fwd_label', 'rev_label',
-            }
+            # Known keys = the RuleMetadata fields (derived from its signature,
+            # see _METADATA_FIELDS) plus the two structural keys a raw rule dict
+            # carries. Anything else is routed to `extra`. Adding a field to
+            # RuleMetadata.__init__ updates this automatically.
+            known = _METADATA_FIELDS | {'pattern', 'skeleton'}
             extra = {k: v for k, v in rule.items() if k not in known}
 
             # Bidirectional rules are stored once (with bidirectional=true) and
@@ -1083,7 +1171,10 @@ def load_rules_from_json(text: str) -> List[Tuple[RuleMetadata, List]]:
                         meta.rev_label = rev_label
                     meta.reasoning = reasoning
                     if examples is not None:
-                        meta.examples = examples
+                        # Independent list per half (mirrors the dict(extra)
+                        # copy below); a shared list would let mutating one
+                        # half's examples silently mutate the other.
+                        meta.examples = list(examples)
                     if extra:
                         meta.extra = dict(extra)  # one independent copy per half
                     rules.append((meta, [pat, skel]))
@@ -1512,7 +1603,9 @@ class RuleEngine:
                 # This example is not for this half of the bidirectional pair.
                 continue
             _validate_example(
-                pattern, skeleton, metadata, example, self._fold_funcs or {}
+                pattern, skeleton, metadata, example, self._fold_funcs or {},
+                undefined_op_resolver=self._undefined_op_resolver,
+                fold_error_resolver=self._fold_error_resolver,
             )
 
     def validate_examples(self) -> None:
@@ -1532,12 +1625,15 @@ class RuleEngine:
 
         The JSON shape is ``{rule_name: {field: value, ...}}``. Each top-level
         key must match an ``@name`` already in the engine. Each inner field
-        merges onto the existing RuleMetadata: only fields that are currently
-        None (or empty list, for examples) are filled. A conflict (sidecar
-        tries to set a field already set on the rule with a different value)
-        raises ValueError. Setting the same value is harmless.
+        merges onto the existing RuleMetadata: a field is filled only if it is
+        still at its constructor default; trying to overwrite an already-set
+        field with a different value raises ValueError (setting the same value
+        is harmless). Identity/structure fields (``name``, ``bidirectional``,
+        ``direction``) may not be set via a sidecar, and ``priority`` may not be
+        set on a bidirectional half (it would split the stored -fwd/-rev pair).
 
-        Unknown fields land in ``RuleMetadata.extra``.
+        Unknown fields land in ``RuleMetadata.extra`` and are conflict-checked
+        the same way. A filled ``priority`` re-sorts the engine.
 
         After merging, examples are validated by default (validate_examples
         kwarg).
@@ -1549,15 +1645,9 @@ class RuleEngine:
                 "sidecar JSON must be an object mapping name -> metadata"
             )
 
-        # Known RuleMetadata field names. Mirror the ``known`` set in
-        # load_rules_from_json. Adding a new field requires updating this
-        # set so it is not routed to extra.
-        known_fields = {
-            "name", "description", "tags", "priority", "condition",
-            "bidirectional", "direction",
-            "category", "reasoning", "examples",
-            "fwd_label", "rev_label",
-        }
+        reference = RuleMetadata()  # constructor defaults; "unset" == equals this
+        priority_touched = False
+        changed = False
 
         for rule_name, fields in data.items():
             if rule_name not in self._rule_names:
@@ -1568,69 +1658,103 @@ class RuleEngine:
             metadata = self._metadata[idx]
 
             for field, value in fields.items():
-                if field not in known_fields:
+                # B7: identity/structure fields are not sidecar-settable.
+                if field in _SIDECAR_PROTECTED_FIELDS:
+                    raise ValueError(
+                        f"sidecar may not set structural field {field!r} "
+                        f"on rule {rule_name!r}"
+                    )
+                # Direction labels are only meaningful on bidirectional rules
+                # (mirrors load_rules_from_json's rejection on => rules).
+                if (field in ("fwd_label", "rev_label")
+                        and not metadata.bidirectional):
+                    raise ValueError(
+                        f"{field} only valid on bidirectional rules; "
+                        f"got rule {rule_name!r}"
+                    )
+                # Changing one half's priority would split the stored -fwd/-rev
+                # pair under re-sort; set priority on the source rule instead.
+                if field == "priority" and metadata.bidirectional:
+                    raise ValueError(
+                        f"priority cannot be set via sidecar on bidirectional "
+                        f"rule {rule_name!r}; set it on the source rule"
+                    )
+
+                if field not in _SIDECAR_MERGEABLE_FIELDS:
+                    # B6: unknown -> extra, conflict-checked like known fields
+                    # so a second sidecar can't silently overwrite.
+                    if field in metadata.extra and metadata.extra[field] != value:
+                        raise ValueError(
+                            f"sidecar conflict on rule {rule_name!r} extra "
+                            f"field {field!r}: existing={metadata.extra[field]!r}, "
+                            f"sidecar={value!r}"
+                        )
                     metadata.extra[field] = value
                     continue
+
+                # B1: a field is "unset" (fillable) iff it still holds its
+                # constructor default; a different already-set value conflicts.
+                # This makes falsy defaults like priority=0 fillable instead of
+                # spuriously conflicting.
                 existing = getattr(metadata, field)
-                # Treat empty list as "not set" for examples (M1 normalised
-                # examples=None to []; this lets sidecar fill it).
-                is_empty = (existing is None
-                            or (isinstance(existing, list) and not existing))
-                if not is_empty:
+                if existing != getattr(reference, field):
                     if existing != value:
                         raise ValueError(
                             f"sidecar conflict on rule {rule_name!r} "
                             f"field {field!r}: existing={existing!r}, "
                             f"sidecar={value!r}"
                         )
-                    # Same value; harmless.
-                    continue
+                    continue  # same value; harmless
+                # Preserve the "examples is always a list" invariant (B5):
+                # a sidecar `examples: null` normalises to [] like __init__.
+                if field == "examples" and value is None:
+                    value = []
                 setattr(metadata, field, value)
+                changed = True
+                if field == "priority":
+                    priority_touched = True
 
             if validate_examples:
                 self._validate_rule_examples(self._rules[idx], metadata)
 
+        # priority is the one mergeable field that affects firing order; re-sort
+        # when it changed, and drop the cached simplifier on any change.
+        if priority_touched:
+            self._sort_by_priority()
+        if changed:
+            self._simplifier = None
+        return self
+
+    def _install(self, parsed, validate_examples: bool = False) -> 'RuleEngine':
+        """Single insertion point for every loader.
+
+        Append each already-parsed ``(metadata, rule)`` pair (optionally
+        validating its examples first), then re-sort by priority — which also
+        rebuilds the name index from scratch — and invalidate the cached
+        simplifier. Centralising this keeps the four public loaders and
+        ``add_rule`` from drifting apart.
+        """
+        for metadata, rule in parsed:
+            if validate_examples:
+                self._validate_rule_examples(rule, metadata)
+            self._rules.append(rule)
+            self._metadata.append(metadata)
+        self._sort_by_priority()  # rebuilds self._rule_names from self._metadata
+        self._simplifier = None   # Invalidate cached simplifier
         return self
 
     def load_dsl(self, text: str, validate_examples: bool = True) -> 'RuleEngine':
         """Load rules from DSL text. Validates examples by default."""
-        parsed = load_rules_from_dsl(text)
-        for metadata, rule in parsed:
-            if validate_examples:
-                self._validate_rule_examples(rule, metadata)
-            idx = len(self._rules)
-            self._rules.append(rule)
-            self._metadata.append(metadata)
-            if metadata.name:
-                self._rule_names[metadata.name] = idx
-        self._sort_by_priority()
-        self._simplifier = None  # Invalidate cached simplifier
-        return self
+        return self._install(load_rules_from_dsl(text), validate_examples)
 
     def load_file(self, path: Union[str, Path],
                   validate_examples: bool = True) -> 'RuleEngine':
         """Load rules from a file (.rules or .json). Validates examples by default."""
-        parsed = load_rules_from_file(path)
-        for metadata, rule in parsed:
-            if validate_examples:
-                self._validate_rule_examples(rule, metadata)
-            idx = len(self._rules)
-            self._rules.append(rule)
-            self._metadata.append(metadata)
-            if metadata.name:
-                self._rule_names[metadata.name] = idx
-        self._sort_by_priority()
-        self._simplifier = None
-        return self
+        return self._install(load_rules_from_file(path), validate_examples)
 
     def load_rules(self, rules: List[List]) -> 'RuleEngine':
         """Load rules from a Python list (without metadata)."""
-        for rule in rules:
-            self._rules.append(rule)
-            self._metadata.append(RuleMetadata())
-        self._sort_by_priority()
-        self._simplifier = None
-        return self
+        return self._install([(RuleMetadata(), rule) for rule in rules])
 
     def load_rules_from_json(self, text: str,
                              validate_examples: bool = True) -> 'RuleEngine':
@@ -1639,18 +1763,7 @@ class RuleEngine:
         The module-level ``load_rules_from_json`` function is pure (no
         validation); this engine method is the validation entry point.
         """
-        parsed = load_rules_from_json(text)
-        for metadata, rule in parsed:
-            if validate_examples:
-                self._validate_rule_examples(rule, metadata)
-            idx = len(self._rules)
-            self._rules.append(rule)
-            self._metadata.append(metadata)
-            if metadata.name:
-                self._rule_names[metadata.name] = idx
-        self._sort_by_priority()
-        self._simplifier = None
-        return self
+        return self._install(load_rules_from_json(text), validate_examples)
 
     def with_prelude(self, fold_funcs: FoldFuncsType) -> 'RuleEngine':
         """
@@ -1704,16 +1817,7 @@ class RuleEngine:
             reasoning=reasoning,
             examples=examples,
         )
-        if validate_examples:
-            self._validate_rule_examples(rule, metadata)
-        idx = len(self._rules)
-        self._rules.append(rule)
-        self._metadata.append(metadata)
-        if name:
-            self._rule_names[name] = idx
-        self._sort_by_priority()
-        self._simplifier = None
-        return self
+        return self._install([(metadata, rule)], validate_examples)
 
     def get_rule(self, name: str) -> Optional[Tuple[List, RuleMetadata]]:
         """Get a rule and its metadata by name."""
@@ -1814,26 +1918,12 @@ class RuleEngine:
         if condition is None:
             return True
 
-        # Instantiate the condition with bindings
+        # Instantiate the condition with bindings, then apply the shared
+        # truthiness rule (bool as-is; 0/""/[] falsy; everything else truthy).
         result = instantiate(condition, bindings, self._fold_funcs,
                              undefined_op_resolver=self._undefined_op_resolver,
                              fold_error_resolver=self._fold_error_resolver)
-
-        # Check truthiness
-        # Numbers: 0 is falsy
-        # Strings: empty is falsy
-        # Lists: empty is falsy
-        # Booleans: as expected
-        if isinstance(result, bool):
-            return result
-        if isinstance(result, (int, float)):
-            return result != 0
-        if isinstance(result, str):
-            return len(result) > 0
-        if isinstance(result, list):
-            return len(result) > 0
-        # Default: truthy
-        return True
+        return _condition_truthy(result)
 
     def source_rules(self) -> Iterator[Union["BidirectionalRule", "UnidirectionalRule"]]:
         """Iterate the engine's rules as a sequence of *source* rules.
@@ -2890,20 +2980,8 @@ class RuleEngine:
             if _is_bidirectional_pair(self._metadata, i):
                 base_name, base_description = _strip_bidirectional_naming(meta)
                 arrow = "<=>"
-                if base_name:
-                    hdr = f"@{base_name}"
-                    if meta.priority != 0:
-                        hdr += f"[{meta.priority}]"
-                    if base_description:
-                        hdr += f" \"{base_description}\""
-                    if meta.category is not None:
-                        hdr += f" {{category={meta.category}}}"
-                    hdr += ": "
-                else:
-                    if meta.category is not None:
-                        hdr = f"{{category={meta.category}}}: "
-                    else:
-                        hdr = ""
+                hdr = _format_dsl_header(base_name, meta.priority,
+                                         base_description, meta.category)
                 rule_str = f"{hdr}{pattern_str} {arrow} {skeleton_str}"
                 if meta.condition:
                     rule_str += f" when {format_sexpr(meta.condition)}"
@@ -2911,21 +2989,8 @@ class RuleEngine:
                 i += 2
                 continue
 
-            if meta.name:
-                hdr = f"@{meta.name}"
-                if meta.priority != 0:
-                    hdr += f"[{meta.priority}]"
-                if meta.description:
-                    hdr += f" \"{meta.description}\""
-                if meta.category is not None:
-                    hdr += f" {{category={meta.category}}}"
-                hdr += ": "
-            else:
-                if meta.category is not None:
-                    hdr = f"{{category={meta.category}}}: "
-                else:
-                    hdr = ""
-
+            hdr = _format_dsl_header(meta.name, meta.priority,
+                                     meta.description, meta.category)
             rule_str = f"{hdr}{pattern_str} => {skeleton_str}"
             if meta.condition:
                 rule_str += f" when {format_sexpr(meta.condition)}"
@@ -3002,13 +3067,7 @@ class RuleEngine:
                     rule_dict["condition"] = meta.condition
                 if meta.tags:
                     rule_dict["tags"] = meta.tags
-                # v0.7 metadata fields.
-                if meta.category is not None:
-                    rule_dict["category"] = meta.category
-                if meta.reasoning is not None:
-                    rule_dict["reasoning"] = meta.reasoning
-                if meta.examples:
-                    rule_dict["examples"] = meta.examples
+                _emit_metadata_fields(rule_dict, meta)
                 # Direction labels (fwd half carries fwd_label; rev half carries rev_label).
                 if meta.fwd_label is not None:
                     rule_dict["fwd_label"] = meta.fwd_label
@@ -3037,13 +3096,7 @@ class RuleEngine:
                 rule_dict["condition"] = meta.condition
             if meta.tags:
                 rule_dict["tags"] = meta.tags
-            # v0.7 metadata fields.
-            if meta.category is not None:
-                rule_dict["category"] = meta.category
-            if meta.reasoning is not None:
-                rule_dict["reasoning"] = meta.reasoning
-            if meta.examples:
-                rule_dict["examples"] = meta.examples
+            _emit_metadata_fields(rule_dict, meta)
             rules_list.append(rule_dict)
             i += 1
 
