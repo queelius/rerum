@@ -347,3 +347,21 @@ class TestGuardUndefinedOp:
             .load_dsl("@ok: (f ?x) => (g :x) when (! const? :x)"))
         assert engine(E("(f 5)")) == ["g", 5]
         assert engine(E("(f y)")) == ["f", "y"]
+
+    def test_registered_resolver_defers_guard_to_runtime(self):
+        """A registered on_undefined_op resolver suppresses the raise and the
+        guard evaluates normally (this is the LLM-rule-inference path)."""
+        from rerum.hooks import Resolution
+        engine = (RuleEngine()
+            .with_prelude(PREDICATE_PRELUDE)
+            .load_dsl("@r: (f ?x) => (g :x) when (! my-pred? :x)"))
+
+        @engine.on_undefined_op
+        def resolver(op, args, ctx):
+            if op == "my-pred?":
+                return Resolution(fold_funcs={"my-pred?": lambda xs: isinstance(xs[0], (int, float))})
+            return None
+
+        # Guard op supplied by the resolver: no raise. Truthy on a number, falsy on a symbol.
+        assert engine(E("(f 5)")) == ["g", 5]
+        assert engine(E("(f y)")) == ["f", "y"]
