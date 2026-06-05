@@ -319,3 +319,31 @@ class TestRealWorldGuards:
 
         # Complex expression doesn't get squared (not a simple var)
         assert engine(E("(* (+ a b) (+ a b))")) == ["*", ["+", "a", "b"], ["+", "a", "b"]]
+
+
+class TestGuardUndefinedOp:
+    """A guard referencing an op absent from the active prelude must raise."""
+
+    def test_undefined_op_guard_raises(self):
+        """An undefined op in a guard raises ValueError rather than passing truthy."""
+        engine = (RuleEngine()
+            .with_prelude(PREDICATE_PRELUDE)
+            .load_dsl("@bad: (f ?x) => (g :x) when (! no-such-op? :x)"))
+        with pytest.raises(ValueError, match="undefined op"):
+            engine(E("(f 5)"))
+
+    def test_nested_undefined_op_guard_raises(self):
+        """An undefined op nested inside a decidable head still raises."""
+        engine = (RuleEngine()
+            .with_prelude(PREDICATE_PRELUDE)
+            .load_dsl("@bad: (f ?x) => (g :x) when (! and (! const? :x) (! mystery? :x))"))
+        with pytest.raises(ValueError, match="undefined op"):
+            engine(E("(f 5)"))
+
+    def test_defined_op_guard_does_not_raise(self):
+        """A guard whose ops are all in the prelude evaluates normally."""
+        engine = (RuleEngine()
+            .with_prelude(PREDICATE_PRELUDE)
+            .load_dsl("@ok: (f ?x) => (g :x) when (! const? :x)"))
+        assert engine(E("(f 5)")) == ["g", 5]
+        assert engine(E("(f y)")) == ["f", "y"]

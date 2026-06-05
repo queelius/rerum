@@ -57,6 +57,7 @@ from typing import List, Tuple, Optional, Dict, Union, Iterator, Set, Callable, 
 from .rewriter import (
     rewriter, match as _match_internal, instantiate, ExprType,
     FoldFuncsType, ARITHMETIC_PRELUDE, Bindings, NoMatch, _NoMatch, wrap_bindings,
+    skeleton_compute,
 )
 from .hooks import (
     _HookRegistry,
@@ -1918,12 +1919,55 @@ class RuleEngine:
         if condition is None:
             return True
 
+        # Guards must be decidable: every (! op ...) compute node in the
+        # condition must reference an op the engine can fold. An op absent
+        # from the active prelude (and not supplied by a resolver) would
+        # otherwise leave an unfolded compound that _condition_truthy reads
+        # as truthy, silently passing a bogus guard. Raise instead.
+        undefined = self._undefined_guard_ops(condition)
+        if undefined:
+            raise ValueError(
+                f"guard references undefined op {sorted(undefined)!r}; "
+                f"guards must be decidable (add the op to the prelude)"
+            )
+
         # Instantiate the condition with bindings, then apply the shared
         # truthiness rule (bool as-is; 0/""/[] falsy; everything else truthy).
         result = instantiate(condition, bindings, self._fold_funcs,
                              undefined_op_resolver=self._undefined_op_resolver,
                              fold_error_resolver=self._fold_error_resolver)
         return _condition_truthy(result)
+
+    def _undefined_guard_ops(self, condition: ExprType) -> set:
+        """Return the set of compute-op names in ``condition`` that the
+        engine cannot decide.
+
+        Walks every ``(! op ...)`` node. An op is undecidable when it is
+        absent from the active prelude and no ``undefined_op_resolver``
+        can supply it. The resolver, when present, is treated as able to
+        supply any op (it is consulted lazily during instantiation), so a
+        configured resolver suppresses the raise and defers to runtime.
+        """
+        undefined = set()
+
+        has_resolver = self._hooks.count("undefined_op") > 0
+
+        def walk(node):
+            if not isinstance(node, list) or not node:
+                return
+            if skeleton_compute(node):
+                op = node[1]
+                if (op not in (self._fold_funcs or {})
+                        and not has_resolver):
+                    undefined.add(op)
+                for arg in node[2:]:
+                    walk(arg)
+                return
+            for child in node:
+                walk(child)
+
+        walk(condition)
+        return undefined
 
     def source_rules(self) -> Iterator[Union["BidirectionalRule", "UnidirectionalRule"]]:
         """Iterate the engine's rules as a sequence of *source* rules.
