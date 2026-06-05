@@ -38,3 +38,44 @@ class TestFreeOfPredicate:
             .with_prelude(PREDICATE_PRELUDE)
             .load_dsl("@check: (q ?f ?v) => yes when (! free-of? :f :v)"))
         assert engine(E("(q 7 x)")) == "yes"
+
+
+class TestFreeBindingOrder:
+    """The ?x:free(v) tag must be checked against the FINAL resolved bindings."""
+
+    def test_free_left_of_var_does_not_match(self):
+        """The documented failing case: (dd ?f:free(v) ?v:var) must NOT match (dd (sin x) x)."""
+        from rerum.rewriter import match
+        from rerum.engine import parse_sexpr
+        pat = parse_sexpr("(dd ?f:free(v) ?v:var)")
+        exp = parse_sexpr("(dd (sin x) x)")
+        assert match(pat, exp) is None
+
+    def test_free_left_of_var_matches_when_truly_free(self):
+        """The same pattern still matches when f is genuinely free of the bound v."""
+        from rerum.rewriter import match
+        from rerum.engine import parse_sexpr
+        pat = parse_sexpr("(dd ?f:free(v) ?v:var)")
+        exp = parse_sexpr("(dd (sin y) x)")
+        b = match(pat, exp)
+        assert b is not None
+        assert b.to_dict() == {"f": ["sin", "y"], "v": "x"}
+
+    def test_free_right_of_var_still_works(self):
+        """When v is bound to the LEFT of ?free, the legacy ordering still rejects/accepts correctly."""
+        from rerum.rewriter import match
+        from rerum.engine import parse_sexpr
+        pat = parse_sexpr("(g ?v:var ?f:free(v))")
+        assert match(pat, parse_sexpr("(g x (sin x))")) is None
+        b = match(pat, parse_sexpr("(g x (sin y))"))
+        assert b is not None
+        assert b.to_dict() == {"v": "x", "f": ["sin", "y"]}
+
+    def test_free_of_compound_excluded_var(self):
+        """If the excluded var resolves to a non-symbol, free-of is treated structurally."""
+        from rerum.rewriter import match
+        from rerum.engine import parse_sexpr
+        pat = parse_sexpr("(dd ?f:free(v) ?v:var)")
+        b = match(pat, parse_sexpr("(dd 5 x)"))
+        assert b is not None
+        assert b.to_dict() == {"f": 5, "v": "x"}
