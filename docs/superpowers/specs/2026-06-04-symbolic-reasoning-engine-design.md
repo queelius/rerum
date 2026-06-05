@@ -1,363 +1,479 @@
-# RERUM as a Traceable Symbolic-Reasoning Engine
+# RERUM as a Traceable General-Purpose Rewriting Engine
 
-**Date:** 2026-06-04
-**Status:** Design approved, pending spec review
-**Scope:** One unified vision spec; implementation is phased (plans per phase).
+**Date:** 2026-06-04 (revised 2026-06-05)
+**Status:** Design approved, revised for the general-engine principle
+**Scope:** One unified vision spec for the general engine. Implementation is
+phased (plans per phase). Calculus appears throughout ONLY as a worked example
+that exercises the general machinery; it is never engine code.
+
+## 0. The General-Engine Principle (the hard constraint)
+
+RERUM is a general term-rewriting engine. It rewrites s-expression terms by
+matching patterns and applying rules. That is the whole of what the engine
+knows.
+
+No particular domain is ever hardcoded in the engine. Differentiation,
+integration, limits, boolean algebra, lambda calculus, logic, type checking,
+peephole compiler optimization: every one of these is expressed entirely as
+DATA that the engine consumes:
+
+- **Rules** (`=>` and `<=>`) carrying metadata, examples, categories, reasoning.
+- **Theories**: declarations of which operators are associative/commutative and
+  their identity/annihilator elements (data, not code; see Section 5.2).
+- **Preludes**: bundles of fold functions (the existing extension point for
+  computable operations like `+`, `sin`, `const?`). Preludes are general; they
+  are named by what they compute (arithmetic, math, predicates), never by a
+  domain.
+- **Domain configs**: when a workflow needs a driver (which search goal) or a
+  checker (how to numerically validate a result), those are supplied by the
+  caller as data/callables, not baked into the engine.
+
+The test for every line of `rerum/` core code: if you mentally swap "calculus"
+for "boolean algebra," does the engine code change? If yes, the design is wrong.
+The engine must not contain the words `dd`, `int`, `lim`, `and`, `or`, or any
+other domain operator as a special case. Those are operator symbols that appear
+only in rule files under `examples/`.
+
+Consequences enforced by this spec:
+
+- Every calculus artifact (rules, theory declaration, domain checker) lives
+  under `examples/`, shipped as a demonstration, exactly like the existing
+  `examples/algebra.rules`. None of it is importable engine capability.
+- Engine modules expose GENERAL machinery parameterized by data: normalization
+  takes a theory; search takes a goal predicate; the numeric evaluator takes a
+  prelude; the corpus generator takes a driver and a checker.
+- Where the previous draft named things by domain (a "CALCULUS_PRELUDE", a
+  "verify_derivative" in core), this revision removes the domain name from the
+  engine and pushes the domain content out to `examples/`.
 
 ## 1. Motivation
 
-RERUM is a term-rewriting engine over s-expression nested lists. Today it can
-differentiate basic expressions and simplify algebra, but three limitations
-block it from being a vehicle for high-quality symbolic-reasoning training data:
+RERUM rewrites terms deterministically against a rule library. Three general
+limitations block it from being a first-class reasoning tool and a source of
+high-quality "show your work" training data:
 
 1. **Traces lose the reasoning.** A `RewriteStep` keeps only
    `(rule_index, metadata, before, after)`, where `before`/`after` are the
-   *local subtree*, not the whole expression. The matching `bindings` (the
+   local subtree, not the whole expression. The matching `bindings` (the
    substitution that justifies a step) and the redex `path` are computed and
    discarded. `prove_equal`/`equivalents`/`minimize` return bare expression
-   chains with no rule labels, so the sequence of rules that proves an equality
-   is unrecoverable. None of this is usable as "show your work" data.
+   chains with no rule labels, so the rule sequence that proves an equality is
+   unrecoverable.
 
 2. **Simplification is weak.** Matching is strictly positional (verified:
-   `(+ a ?y)` does not match `(+ b a)`); there is no normal form. Derivative
-   output is verbose cruft that cannot be cleaned up without combinatorial
-   `minimize`.
+   `(+ a ?y)` does not match `(+ b a)`), and there is no normal form, so any
+   rule set over commutative operators must spell out every ordering by hand.
 
-3. **Only differentiation exists, and partially.** No integration, no limits.
-   Two correctness bugs and a corruption footgun sit in the calculus-relevant
-   paths.
+3. **No goal-directed search and no agent surface.** Directed rewriting
+   (`simplify`) cannot back out of a wrong move, so non-confluent rule sets
+   cannot be solved; and there is no structured, NL-explainable interface for an
+   LLM agent to drive the engine.
 
-The goal is a single coherent system where differentiation, integration, and
-limits are all solved by one goal-directed search over the rewrite graph, every
-step is self-justifying and situated, and the solution path renders directly to
-both machine-checkable and natural-language training records.
+All three are GENERAL deficiencies of the engine. Fixing them makes every rule
+set better, calculus included. Calculus is simply the worked example this spec
+uses to demonstrate and test the fixes, because it produces rich, verifiable,
+interpretable derivations.
 
 ## 2. Goals and Non-Goals
 
-**Goals**
+**Goals (all general engine capabilities)**
 
 - A trace model where each step is self-contained (rule identity, direction,
   bindings, redex path, guard result, rationale) and the whole-expression
-  derivation is reconstructible.
-- A canonical normal form that makes commuted/associated forms converge, with
-  the normalization steps themselves visible in the trace.
-- A unified goal-directed search that reduces `dd`, `int`, and `lim` operators.
-- Complete single- and multi-variable differentiation; table+search-driven
-  integration; substitution/L'Hopital/known-limit evaluation of limits.
-- Exact rational arithmetic.
-- A training-data emitter producing verifiable JSONL and natural-language
-  chain-of-thought, both projected from one structured trace, with a numeric
-  verifier as a quality filter.
+  derivation is reconstructible; labeled paths for `prove_equal`/`equivalents`/
+  `minimize`.
+- Theory-driven canonical normalization (associative/commutative flattening,
+  ordering, like-term collection) parameterized by a declared theory.
+- Goal-directed search (`solve`) as an escalation above directed rewriting,
+  with the goal predicate supplied by the caller.
+- General supporting primitives: fresh-variable generation, exact rationals, a
+  numeric evaluator over a prelude, a `free-of?` predicate, two engine bug
+  fixes.
+- A trace-to-text and trace-to-record layer (NL prose and structured JSONL)
+  that operates on any derivation, domain-agnostic.
+- An MCP server that exposes the general engine to LLM agents (authoring,
+  applying, proving, explaining, goal-solving).
 
-**Non-Goals (this spec)**
+**Non-Goals**
 
-- Symbolic linear algebra, ODEs, series expansions beyond what limits need.
-- A general CAS-grade simplifier (Groebner bases, factorization over fields).
-- Performance tuning beyond budgeted termination; correctness and trace quality
-  come first.
-- A UI. Output is files (JSONL, prose) and the Python API.
+- Any domain capability hardcoded in `rerum/` core. Calculus, boolean algebra,
+  logic, etc. are example rule sets, never engine code (Section 0).
+- A general CAS (factorization over fields, Groebner bases).
+- Performance tuning beyond budgeted termination.
+- A GUI. Files (rules, JSONL, prose) and the Python API and the MCP are the
+  surfaces; humans use the existing CLI.
 
-## 3. Architecture Overview
+## 3. Architecture: engine vs content
 
-Four layers over a unified search spine:
-
-```
-Layer 4  Training-data emitter   (structured JSONL + NL prose + numeric verify)
-Layer 3  Calculus rule sets      (differentiation / integration / limits)
-Layer 2  Engine extensions       (normal form, search, fresh vars, rationals,
-                                   free-of?, prelude, bug fixes)
-Layer 1  Trace foundation        (situated self-contained steps; labeled paths)
-                                  |
-                          single-step rewrite
-                       (rule + direction + bindings + path)
-```
-
-The single-step rewrite is the first-class unit. `_all_single_rewrites` already
-generates whole-expression neighbors carrying `rule_idx`, `bindings`, and the
-redex position, then throws the labels away. Keeping those labels is what powers
-both rich tracing and search-as-solving.
-
-## 4. Layer 1: Trace Foundation
-
-### 4.1 Step model
-
-`RewriteStep` gains fields (additive; existing `before`/`after` retained for
-back-compat and continue to mean the local redex):
-
-| Field | Meaning |
-|-------|---------|
-| `rule_id` | Stable identity: the rule `name`, else a content hash of `(pattern, skeleton)`. Robust to the post-desugar index churn that makes `rule_index` brittle. |
-| `direction` | `"fwd"`/`"rev"`/`None`, surfaced for bidirectional rules. |
-| `bindings` | The match substitution, serialized via `Bindings.to_dict()`. |
-| `path` | List of child indices locating the redex within the root expression. |
-| `before_redex`, `after_redex` | The local subtree before/after (aliases of legacy `before`/`after`). |
-| `kind` | `"rule"` (a named rewrite), `"normalize"` (flatten/sort/collect), or `"fold"` (constant folding). |
-| `guard` | When the rule had a condition: the instantiated condition and its boolean result. |
-| `rationale` | `RuleMetadata.reasoning`/`category`, carried for the NL renderer. |
-
-### 4.2 Path threading and global reconstruction
-
-The strategy drivers (`_simplify_exhaustive`, `_bottomup_pass`,
-`_topdown_pass`) already recurse child-by-child. Thread an accumulating `path`
-(parent path + child index) into the recursion and stamp it on each emitted
-step. `expr_path` already exists on `HookContext` but is always passed empty;
-populate it from the same source.
-
-The whole-expression sequence is reconstructed, not stored per step:
-`RewriteTrace.to_global_sequence()` starts from `initial` and, for each step,
-splices `after_redex` at `path` to yield `before_root`/`after_root`. This is
-lossless and avoids threading the root through every recursion frame.
-
-### 4.3 Labeled search paths
-
-`_all_single_rewrites` returns labeled edges (expression plus the
-`rule_id`/`direction`/`bindings`/`path` that produced it). The search methods
-record the edge label on the parent pointer:
-
-- `prove_equal`: `visited_a`/`visited_b` store the producing edge, so
-  `reconstruct_path` returns labeled steps. `EqualityProof.path_a`/`path_b`
-  become lists of `RewriteStep`, and `to_dict()` emits the rule sequence.
-- `equivalents`/`enumerate_equivalents`/`minimize`/`random_walk`: each can
-  report how a member was reached.
-- `minimize`: `OptimizationResult` gains the derivation path from original to
-  minimum.
-
-### 4.4 Serialization
-
-`RewriteStep.to_dict()` emits the full situated record (including
-`rule_id`, `direction`, `bindings`, `path`, `kind`, `guard`, `rationale`).
-`RewriteTrace.to_dict()` gains a `global_sequence` option. A step is then
-independently checkable by an external verifier without holding the rule set,
-provided `rule_id` resolves (the emitter can optionally inline the rule's
-pattern/skeleton).
-
-## 5. Layer 2: Engine Extensions
-
-### 5.1 Canonical normal form (`normalize.py`)
-
-A separate, traceable normalization pass:
-
-- **Flatten** nested associative operators: `(+ (+ a b) c)` becomes
-  `(+ a b c)`; likewise `*`. The representation becomes n-ary for `+`/`*`.
-  Linearity rules use the existing `?rest...` rest-pattern and `:rest...`
-  splice (e.g. `(dd (+ ?f ?rest...) ?v) => (+ (dd :f :v) (dd (+ :rest...) :v))`).
-- **Sort** commutative operands by a total order (constants first, then
-  variables lexicographically, then compounds by a structural key). Deterministic.
-- **Collect like terms**: in a flattened sorted `+`, combine `x + x` into
-  `(* 2 x)` and `c1*x + c2*x` into `((c1+c2)*x)`; in `*`, combine `x * x` into
-  `(^ x 2)` and `x^a * x^b` into `x^(a+b)`.
-- **Constant fold** remaining literal subexpressions.
-
-Each sub-step emits a `kind="normalize"` trace step so simplification is
-explained rather than opaque. Normalization is idempotent and confluent by
-construction (sort + collect yields a unique representative).
-
-### 5.2 Goal-directed search (`solve.py`)
-
-Generalize the existing bidirectional BFS into a best-first search:
+Two strictly separated parts.
 
 ```
-solve(expr, goal_predicate, *, cost_fn=expr_size, max_nodes=10000,
-      fresh_vars=True) -> SolveResult(solution, derivation) | None
+============================  GENERAL ENGINE (rerum/)  ============================
+  trace.py        situated steps, labeled paths, global reconstruction, to_prose
+  normalize.py    theory-driven AC normalization machinery (takes a Theory)
+  solve.py        goal-directed search (takes a goal predicate)
+  rewriter.py     match/instantiate (+ fresh vars, rationals, free-of?, bug fixes)
+  numeval.py      numeric evaluation of a ground term under a prelude
+  training.py     trace -> JSONL record and trace -> prose (domain-agnostic)
+  engine.py       RuleEngine: load/apply/prove/minimize/solve, theory wiring
+  mcp/            agent-facing server exposing the above (general)
+=================================  DOMAIN CONTENT (examples/)  ====================
+  algebra.rules            (exists)        boolean.rules (illustrative)
+  differentiation.rules    + theory + checker, as a worked example
+  integration.rules        limits.rules
+  *.theory.json            operator signatures (which ops are AC, identities)
+  *_checker.py             numeric domain validators built on numeval (data/config)
+==================================================================================
 ```
 
-- `goal_predicate(expr) -> bool`: e.g. `lambda e: not contains_op(e, {"int", "lim"})`.
-- Best-first by `cost_fn` (reuses `optimize.py` metrics), budgeted by
-  `max_nodes` expanded (mirrors `prove_equal(max_expressions=...)`, with the
-  same default-budget caution); emits `max_depth` on exhaustion and returns
-  `None` rather than a partial result.
-- Returns the labeled derivation (a `RewriteTrace`), including, optionally, the
-  branches explored but not on the solution path (valuable as "search" training
-  data).
+Everything above the line is domain-agnostic and is the engineering work.
+Everything below the line is data and demonstration. A new domain (say, boolean
+algebra) is added by writing files below the line and changing nothing above it.
 
-Differentiation typically reduces deterministically (the `dd` rules are
-near-confluent once normalized); integration and limits use the search with
-backtracking.
+The single-step rewrite remains the first-class unit. `_all_single_rewrites`
+already generates whole-expression neighbors carrying rule, bindings, and redex
+position; keeping those labels is what powers both rich tracing and search.
 
-### 5.3 Fresh variables
+## 4. Directed-first, search-as-escalation
 
-A deterministic skeleton form `(fresh u)` resolves to the smallest gensym of the
-form `u`, `u1`, `u2`, ... not free in the current expression. Being a pure
-function of the expression keeps the rewrite deterministic and therefore
-traceable. Used by u-substitution and integration-by-parts rules.
+A rule set is solved by directed rewriting (`simplify`, the existing fixpoint
+driver) when it is confluent: applying matching rules in any order reaches the
+same result, so a greedy driver never needs to reconsider. Search is needed only
+for non-confluent rule sets, where solving requires trying a move and backing
+out of dead ends.
 
-### 5.4 Exact rationals
+The engine therefore offers two general drivers:
 
-Introduce `fractions.Fraction` as a first-class numeric value:
+- `simplify(expr, ...)`: greedy fixpoint (exists). The default. Handles every
+  confluent rule set.
+- `solve(expr, goal_predicate, ...)`: best-first search over the rewrite graph,
+  stopping when the goal predicate holds, budgeted, with backtracking. The
+  escalation for non-confluent rule sets.
 
-- `safe_div`/`nary_fold` return `Fraction` when the exact result is non-integral
-  over integer inputs; `Fraction` collapses to `int` when whole.
-- `parse_sexpr`/`format_sexpr` render a rational as `(/ p q)` (still valid
-  s-expr), and recognize an integer-ratio compound as a literal where useful.
-- The float-renarrowing in `instantiate`/`try_constant_fold` is extended to keep
-  `Fraction` exact rather than coercing to float.
+Neither driver knows any domain. `solve`'s goal is a caller-supplied predicate
+(for the calculus example: "no `int`/`lim` operator remains"; for a boolean
+example it might be "is a literal" or "is in CNF").
 
-### 5.5 Predicates, prelude, and bug fixes
+This is also exactly how the MCP agentic loop behaves: try `simplify`, and when
+the engine is stuck, escalate (to `solve`, or to asking the agent for a rule).
 
-- Add a `free-of?` guard predicate: `(! free-of? :f v)` is true when symbol `v`
-  does not occur in `:f`. This replaces the fragile pattern tag for guard use.
-- Fix the `?x:free(v)` binding-order bug: evaluate free-ness against the fully
-  resolved bindings (so `v` bound to the right of the `?free` pattern is seen),
-  or deprecate the tag in favor of the guard predicate, documenting the change.
-- Fix the guard-on-undefined-op footgun: a guard that references an op absent
-  from the active prelude raises (guards must be decidable) rather than
-  evaluating to a truthy unfolded compound. This closes the silent
-  list-concatenation corruption path.
-- Ship a combined `CALCULUS_PRELUDE` = math functions + predicates + `free-of?`
-  + `fresh`, so calculus rule files load with one correct prelude.
+## 5. General engine components
 
-### 5.6 The two pre-existing bugs
+### 5.1 Trace foundation (`rerum/trace.py`)
 
-The `?x:free(v)` binding-order bug and the guard-on-undefined-op corruption are
-fixed in Phase 0 (they are independent of the larger work and unblock safe rule
-authoring).
+`RewriteStep` gains keyword fields (additive; existing `before`/`after` retained
+and aliasing the redex-local edit): `rule_id` (stable: name, else content hash
+of pattern+skeleton), `direction` ('fwd'/'rev'/None), `bindings`
+(`Bindings.to_dict()` form), `path` (child-index path to the redex in the root),
+`kind` ('rule' | 'normalize' | 'fold'), `guard` (the instantiated condition and
+its result, or None), `rationale` (`metadata.reasoning`/`category`).
 
-## 6. Layer 3: Calculus Rule Sets
+`RewriteStep.to_dict()` emits all fields. trace.py adds pure helpers
+`rule_identity(metadata, pattern, skeleton)` and `splice_at(root, path,
+subtree)`, plus `RewriteTrace.to_global_sequence()` (replay from `initial`,
+splicing each step's `after` at `path`, yielding whole-expression
+`before_root`/`after_root` per step) and `to_dict(global_sequence=False)`.
 
-Each rule set ships with curated, load-validated `examples` metadata (using the
-v0.7 metadata layer), so rules are self-documenting and machine-checked.
+Strategy drivers thread an accumulating `path`; `HookContext.expr_path` (today
+always `[]`) is populated from it. `_all_single_rewrites` returns labeled edges;
+`prove_equal`/`equivalents`/`minimize` carry the label on parent pointers;
+`EqualityProof.path_a`/`path_b` become `List[RewriteStep]`; `OptimizationResult`
+gains `.derivation`.
 
-### 6.1 Differentiation (`differentiation.rules`)
+All of this is domain-agnostic: a step records what rule fired where with what
+bindings, for any rule.
 
-Extends the current `dd` set to completeness:
+### 5.2 Theory-driven normalization (`rerum/normalize.py`)
 
-- Inverse trig: `asin`, `acos`, `atan`.
-- Hyperbolic: `sinh`, `cosh`, `tanh`.
-- `sec`, `csc`, `cot` (and consume the `sec` that `tan`'s derivative emits).
-- `sqrt` as a first-class form.
-- General power `f^g` (exponent contains the variable) via logarithmic
-  differentiation: `d/dx f^g = f^g * (g' * ln f + g * f'/f)`.
-- `a^x` (constant base), `log_b`.
-- Partial derivatives w.r.t. multiple variables via the `free-of?` guard
-  (a subexpression free of the differentiation variable differentiates to 0).
+This is the subtle place the general principle bites. Flattening `(+ (+ a b) c)`
+to `(+ a b c)` and sorting commutative operands requires knowing that `+` is
+associative and commutative with identity `0`. That knowledge must be DATA, not
+hardcoded.
 
-### 6.2 Integration (`integration.rules`)
+Introduce a `Theory` (operator signature), declared as data:
 
-`(int f x)` operator, reduced by the Layer 2 search:
+```
+Theory({
+  "+": {"ac": true, "identity": 0},
+  "*": {"ac": true, "identity": 1, "annihilator": 0},
+})
+```
 
-- Linearity (sum, constant multiple), power rule (`int x^n = x^(n+1)/(n+1)`,
-  n != -1), `int 1/x = ln|x|`, `int e^x`, `int sin/cos`, and a table of standard
-  forms.
-- u-substitution and integration-by-parts as rules that introduce `(fresh u)`
-  and rely on the search to close (reduce to an int-free form) or backtrack.
-- Guards gate applicability (e.g. by-parts only when the integrand is a product).
+The engine ships NO built-in theory naming `+`/`*`. A theory is loaded from a
+`*.theory.json` (data, under `examples/` for the calculus/algebra demo) or
+constructed by the caller. `normalize.py` is parameterized by it:
 
-### 6.3 Limits (`limits.rules`)
+```
+flatten(expr, theory) -> ExprType
+ORDER_KEY(expr) -> tuple                      # total order, structural, domain-free
+canonical_sort(expr, theory) -> ExprType      # sorts operands of ac operators
+collect_like_terms(expr, theory) -> ExprType  # uses identities from the theory
+normalize(expr, theory, *, listener=None) -> ExprType   # to fixpoint; emits kind="normalize" steps
+```
 
-`(lim f x a)` operator:
+`ORDER_KEY` is a structural total order (numbers, then symbols, then compounds
+by head and recursively by args); it embeds no domain knowledge. Like-term
+collection (`x + x -> (* 2 x)`) is expressed in terms of the theory's identities
+and the two ac operators it names, so it works for any AC pair, not just
+arithmetic. An empty theory makes `normalize` the identity function.
 
-- Direct substitution when continuous at `a`.
-- Indeterminate-form detection (0/0, inf/inf) gating L'Hopital, which reuses the
-  differentiator: `lim f/g = lim f'/g'`.
-- Known limits (e.g. `lim_{x->0} sin x / x = 1`).
-- Algebraic manipulation (factor/cancel) via the search.
+`RuleEngine` optionally holds a theory (`with_theory(theory)`); `simplify` and
+`solve` normalize between steps when a theory is set, and not at all when it is
+not. No theory is the default.
 
-## 7. Layer 4: Training-Data Emitter
+### 5.3 Goal-directed search (`rerum/solve.py`)
 
-- `trace.to_training_record()`: structured JSONL
-  `{problem, operator, steps:[{kind, rule_id, rationale, before_root,
-  after_root, bindings, path, guard}], answer, verified}`. Each step is
-  independently re-checkable. The per-step `before_root`/`after_root` are
-  supplied by the emitter joining each redex-local step with the whole-expression
-  states from `to_global_sequence()` (Section 4.2); the in-memory step itself
-  stores only the redex-local edit plus its path.
-- `trace.to_prose()`: chain-of-thought natural language, a projection of the
-  structured trace using rule rationale/category plus a per-`kind` template
-  (e.g. "Applying the product rule d/dx(f g) = f' g + f g', we get ..."). Because
-  prose is derived from the structured form, the two cannot drift.
-- **Numeric verifier**: differentiation checked by evaluating df/dx numerically
-  at sampled points and comparing; integration by differentiating the result and
-  matching the integrand; limits by numeric approach to `a`. Each derivation is
-  tagged `verified`, giving a quality filter for a training corpus.
-- A `corpus` generator: given a set of problems, produce verified derivation
-  records (structured + prose).
+```
+class SolveResult: solution; derivation: RewriteTrace; explored: int; found: bool
+solve(engine, expr, goal_predicate, *, cost_fn=expr_size, max_nodes=10000,
+      fresh_vars=True, normalize_between=True) -> SolveResult
+contains_op(expr, ops: set) -> bool           # a convenience predicate builder, domain-free
+```
 
-## 8. Module and File Plan
+Best-first over labeled single-step rewrites (Section 5.1), stop when
+`goal_predicate(node)` holds, budget `max_nodes`, fire `max_depth` on
+exhaustion and return `found=False` (never a partial result). Engine wrapper
+`RuleEngine.solve(expr, goal_predicate, **kw)`. `contains_op` is a generic
+helper for building "no operator X remains" goals; it is not tied to any
+operator.
 
-New modules:
+### 5.4 Fresh variables (`rerum/rewriter.py`)
 
-- `rerum/normalize.py`: canonical normal form (flatten, sort, collect, fold).
-- `rerum/solve.py`: goal-directed best-first search and `SolveResult`.
-- `rerum/training.py`: emitter (structured record, prose renderer, corpus).
-- `rerum/verify.py`: numeric verification of derivations.
+A skeleton form `["fresh", base]` resolves during `instantiate` to the smallest
+of `base, base+"1", ...` not free in the whole expression being built
+(deterministic). Helpers `gensym(base, avoid)` and `free_symbols(expr)`. General:
+any rule set whose rewrites must introduce a new symbol (substitution-style
+rules in any domain) can use it.
 
-Extended modules:
+### 5.5 Exact rationals (`rerum/rewriter.py`, `rerum/expr.py`)
 
-- `rerum/trace.py`: richer `RewriteStep`, `to_global_sequence`, fuller `to_dict`.
-- `rerum/engine.py`: path threading, labeled `_all_single_rewrites`, labeled
-  proof/equivalence paths, `solve` entry point, prelude wiring, bug fixes.
-- `rerum/rewriter.py`: `free-of?` predicate, `fresh` form, `Fraction` support in
-  fold builders and renarrowing, `?x:free(v)` fix.
-- `rerum/expr.py`: `Fraction` parse/format.
+A central `coerce_number(x)` normalizes int/float/`fractions.Fraction`
+(Fraction with denominator 1 collapses to int; a Fraction is never silently
+floated). `safe_div`/`nary_fold` return exact `Fraction` for non-integral exact
+integer results; `format_sexpr(Fraction(p,q))` renders `["/", p, q]`. General
+numeric capability; no domain knowledge.
 
-New rule/example files:
+### 5.6 Numeric evaluator (`rerum/numeval.py`)
+
+```
+numeval(expr, env: dict, prelude) -> number        # evaluate a ground term
+numeric_equiv(a, b, sampler, prelude, *, samples=8, tol=1e-6) -> bool
+```
+
+`numeval` interprets a variable-free (after `env` substitution) term using the
+fold functions in `prelude`. `numeric_equiv` samples variable assignments and
+checks two expressions evaluate equal. Both are GENERAL: they validate that a
+rewrite or a claimed equality is numerically sound for any expressions over a
+prelude. Domain-specific validators (for example, "is this the derivative of
+that?") are NOT here; they are domain content (Section 6.3) that calls these
+primitives.
+
+### 5.7 Predicates, prelude bundles, bug fixes (`rerum/rewriter.py`, `engine.py`)
+
+- `free-of?` fold predicate: `(! free-of? f v)` true iff symbol `v` does not
+  occur in `f`. Added to `PREDICATE_PRELUDE`. General.
+- Fix the `?x:free(v)` binding-order bug: evaluate the free-of check against the
+  final resolved bindings. General matcher correctness.
+- Fix the guard-on-undefined-op footgun: a guard that does not fully fold (its
+  head is an undefined op) raises, rather than evaluating truthy. General guard
+  correctness.
+- Prelude bundles are named by computation, never by domain. The existing
+  `MATH_PRELUDE` and `PREDICATE_PRELUDE` already follow this. A rule set that
+  needs both simply documents that it requires `{**MATH_PRELUDE,
+  **PREDICATE_PRELUDE}`; the engine provides a helper to combine preludes
+  (`combine_preludes(*ps)`), but ships no domain-named bundle. (The previous
+  draft's `CALCULUS_PRELUDE` is removed.)
+
+### 5.8 Trace-to-text and trace-to-record (`rerum/training.py`)
+
+```
+to_training_record(trace, *, problem, operator, answer, verified=None) -> dict
+to_prose(trace) -> str
+generate_corpus(engine, problems, *, driver, checker=None) -> Iterator[dict]
+```
+
+`to_training_record` and `to_prose` operate on a `RewriteTrace` and know nothing
+about any domain: a step renders from its `kind`, `rule_id`, `rationale`, and
+the global before/after. `to_prose` is a deterministic projection of the
+structured trace (per-`kind` templates plus `rationale`), so prose and record
+cannot drift.
+
+`generate_corpus` is parameterized: `driver` is a callable
+`(engine, problem) -> (answer, trace)` (for the calculus demo, a small adapter
+that runs `simplify` for `dd` and `solve` for `int`/`lim`), and `checker` is an
+optional callable `(problem, answer) -> bool` (the domain validator). The engine
+supplies the corpus MACHINERY; the domain supplies the driver and checker as
+data. No operator names appear in `training.py`.
+
+### 5.9 MCP server (`rerum/mcp/`)
+
+The agent-facing surface, general. It exposes authoring (load/add/list/get
+rules, with metadata and example validation), applying (`simplify`, `apply_once`,
+`equivalents`, `prove_equal`, `minimize`), goal-solving (`solve` with a
+caller-described goal), explaining (the situated trace plus a `prose` rendering
+via `to_prose`), and an optional agentic loop (when the engine is stuck, request
+a rule from the connected LLM via MCP sampling, validate, install, retry). It
+loads rule sets and theories as data; it contains no domain logic. Detailed tool
+surface and lifecycle live in the companion MCP design doc
+(`docs/superpowers/specs/2026-05-04-mcp-design.md`), reconciled to this spec's
+trace shape, the `simplify`-vs-`solve` naming, and the addition of a prose
+rendering (the earlier MCP non-goal on NL explanation is reversed: agents want
+`to_prose` output to relay to users).
+
+## 6. Worked example: calculus as pure content
+
+This section demonstrates the general engine. Nothing here is engine code; every
+artifact ships under `examples/`.
+
+### 6.1 It is rule sets plus a theory plus a prelude requirement
+
+- `examples/differentiation.rules`: the `dd` operator's rules. Differentiation is
+  confluent, so it runs on the existing `simplify` driver with no search. This
+  is the proof that a whole domain can be "just a rule set."
+- `examples/integration.rules`, `examples/limits.rules`: the `int`/`lim`
+  operators' rules. The easy cases (linearity, power rule, table forms, direct
+  substitution, L'Hopital, known limits) are directed and also run on `simplify`.
+  Only the genuinely non-confluent cases (u-substitution, integration by parts,
+  non-obvious algebraic limit manipulation) escalate to `solve` with the goal
+  "no `int`/`lim` remains".
+- `examples/arithmetic.theory.json`: declares `+` and `*` as AC with their
+  identities, so `normalize` cleans up derivative output. This is the data that
+  Section 5.2's machinery consumes; the same machinery serves a
+  `boolean.theory.json` declaring `and`/`or` as AC.
+- The rule files document that they require `{**MATH_PRELUDE,
+  **PREDICATE_PRELUDE}` (combined via `combine_preludes`), plus `free-of?`.
+
+Each rule carries `examples` metadata. Because the DSL annotation grammar only
+supports `{category=...}`, examples are carried in a `*.metadata.json` sidecar
+merged via `load_metadata_json` (the v0.7 layer), validated at load.
+
+### 6.2 Differentiation needs zero engine code
+
+The differentiation rule set covers constants/variables, linearity, product,
+quotient, power (constant exponent), general power via logarithmic
+differentiation, exp/log, trig, inverse trig, hyperbolic, and partials (via the
+general `free-of?` predicate). Loaded alongside `examples/algebra.rules` under a
+combined prelude with the arithmetic theory set, `simplify` produces clean
+results (for example `d/dx(x*x)` reduces to `(* 2 x)`). No `solve`, no
+domain engine code.
+
+### 6.3 Domain validators are content, not core
+
+`examples/calculus_checker.py` provides `is_derivative(expr, var, result)`,
+`is_integral(integrand, var, result)`, `is_limit(...)` built ON TOP of the
+general `numeval`/`numeric_equiv` primitives (Section 5.6). These encode the
+domain semantics (a derivative result must match the finite-difference of the
+input). They are passed to `generate_corpus` as the `checker`. They are example
+files; the engine never imports them.
+
+### 6.4 What the example demonstrates about the engine
+
+That the trace foundation, theory-driven normalization, goal-directed search,
+fresh variables, rationals, and the corpus/prose layer are sufficient, with no
+domain code, to take a hard symbolic problem to a clean, verified, fully
+explained derivation. Swapping in `boolean.rules` + `boolean.theory.json` would
+exercise the same machinery to put expressions in CNF, with no engine change.
+
+## 7. Module and file plan
+
+General engine (new/extended under `rerum/`):
+
+- `rerum/normalize.py` (new): theory-driven normalization.
+- `rerum/solve.py` (new): goal-directed search.
+- `rerum/numeval.py` (new): numeric evaluation and equivalence.
+- `rerum/training.py` (new): trace -> record and trace -> prose, parameterized.
+- `rerum/mcp/` (new): agent server (see companion MCP doc).
+- `rerum/trace.py` (extend): situated steps, global reconstruction.
+- `rerum/engine.py` (extend): path threading, labeled edges, theory wiring,
+  `solve` wrapper, prelude combination, bug fixes.
+- `rerum/rewriter.py` (extend): `free-of?`, `fresh`, rationals, `?x:free(v)` fix.
+- `rerum/expr.py` (extend): Fraction parse/format.
+
+Domain content (new under `examples/`, demonstration only):
 
 - `examples/differentiation.rules`, `examples/integration.rules`,
-  `examples/limits.rules`, and a `examples/calculus_prelude.py`.
+  `examples/limits.rules` and their `*.metadata.json` sidecars.
+- `examples/arithmetic.theory.json` (and, illustratively, the shape a
+  `boolean.theory.json` would take).
+- `examples/calculus_checker.py` (domain validators built on `numeval`).
 
-New tests (one file per area, matching the existing convention):
+Tests (one file per area): `test_trace_situated.py`, `test_normalize.py`,
+`test_solve.py`, `test_numeval.py`, `test_rationals.py`, `test_free_of.py`,
+`test_training.py`, plus example-exercising tests `test_differentiation.py`,
+`test_integration.py`, `test_limits.py` that load the example files and assert
+behavior (these test the ENGINE through the example content, not engine-resident
+domain logic).
 
-- `test_normalize.py`, `test_solve.py`, `test_trace_situated.py`,
-  `test_rationals.py`, `test_free_of.py`, `test_differentiation.py`,
-  `test_integration.py`, `test_limits.py`, `test_training.py`, `test_verify.py`.
+## 8. Testing strategy
 
-## 9. Testing Strategy
+- General machinery is unit-tested without any domain: normalization idempotence
+  and confluence over a toy theory; search termination and budget over a toy
+  rule set; fresh-var determinism; rational exactness; `numeval`/`numeric_equiv`;
+  trace global-sequence round-trip; labeled proof paths.
+- The calculus example files are loaded by `test_differentiation.py` etc. to
+  show the engine handles a real domain end to end, including numeric checking
+  via the example checker. These tests would be deleted or swapped if the
+  example changed, and the engine would not.
+- Property checks: for the example, differentiate-then-numeric-check and
+  integrate-then-differentiate-back, all via the general `numeval`.
 
-- **Unit**: each new module tested in isolation (normal form idempotence and
-  confluence; search termination and budget; fresh-var determinism; rational
-  exactness; free-of correctness).
-- **Rule-set**: every calculus rule carries `examples` validated at load; plus
-  derivation tests asserting both the final answer and key trace properties
-  (e.g. "the product rule fired", "the path is reconstructible").
-- **Property/numeric**: differentiate-then-verify-numerically and
-  integrate-then-differentiate-back as property checks over generated problems.
-- **Trace integrity**: `to_global_sequence` round-trips; each serialized step
-  re-checks against its rule.
-- **Experiments**: `experiments/` scripts for search scaling (integration node
-  counts vs problem size) and trace-corpus generation timing.
+## 9. Risks and mitigations
 
-## 10. Risks and Mitigations
+- **Leaking a domain into core.** The standing risk this revision exists to
+  prevent. Mitigation: the Section 0 swap test applied in review of every engine
+  change; no operator symbol literals in `rerum/` except the existing
+  arithmetic fold builders (which are prelude content, themselves general).
+- **Theory expressiveness.** AC plus identity/annihilator covers arithmetic and
+  boolean algebra; richer theories (distributivity as a normalizer) are out of
+  scope and remain ordinary rules. Mitigation: keep the theory minimal; anything
+  it cannot express stays a rule.
+- **Search blowup.** Strict node budgets, cost-guided ordering, honest failure.
+- **n-ary representation ripple.** Flattening changes shapes binary rules
+  assumed; the example rule sets use rest-patterns. Normalization confluence is
+  tested before the example rule sets are written.
+- **Scope.** One vision; strictly phased; each phase independently shippable.
 
-- **Search blowup (integration/limits).** Mitigate with strict node budgets,
-  cost-guided ordering, and honest failure (return None + `max_depth`), never
-  silent truncation.
-- **n-ary representation ripple.** Flattening `+`/`*` changes shapes that binary
-  rules assumed. Mitigate by rewriting calculus/algebra rules to rest-pattern
-  form and testing normalization confluence first (Phase 2 precedes the rule
-  sets).
-- **Fraction coercion edge cases.** Centralize numeric coercion so int/Fraction/
-  float narrowing has one definition; test exhaustively.
-- **Trace size.** Situated steps plus search branches can be large; the emitter
-  streams records and the in-memory trace stores redex-local data with on-demand
-  global reconstruction.
-- **Scope.** The spec is one vision; implementation is strictly phased so each
-  phase is independently shippable and reviewable.
+## 10. Implementation phasing
 
-## 11. Implementation Phasing
+Engine phases (general; the actual engineering):
 
-Each phase becomes its own implementation plan.
+0. **Foundation fixes**: `?x:free(v)` bug, guard-on-undefined-op, `free-of?`
+   predicate, `combine_preludes` helper. (No domain bundle.)
+1. **Trace foundation**: situated steps, path threading, labeled search paths,
+   global reconstruction.
+2. **Theory-driven normalization**: `normalize.py` parameterized by a `Theory`.
+3. **Search, fresh vars, rationals, numeval**: `solve.py`, `["fresh", base]`,
+   `Fraction`, `numeval.py`.
+4. **Trace-to-text/record**: `training.py` (prose + JSONL + parameterized
+   corpus). [Was Phase 7; promoted because it is general and unblocks the agent
+   surface.]
+5. **MCP server**: agent surface over the above, on today's plus Phases 0 to 4
+   capabilities. (Sequenced early per the agent-tool priority.)
 
-0. **Foundation fixes**: `?x:free(v)` bug, guard-on-undefined-op, combined
-   `CALCULUS_PRELUDE`. Small, unblocks safe rule authoring.
-1. **Trace foundation**: situated `RewriteStep`, path threading, labeled search
-   paths, `to_global_sequence`, fuller serialization.
-2. **Canonical normal form**: `normalize.py` (flatten/sort/collect/fold) with
-   confluence/idempotence tests.
-3. **Search + fresh vars + rationals**: `solve.py`, `(fresh u)`, `Fraction`.
-4. **Differentiation + verifier**: complete `differentiation.rules`,
-   `verify.py`.
-5. **Integration**: `integration.rules` over the search.
-6. **Limits**: `limits.rules` (L'Hopital reuses Phase 4).
-7. **Training emitter**: `training.py` (structured + prose + corpus).
+Domain demonstration phases (content under `examples/`; exercise the engine):
 
-## 12. Success Criteria
+D1. **Differentiation example**: `differentiation.rules` + `arithmetic.theory`,
+    runs on `simplify`. Proves "a domain is just a rule set."
+D2. **Integration and limits example**: `integration.rules`, `limits.rules`,
+    escalating to `solve`; `calculus_checker.py` on `numeval`.
 
-- A differentiation problem yields a clean, fully simplified answer and a
-  reconstructible whole-expression derivation whose every step names a rule and
-  carries its bindings.
+The domain phases can land any time after the general capabilities they use
+(D1 after Phases 1 to 2; D2 after Phase 3). They add no engine code.
+
+## 11. Success criteria
+
+- No `rerum/` core module references any domain operator (`dd`/`int`/`lim`/
+  `and`/`or`) as a special case; the Section 0 swap test passes by inspection.
+- A confluent rule set (differentiation) is solved end to end by `simplify`
+  with a reconstructible, labeled, prose-explainable derivation, using only
+  example content plus the general engine.
+- A non-confluent case (an integral needing substitution) is solved by `solve`
+  with the same trace quality.
 - `prove_equal` returns the rule sequence, not just an expression chain.
-- An integration problem requiring u-substitution is solved by the search, and
-  the derivation (including the substitution) renders to both JSONL and prose.
-- A limit requiring L'Hopital is solved by reusing the differentiator.
-- The emitter produces a verified corpus where each record is numerically
-  checked and independently re-checkable.
+- `normalize` cleans output for the arithmetic theory and, unchanged, for a
+  boolean theory.
+- The MCP server lets an agent author rules, apply them, prove an equality,
+  solve to a goal, and receive an NL explanation, with no domain logic in the
+  server.
+- The corpus generator emits verified, prose-paired records for the example
+  domain, using a caller-supplied driver and checker.
