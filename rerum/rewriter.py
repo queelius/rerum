@@ -352,6 +352,8 @@ PREDICATE_PRELUDE: FoldFuncsType = {
     "zero?": unary_only(lambda x: x == 0),
     "positive?": unary_only(lambda x: isinstance(x, (int, float)) and x > 0),
     "negative?": unary_only(lambda x: isinstance(x, (int, float)) and x < 0),
+    # Structural predicates
+    "free-of?": binary_only(lambda f, v: isinstance(v, str) and not free_in(v, f)),
     # Logical operators
     "not": unary_only(lambda x: not x),
     "and": binary_only(lambda a, b: a and b),
@@ -366,6 +368,23 @@ FULL_PRELUDE: FoldFuncsType = {
 
 # Empty prelude (no constant folding at all)
 NO_PRELUDE: FoldFuncsType = {}
+
+
+def combine_preludes(*preludes: FoldFuncsType) -> FoldFuncsType:
+    """Merge fold-function dicts left-to-right into a fresh dict.
+
+    This is the general way a rule set composes the preludes it needs:
+    ``combine_preludes(MATH_PRELUDE, PREDICATE_PRELUDE)`` yields a prelude
+    with both math functions and predicates. Later preludes win on key
+    conflict. The result is a new dict; inputs are not mutated.
+
+    The engine ships no domain-named bundle. A rule set documents the
+    combination it requires and assembles it via this helper as data.
+    """
+    merged: FoldFuncsType = {}
+    for prelude in preludes:
+        merged.update(prelude)
+    return merged
 
 
 # ============================================================
@@ -645,16 +664,20 @@ def lookup(var: str, bindings) -> Any:
 # Pattern Matching
 # ============================================================
 
-def match(pat: ExprType, exp: ExprType,
-          bindings: Optional["Bindings"] = None) -> Optional["Bindings"]:
-    """
-    Match a pattern against an expression with bindings.
+def _match_recursive(pat: ExprType, exp: ExprType,
+                     bindings: Optional["Bindings"] = None) -> Optional["Bindings"]:
+    """Recursive core for structural pattern matching.
+
+    This is the internal recursion entry point. It does NOT run the
+    deferred ``?free`` validation; that post-pass is applied once by the
+    public ``match`` wrapper after all bindings are fully resolved.
 
     Pattern syntax:
         ["?", "name"]            - match any expression
         ["?c", "name"]           - match constants only
         ["?v", "name"]           - match variables only
         ["?free", "name", "var"] - match expression not containing var
+                                   (constraint deferred; checked by public match)
         ["?...", "name"]         - match remaining args (zero or more)
         ["?...", "name", "const"] - match remaining args (each must be constant)
         literal                  - match exact value
@@ -694,12 +717,20 @@ def match(pat: ExprType, exp: ExprType,
         return bindings.extend(variable_name(pat), exp)
 
     if arbitrary_free(pat):
-        # ["?free", "name", "var"] - match if exp doesn't contain var
+        # ["?free", "name", "var"] - optimistically bind; the public match
+        # wrapper re-validates this constraint against the final bindings.
         var_to_exclude = pat[2]
         actual_var = bindings.lookup(var_to_exclude)
-        if isinstance(actual_var, str) and not free_in(actual_var, exp):
-            return bindings.extend(variable_name(pat), exp)
-        return None
+        # If the excluded variable is already bound to a SYMBOL, we can
+        # fail fast when the constraint is already violated. Otherwise (the
+        # excluded var is still unbound, or is bound to a non-symbol that no
+        # term can "contain"), bind optimistically and let the final-bindings
+        # post-pass (_check_free_constraints) decide. This keeps the early
+        # exit consistent with the post-pass semantics.
+        if isinstance(actual_var, str) and actual_var != var_to_exclude:
+            if free_in(actual_var, exp):
+                return None
+        return bindings.extend(variable_name(pat), exp)
 
     if arbitrary_rest(pat):
         # Rest patterns are handled in compound matching; when called
@@ -715,6 +746,60 @@ def match(pat: ExprType, exp: ExprType,
         return None
 
     return match_compound(pat, exp, bindings)
+
+
+def _check_free_constraints(pat: ExprType, exp: ExprType,
+                            bindings: "Bindings") -> bool:
+    """Re-validate every ``?free`` constraint in ``pat`` against ``exp``
+    using the FINAL ``bindings``.
+
+    Returns True if all ``?free`` constraints hold, False otherwise. A
+    ``?free`` node ``["?free", name, var]`` requires that the resolved
+    value of ``var`` does not occur in the subexpression that ``name``
+    matched (which, structurally, is the aligned ``exp`` position).
+    """
+    if arbitrary_free(pat):
+        excluded = bindings.lookup(pat[2])
+        if isinstance(excluded, str) and free_in(excluded, exp):
+            return False
+        return True
+    if not isinstance(pat, list) or not pat:
+        return True
+    head = pat[0]
+    if head in ("?", "?c", "?v"):
+        return True
+    if not isinstance(exp, list):
+        return True
+    i = 0
+    for sub_pat in pat:
+        if arbitrary_rest(sub_pat):
+            break
+        if i >= len(exp):
+            break
+        if not _check_free_constraints(sub_pat, exp[i], bindings):
+            return False
+        i += 1
+    return True
+
+
+def match(pat: ExprType, exp: ExprType,
+          bindings: Optional["Bindings"] = None) -> Optional["Bindings"]:
+    """Structural pattern match (public entry point).
+
+    Delegates to the recursive core, then validates every ``?free``
+    constraint against the FINAL resolved bindings. This fixes the
+    binding-order bug where a ``?free`` pattern appearing to the LEFT of
+    the binding of its excluded variable passed vacuously (the excluded
+    var was still unbound when the free check ran). See ``?x:free(v)``.
+
+    Returns ``Bindings`` on success, ``None`` on failure.
+    """
+    result = _match_recursive(pat, exp, bindings)
+    if result is None:
+        return None
+    if not _check_free_constraints(pat, exp, result):
+        return None
+    return result
 
 
 def match_compound(pat: List, exp: List,
@@ -754,7 +839,7 @@ def match_compound(pat: List, exp: List,
     if null(exp):
         return None
 
-    submatch = match(current_pat, car(exp), bindings)
+    submatch = _match_recursive(current_pat, car(exp), bindings)
     return match_compound(rest_pat, cdr(exp), submatch)
 
 
