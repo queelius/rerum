@@ -370,6 +370,23 @@ FULL_PRELUDE: FoldFuncsType = {
 NO_PRELUDE: FoldFuncsType = {}
 
 
+def combine_preludes(*preludes: FoldFuncsType) -> FoldFuncsType:
+    """Merge fold-function dicts left-to-right into a fresh dict.
+
+    This is the general way a rule set composes the preludes it needs:
+    ``combine_preludes(MATH_PRELUDE, PREDICATE_PRELUDE)`` yields a prelude
+    with both math functions and predicates. Later preludes win on key
+    conflict. The result is a new dict; inputs are not mutated.
+
+    The engine ships no domain-named bundle. A rule set documents the
+    combination it requires and assembles it via this helper as data.
+    """
+    merged: FoldFuncsType = {}
+    for prelude in preludes:
+        merged.update(prelude)
+    return merged
+
+
 # ============================================================
 # Primitive Operations (Lisp-like list operations)
 # ============================================================
