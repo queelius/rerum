@@ -79,3 +79,18 @@ class TestFreeBindingOrder:
         b = match(pat, parse_sexpr("(dd 5 x)"))
         assert b is not None
         assert b.to_dict() == {"f": 5, "v": "x"}
+
+    def test_free_excluded_var_name_in_subexpr_still_matches(self):
+        """If the matched subexpression contains the excluded var's LITERAL name
+        but the var binds elsewhere, the match must still succeed (the free
+        check is deferred to the final bindings, not the literal name).
+
+        (dd ?f:free(v) ?v:var) vs (dd (sin v) x): v binds to x, and (sin v) is
+        free of x, so this matches with f=(sin v), v=x.
+        """
+        from rerum.rewriter import match
+        from rerum.engine import parse_sexpr
+        pat = parse_sexpr("(dd ?f:free(v) ?v:var)")
+        b = match(pat, parse_sexpr("(dd (sin v) x)"))
+        assert b is not None
+        assert b.to_dict() == {"f": ["sin", "v"], "v": "x"}
