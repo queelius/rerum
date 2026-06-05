@@ -352,6 +352,8 @@ PREDICATE_PRELUDE: FoldFuncsType = {
     "zero?": unary_only(lambda x: x == 0),
     "positive?": unary_only(lambda x: isinstance(x, (int, float)) and x > 0),
     "negative?": unary_only(lambda x: isinstance(x, (int, float)) and x < 0),
+    # Structural predicates
+    "free-of?": binary_only(lambda f, v: isinstance(v, str) and not free_in(v, f)),
     # Logical operators
     "not": unary_only(lambda x: not x),
     "and": binary_only(lambda a, b: a and b),
