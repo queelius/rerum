@@ -94,3 +94,17 @@ class TestFreeBindingOrder:
         b = match(pat, parse_sexpr("(dd (sin v) x)"))
         assert b is not None
         assert b.to_dict() == {"f": ["sin", "v"], "v": "x"}
+
+    def test_free_excluded_var_bound_to_nonsymbol_matches(self):
+        """When the excluded var is bound to a non-symbol (e.g. a const), the
+        free constraint is vacuously satisfied: nothing can contain a number.
+
+        (op ?v:const ?f:free(v)) vs (op 3 (sin x)): v binds to 3, (sin x) is
+        trivially free of 3, so this matches with f=(sin x), v=3.
+        """
+        from rerum.rewriter import match
+        from rerum.engine import parse_sexpr
+        pat = parse_sexpr("(op ?v:const ?f:free(v))")
+        b = match(pat, parse_sexpr("(op 3 (sin x))"))
+        assert b is not None
+        assert b.to_dict() == {"v": 3, "f": ["sin", "x"]}

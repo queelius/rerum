@@ -704,13 +704,16 @@ def _match_recursive(pat: ExprType, exp: ExprType,
         # wrapper re-validates this constraint against the final bindings.
         var_to_exclude = pat[2]
         actual_var = bindings.lookup(var_to_exclude)
-        if isinstance(actual_var, str) and not free_in(actual_var, exp):
-            return bindings.extend(variable_name(pat), exp)
-        # var is still unbound (lookup returns the name itself) — bind
-        # optimistically; public match will validate after all bindings settle.
-        if actual_var == var_to_exclude:
-            return bindings.extend(variable_name(pat), exp)
-        return None
+        # If the excluded variable is already bound to a SYMBOL, we can
+        # fail fast when the constraint is already violated. Otherwise (the
+        # excluded var is still unbound, or is bound to a non-symbol that no
+        # term can "contain"), bind optimistically and let the final-bindings
+        # post-pass (_check_free_constraints) decide. This keeps the early
+        # exit consistent with the post-pass semantics.
+        if isinstance(actual_var, str) and actual_var != var_to_exclude:
+            if free_in(actual_var, exp):
+                return None
+        return bindings.extend(variable_name(pat), exp)
 
     if arbitrary_rest(pat):
         # Rest patterns are handled in compound matching; when called
