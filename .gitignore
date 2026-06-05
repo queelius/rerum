@@ -54,3 +54,6 @@ Thumbs.db
 
 # MkDocs
 site/
+
+# Claude Code worktrees and local state
+.claude/
