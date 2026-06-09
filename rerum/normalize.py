@@ -77,7 +77,7 @@ def _is_number(x) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Stubs — replaced task-by-task
+# Normalization transforms: flatten -> sort -> collect -> fold
 # ---------------------------------------------------------------------------
 
 def flatten(expr: ExprType, theory: Theory) -> ExprType:
@@ -327,6 +327,12 @@ class _NormalizeMeta:
         self.description = description
         self.reasoning = None
         self.category = "normalize"
+
+    def __repr__(self) -> str:
+        # RewriteTrace.__repr__ interpolates the metadata directly; without
+        # this a normalize step would print as a bare object address. Mirror
+        # the readable repr a full RuleMetadata gives.
+        return self.name
 
 
 def _emit(listener, name, description, before, after):

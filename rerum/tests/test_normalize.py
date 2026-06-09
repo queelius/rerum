@@ -4,6 +4,8 @@ Every test constructs its own small Theory. The engine ships NO built-in
 theory naming +/*; arithmetic is just one data instance, boolean is another.
 """
 
+import itertools
+
 import pytest
 
 from rerum.normalize import (
@@ -192,7 +194,6 @@ class TestCanonicalSort:
         assert canonical_sort(["+", "x", 2, "y"], EMPTY) == ["+", "x", 2, "y"]
 
     def test_sort_confluent_over_permutations(self):
-        import itertools
         base = ["+", "c", "a", "b", 2, 1]
         ref = canonical_sort(base, ARITH)
         for perm in itertools.permutations(["a", "b", "c", 1, 2]):
@@ -456,9 +457,6 @@ class TestExports:
         assert hasattr(rerum, "canonical_sort")
         assert hasattr(rerum, "collect_like_terms")
         assert hasattr(rerum, "ORDER_KEY")
-
-
-import itertools
 
 
 class TestBooleanGenerality:
