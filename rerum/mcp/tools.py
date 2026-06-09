@@ -213,3 +213,29 @@ def tool_validate_examples(engine) -> Dict[str, Any]:
                 "message": str(exc),
             })
     return {"ok": len(errors) == 0, "errors": errors}
+
+
+# =====================================================================
+# Persistence (file-backed rule sets and theories)
+# =====================================================================
+
+def tool_save_ruleset(engine, store, *, name: str) -> Dict[str, Any]:
+    """Persist the engine's current rules under ``name``."""
+    return store.save_ruleset(engine, name)
+
+
+def tool_load_ruleset(engine, store, *, name: str,
+                      validate_examples: bool = True) -> Dict[str, Any]:
+    """Load a saved rule set into the engine."""
+    return store.load_ruleset(
+        engine, name, validate_examples=validate_examples)
+
+
+def tool_list_rulesets(engine, store) -> Dict[str, Any]:
+    """List the rule sets available in the store."""
+    return {"rulesets": store.list_rulesets()}
+
+
+def tool_load_theory(engine, store, *, name: str) -> Dict[str, Any]:
+    """Load a saved theory (``<name>.theory.json``) and apply it."""
+    return store.load_theory(engine, name)
