@@ -245,3 +245,44 @@ class TestPathThreading:
         eng.on_rule_applied(observer)
         eng.simplify(E("(* (+ x 0) y)"))
         assert (1,) in seen, f"expected (1,) among {seen}"
+
+    def test_once_strategy_with_trace_applies_once(self):
+        # simplify(trace=True, strategy="once") must honor 'once' (one step),
+        # not silently run exhaustive.  The only redex is (+ x 0) inside
+        # (* (+ x 0) y); the engine should take exactly one step.
+        eng = self._engine()
+        out, trace = eng.simplify(E("(* (+ x 0) y)"), trace=True, strategy="once")
+        assert len(trace.steps) == 1
+        # Confirm one step was actually taken (not full exhaustive).
+        assert out == ["*", "x", "y"]
+
+    def test_unknown_strategy_with_trace_raises(self):
+        eng = self._engine()
+        with pytest.raises(ValueError):
+            eng.simplify(E("(+ x 0)"), trace=True, strategy="sideways")
+
+    def test_multistep_structure_change_running_root_contract(self):
+        # Two rules; (+ ?x 0) => :x  and  (* ?x 1) => :x.
+        # Exhaustive strategy on (* (+ x 0) 1) fires m1 first (matching the
+        # whole expression where ?x = (+ x 0)), yielding (+ x 0), then fires
+        # az on that, yielding x.  Both redexes are at the root (path=[]).
+        # The running-root contract: seq[i].after_root == seq[i+1].before_root,
+        # and seq[-1].after_root == final engine result.
+        eng = RuleEngine.from_dsl("@az: (+ ?x 0) => :x\n@m1: (* ?x 1) => :x")
+        result, trace = eng.simplify(E("(* (+ x 0) 1)"), trace=True)
+        seq = trace.to_global_sequence()
+        # Should be exactly 2 steps (m1 then az).
+        assert len(seq) == 2
+        # Step 1 turns (* (+ x 0) 1) into (+ x 0).
+        assert seq[0]["after_root"] == ["+", "x", 0]
+        # Step 2's before_root must be what step 1 produced (chain contract).
+        assert seq[1]["before_root"] == seq[0]["after_root"]
+        # Final result matches engine output.
+        assert seq[-1]["after_root"] == result
+
+    def test_deeply_nested_redex_path(self):
+        eng = self._engine()
+        # (f (g (+ x 0))): redex (+ x 0) is at list path [1, 1].
+        _, trace = eng.simplify(E("(f (g (+ x 0)))"), trace=True)
+        paths = [s.path for s in trace.steps]
+        assert [1, 1] in paths, f"expected [1, 1] among {paths}"

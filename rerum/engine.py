@@ -2941,12 +2941,17 @@ class RuleEngine:
 
         self.on_rule_applied(trace_hook)
         try:
-            if strategy == "bottomup":
+            if strategy == "exhaustive":
+                result = self._simplify_exhaustive(expr, max_steps, groups=groups)
+            elif strategy == "once":
+                result = self._simplify_once(expr, groups=groups)
+            elif strategy == "bottomup":
                 result = self._simplify_bottomup(expr, max_steps, groups=groups)
             elif strategy == "topdown":
                 result = self._simplify_topdown(expr, max_steps, groups=groups)
             else:
-                result = self._simplify_exhaustive(expr, max_steps, groups=groups)
+                raise ValueError(f"Unknown strategy: {strategy}. "
+                                 f"Valid options: exhaustive, once, bottomup, topdown")
         finally:
             self.off_rule_applied(trace_hook)
 
