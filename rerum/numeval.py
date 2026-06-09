@@ -28,11 +28,29 @@ Number = Union[int, float, Fraction]
 
 
 class NumevalError(Exception):
-    """Raised when a ground term cannot be numerically evaluated.
+    """Base: a ground term cannot be numerically evaluated.
 
-    Covers an unbound symbol, an operator absent from the prelude, a
-    handler that returns ``None`` (cannot fold), and a handler that raises
-    a domain error (e.g. ``log`` of a negative).
+    The taxonomy distinguishes point-INDEPENDENT *structural* failures from
+    point-DEPENDENT *domain* failures, because :func:`numeric_equiv` treats
+    them differently:
+
+    - Structural (this base class): an unbound symbol, an operator absent
+      from the prelude, a malformed term. These do not depend on the sample
+      point -- they signal a malformed query -- so ``numeric_equiv`` lets
+      them propagate rather than silently skipping every point.
+    - Domain (:class:`NumevalDomainError`): a handler that raises (e.g.
+      ``log`` of a negative) or cannot fold (e.g. division by zero). These
+      are legitimately undefined at *some* points, so ``numeric_equiv``
+      skips such a sample point.
+    """
+
+
+class NumevalDomainError(NumevalError):
+    """A point-dependent failure: a handler raised a domain error or could
+    not fold at this point (e.g. ``log`` of a negative, division by zero).
+
+    :func:`numeric_equiv` treats a point that triggers this as undefined and
+    skips it, rather than counting it as disagreement or crashing.
     """
 
 
@@ -51,8 +69,10 @@ def numeval(expr: ExprType, env: Mapping[str, Number], prelude: Dict) -> Number:
         The numeric value of ``expr``.
 
     Raises:
-        NumevalError: on an unbound symbol, an undefined operator, a
-            non-foldable result, or a domain error from a handler.
+        NumevalError: structural failure -- an unbound symbol, an undefined
+            operator, or a malformed term.
+        NumevalDomainError: point-dependent failure -- a handler raised a
+            domain error or could not fold (e.g. division by zero).
     """
     # Atoms: a number is itself; a symbol is looked up in env.
     # bool is a subclass of int; preserve it verbatim (no numeric coercion)
@@ -82,11 +102,13 @@ def numeval(expr: ExprType, env: Mapping[str, Number], prelude: Dict) -> Number:
         except NumevalError:
             raise
         except Exception as exc:  # domain error, e.g. log of a negative
-            raise NumevalError(
+            raise NumevalDomainError(
                 f"domain error evaluating ({op} ...): {exc}"
             ) from exc
         if value is None:
-            raise NumevalError(
+            # A handler returning None is a point-dependent "cannot fold"
+            # (e.g. division by zero): a domain failure, not structural.
+            raise NumevalDomainError(
                 f"operator {op!r} could not fold args {args!r}"
             )
         return value
@@ -146,23 +168,35 @@ def numeric_equiv(
     Draws ``samples`` variable assignments from ``sampler`` (a callable
     ``() -> env`` or a dict ``{var: (lo, hi)}``), evaluates both
     expressions via :func:`numeval`, and returns True iff they agree within
-    ``tol`` at every sampled point where BOTH are defined. Points where
-    either expression raises a domain error (or any NumevalError) are
-    SKIPPED, not counted as disagreement and not crashed.
+    ``tol`` at every sampled point where BOTH are defined AND at least one
+    such point exists. Points where either expression hits a DOMAIN error
+    (a handler raised, or could not fold) are SKIPPED -- legitimately
+    undefined there -- not counted as disagreement and not crashed.
+
+    Structural failures (an undefined operator, an unbound symbol the
+    sampler never supplies) are NOT skipped: they propagate, surfacing a
+    malformed query instead of being silently swallowed into a vacuous
+    verdict. And if EVERY point is skipped (no point where both are
+    defined), the result is False, not a vacuous True: an equivalence with
+    no supporting evidence is not asserted.
 
     GENERAL: operator semantics come entirely from ``prelude``; no domain
     knowledge here.
     """
     draw = _as_sampler(sampler)
+    defined = 0
     for _ in range(samples):
         env = draw()
         try:
             va = numeval(a, env, prelude)
             vb = numeval(b, env, prelude)
-        except NumevalError:
-            # Skip points where either side is undefined (domain error,
-            # unbound symbol from a partial env, etc.).
+        except NumevalDomainError:
+            # Point-dependent: at least one side is undefined HERE. Skip it.
+            # A structural NumevalError (undefined op / unbound symbol) is
+            # NOT caught and propagates.
             continue
+        defined += 1
         if not _values_agree(va, vb, tol):
             return False
-    return True
+    # No defined point means no evidence of equivalence -> not equivalent.
+    return defined > 0

@@ -135,6 +135,7 @@ from .numeval import (
     numeval,
     numeric_equiv,
     NumevalError,
+    NumevalDomainError,
 )
 
 # Public API
@@ -216,6 +217,7 @@ __all__ = [
     "numeval",
     "numeric_equiv",
     "NumevalError",
+    "NumevalDomainError",
     # Theory-driven normalization
     "Theory",
     "normalize",
