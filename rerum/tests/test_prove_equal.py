@@ -273,10 +273,15 @@ class TestProveEqualWithTrace:
             ["+", "b", "a"],
             trace=True
         )
-        # One path should end at the common form
+        # One path should end at the common form.
+        # path elements may be RewriteStep (trace=True) or plain exprs.
+        def _path_end_key(item):
+            expr = item.after if hasattr(item, "after") else item
+            return _expr_to_tuple(expr)
+
         common_key = _expr_to_tuple(proof.common)
-        assert _expr_to_tuple(proof.path_a[-1]) == common_key or \
-               _expr_to_tuple(proof.path_b[-1]) == common_key
+        assert _path_end_key(proof.path_a[-1]) == common_key or \
+               _path_end_key(proof.path_b[-1]) == common_key
 
     def test_identical_trace(self):
         """Trace for identical expressions has single-element paths."""
@@ -534,3 +539,37 @@ class TestProveEqualPractical:
         if proof:
             pytest.fail("Should not have found proof")
         # This is correct behavior
+
+
+class TestProveEqualLabeledPaths:
+    """prove_equal(trace=True) returns RewriteStep-labeled paths."""
+
+    def _engine(self):
+        return RuleEngine.from_dsl("@commute: (+ ?x ?y) <=> (+ :y :x)")
+
+    def test_path_elements_are_steps(self):
+        from rerum import RewriteStep
+        eng = self._engine()
+        proof = eng.prove_equal(["+", "a", "b"], ["+", "b", "a"], trace=True)
+        assert proof is not None
+        all_steps = (proof.path_a or []) + (proof.path_b or [])
+        assert any(isinstance(s, RewriteStep) for s in all_steps)
+
+    def test_steps_carry_rule_ids(self):
+        from rerum import RewriteStep
+        eng = self._engine()
+        proof = eng.prove_equal(["+", "a", "b"], ["+", "b", "a"], trace=True)
+        ids = [s.rule_id for s in (proof.path_a or []) if isinstance(s, RewriteStep)]
+        ids += [s.rule_id for s in (proof.path_b or []) if isinstance(s, RewriteStep)]
+        assert any(rid and rid.startswith("commute") for rid in ids)
+
+    def test_to_dict_emits_step_dicts(self):
+        import json
+        eng = self._engine()
+        proof = eng.prove_equal(["+", "a", "b"], ["+", "b", "a"], trace=True)
+        d = proof.to_dict()
+        assert json.dumps(d) is not None
+        if "path_a" in d:
+            for entry in d["path_a"]:
+                if isinstance(entry, dict):
+                    assert "rule_id" in entry

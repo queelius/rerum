@@ -1288,15 +1288,20 @@ class EqualityProof:
             lines = [f"Proof: {a_str} ≡ {b_str}"]
             lines.append(f"Common form: {c_str}")
 
+            def _fmt_path_item(item) -> str:
+                if hasattr(item, "after"):
+                    return format_sexpr(item.after)
+                return format_sexpr(item)
+
             if self.path_a:
                 lines.append(f"\nPath from A ({self.depth_a} steps):")
-                for i, expr in enumerate(self.path_a):
-                    lines.append(f"  {i}. {format_sexpr(expr)}")
+                for i, item in enumerate(self.path_a):
+                    lines.append(f"  {i}. {_fmt_path_item(item)}")
 
             if self.path_b:
                 lines.append(f"\nPath from B ({self.depth_b} steps):")
-                for i, expr in enumerate(self.path_b):
-                    lines.append(f"  {i}. {format_sexpr(expr)}")
+                for i, item in enumerate(self.path_b):
+                    lines.append(f"  {i}. {_fmt_path_item(item)}")
 
             return "\n".join(lines)
 
@@ -1310,10 +1315,20 @@ class EqualityProof:
             "depth_b": self.depth_b,
             "total_depth": self.total_depth,
         }
+
+        def _serialize_path(path):
+            out = []
+            for item in path:
+                if hasattr(item, "to_dict"):
+                    out.append(item.to_dict())
+                else:
+                    out.append(item)
+            return out
+
         if self.path_a:
-            result["path_a"] = self.path_a
+            result["path_a"] = _serialize_path(self.path_a)
         if self.path_b:
-            result["path_b"] = self.path_b
+            result["path_b"] = _serialize_path(self.path_b)
         return result
 
 
@@ -3608,7 +3623,17 @@ class RuleEngine:
 
         # Quick check: are they already equal?
         if key_a == key_b:
-            path = [expr_a] if trace else None
+            if trace:
+                init_step = RewriteStep(
+                    rule_index=-1,
+                    metadata=RuleMetadata(name=None),
+                    before=expr_a,
+                    after=expr_a,
+                    kind="initial",
+                )
+                path: Optional[List] = [init_step]
+            else:
+                path = None
             return EqualityProof(
                 expr_a=expr_a,
                 expr_b=expr_b,
@@ -3620,12 +3645,13 @@ class RuleEngine:
             )
 
         # Track visited expressions from each side
-        # Maps: hashable_key -> (original_expr, depth, parent_key)
-        visited_a: Dict[tuple, Tuple[ExprType, int, Optional[tuple]]] = {
-            key_a: (expr_a, 0, None)
+        # Maps: hashable_key -> (original_expr, depth, parent_key, label)
+        # label is None for the start node, else a dict from _all_single_rewrites(labeled=True)
+        visited_a: Dict[tuple, Tuple[ExprType, int, Optional[tuple], Optional[dict]]] = {
+            key_a: (expr_a, 0, None, None)
         }
-        visited_b: Dict[tuple, Tuple[ExprType, int, Optional[tuple]]] = {
-            key_b: (expr_b, 0, None)
+        visited_b: Dict[tuple, Tuple[ExprType, int, Optional[tuple], Optional[dict]]] = {
+            key_b: (expr_b, 0, None, None)
         }
 
         # Per-side extension trackers; local to this call to avoid state leaks.
@@ -3639,18 +3665,57 @@ class RuleEngine:
         frontier_b: deque = deque([(expr_b, 0)])
 
         def reconstruct_path(
-            visited: Dict[tuple, Tuple[ExprType, int, Optional[tuple]]],
+            visited: Dict[tuple, Tuple[ExprType, int, Optional[tuple], Optional[dict]]],
             target_key: tuple
-        ) -> List[ExprType]:
-            """Reconstruct path from start to target."""
-            path = []
+        ) -> List[RewriteStep]:
+            """Reconstruct path from start to target as a list of RewriteSteps.
+
+            Walks the parent chain collecting (expr, label) pairs, reverses
+            them, then builds one RewriteStep per node.  The start node
+            (label=None) gets a synthetic "initial" step whose before==after==expr.
+            Each subsequent node gets a "rule" step whose .after equals the
+            node expression, satisfying the step==expression endpoint invariant
+            used by the backward-compat assertions in TestProveEqualWithTrace.
+            """
+            # Collect raw (expr, label) chain (target → start)
+            raw: List[Tuple[ExprType, Optional[dict]]] = []
             current_key = target_key
             while current_key is not None:
-                expr, depth, parent_key = visited[current_key]
-                path.append(expr)
+                expr, _depth, parent_key, label = visited[current_key]
+                raw.append((expr, label))
                 current_key = parent_key
-            path.reverse()
-            return path
+            raw.reverse()  # now start → target
+
+            steps: List[RewriteStep] = []
+            # Build one RewriteStep per node.
+            # The "before" of each step is the expression at the previous node
+            # (or the start expression for the first step).
+            prev_expr = raw[0][0]
+            for expr, label in raw:
+                if label is None:
+                    # Start node: synthetic initial step
+                    step = RewriteStep(
+                        rule_index=-1,
+                        metadata=RuleMetadata(name=None),
+                        before=expr,
+                        after=expr,
+                        kind="initial",
+                    )
+                else:
+                    step = RewriteStep(
+                        rule_index=-1,
+                        metadata=RuleMetadata(name=label.get("rule_id")),
+                        before=prev_expr,
+                        after=expr,
+                        rule_id=label.get("rule_id"),
+                        direction=label.get("direction"),
+                        bindings=label.get("bindings"),
+                        path=label.get("path"),
+                        kind="rule",
+                    )
+                steps.append(step)
+                prev_expr = expr
+            return steps
 
         # Alternate expanding from A and B
         while frontier_a or frontier_b:
@@ -3674,17 +3739,17 @@ class RuleEngine:
                 if depth < max_depth_a:
                     current_key = _expr_to_tuple(current)
                     rewrites = self._all_single_rewrites(
-                        current, bidirectional_only, groups, rules=rules
+                        current, bidirectional_only, groups, rules=rules, labeled=True
                     )
-                    for new_expr in rewrites:
+                    for new_expr, label in rewrites:
                         new_key = _expr_to_tuple(new_expr)
                         if new_key not in visited_a:
-                            visited_a[new_key] = (new_expr, depth + 1, current_key)
+                            visited_a[new_key] = (new_expr, depth + 1, current_key, label)
                             frontier_a.append((new_expr, depth + 1))
 
                             # Check for intersection
                             if new_key in visited_b:
-                                _, depth_b, _ = visited_b[new_key]
+                                _, depth_b, _, _ = visited_b[new_key]
                                 if trace:
                                     path_a = reconstruct_path(visited_a, new_key)
                                     path_b = reconstruct_path(visited_b, new_key)
@@ -3714,17 +3779,17 @@ class RuleEngine:
                 if depth < max_depth_b:
                     current_key = _expr_to_tuple(current)
                     rewrites = self._all_single_rewrites(
-                        current, bidirectional_only, groups, rules=rules
+                        current, bidirectional_only, groups, rules=rules, labeled=True
                     )
-                    for new_expr in rewrites:
+                    for new_expr, label in rewrites:
                         new_key = _expr_to_tuple(new_expr)
                         if new_key not in visited_b:
-                            visited_b[new_key] = (new_expr, depth + 1, current_key)
+                            visited_b[new_key] = (new_expr, depth + 1, current_key, label)
                             frontier_b.append((new_expr, depth + 1))
 
                             # Check for intersection
                             if new_key in visited_a:
-                                _, depth_a_val, _ = visited_a[new_key]
+                                _, depth_a_val, _, _ = visited_a[new_key]
                                 if trace:
                                     path_a = reconstruct_path(visited_a, new_key)
                                     path_b = reconstruct_path(visited_b, new_key)
