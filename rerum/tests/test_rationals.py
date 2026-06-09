@@ -6,9 +6,11 @@ import pytest
 
 from rerum.rewriter import (
     coerce_number, safe_div, nary_fold, instantiate, Bindings,
-    rewriter, ARITHMETIC_PRELUDE,
+    rewriter, ARITHMETIC_PRELUDE, PREDICATE_PRELUDE,
+    match, atom, constant, NUMERIC_TYPES,
 )
 from rerum.expr import format_sexpr, parse_sexpr
+from rerum.engine import RuleEngine
 
 
 class TestCoerceNumber:
@@ -170,6 +172,58 @@ class TestRewriterFastPathRationals:
         out = simplify(["+", Fraction(1, 3), Fraction(1, 6)])
         assert out == Fraction(1, 2)
         assert isinstance(out, Fraction)
+
+
+class TestFractionIsANumericAtom:
+    """A Fraction must be recognized as a numeric atom everywhere a number is.
+
+    Regression for the Phase 3 gap where exact rationals were added as a value
+    type but the type predicates still tested only (int, float): the matcher
+    crashed (car of a non-list) when a compound pattern met a Fraction atom,
+    and the rational predicates / fold gates silently excluded Fractions.
+    """
+
+    def test_atom_and_constant_accept_fraction(self):
+        assert atom(Fraction(1, 3)) is True
+        assert constant(Fraction(1, 3)) is True
+        assert Fraction in NUMERIC_TYPES
+
+    def test_compound_pattern_vs_fraction_is_no_match_not_crash(self):
+        # The bug: match(["foo","?x"], Fraction(1,3)) raised TypeError via
+        # car() instead of returning None. A Fraction is an atom, so a
+        # compound pattern simply does not match it.
+        assert match(["foo", "?x"], Fraction(1, 3)) is None
+
+    def test_simplify_over_fraction_producing_rule_does_not_crash(self):
+        # A compound-pattern rule that computes an exact rational. The engine
+        # re-matches all rules against the Fraction result at fixpoint; before
+        # the fix that re-match crashed.
+        eng = RuleEngine(fold_funcs=ARITHMETIC_PRELUDE)
+        eng.load_dsl("@third: (third ?x) => (! / :x 3)")
+        result, _trace = eng.simplify(["third", 1], trace=True)
+        assert result == Fraction(1, 3)
+
+    def test_predicates_accept_fraction(self):
+        assert PREDICATE_PRELUDE["const?"]([Fraction(1, 3)]) is True
+        assert PREDICATE_PRELUDE["positive?"]([Fraction(1, 3)]) is True
+        assert PREDICATE_PRELUDE["negative?"]([Fraction(-1, 3)]) is True
+        assert PREDICATE_PRELUDE["positive?"]([Fraction(-1, 3)]) is False
+
+    def test_const_type_constraint_matches_fraction(self):
+        # ?x:const should bind a Fraction (it is a numeric constant). The
+        # pattern must be the PARSED form (?x:const -> ["?c", "x"]); match
+        # operates on parsed expressions, not raw DSL strings.
+        pat = parse_sexpr("(f ?x:const)")
+        b = match(pat, ["f", Fraction(1, 3)])
+        assert b is not None
+        assert b.lookup("x") == Fraction(1, 3)
+
+    def test_fold_gate_folds_fraction_operands(self):
+        # (+ (/ 1 3) (/ 1 6)) must fold to the exact 1/2, not be left
+        # unfolded because the args are Fractions.
+        eng = RuleEngine(fold_funcs=ARITHMETIC_PRELUDE)
+        out = eng.simplify(["+", Fraction(1, 3), Fraction(1, 6)])
+        assert out == Fraction(1, 2)
 
 
 class TestRationalExports:
