@@ -88,7 +88,8 @@ class TestServerLifecycle:
         from rerum.mcp.server import RerumMCPServer
         srv = RerumMCPServer()
         result = srv.call_tool("nonexistent", {})
-        assert result["error"]["code"] == "parse_error"
+        assert result["error"]["code"] == "unknown_tool"
+        assert "available" in result["error"]["details"]
 
     def test_dispatch_error_is_json_safe(self):
         """A tool exception (e.g. a Fraction-bearing parse error) must come
@@ -222,3 +223,27 @@ class TestArgCoercion:
         result = srv.call_tool("simplify", {"expr": "(+ y 0)",
                                             "max_steps": "lots"})
         assert "error" in result  # mapped error, not an unhandled traceback
+
+
+class TestOptionalSdkBoundary:
+    def test_package_imports_without_sdk_only_transport_needs_it(self):
+        # 0.9.0: rerum.mcp imports WITHOUT the mcp SDK (handlers, registry,
+        # persistence, errors are plain Python); only the transport entry
+        # points require it. Simulate absence and reimport the package.
+        import importlib
+        import subprocess
+        import sys
+        code = (
+            "import sys; sys.modules['mcp'] = None\n"
+            "import rerum.mcp\n"
+            "import rerum.mcp.tools, rerum.mcp.registry\n"
+            "print('import-ok')\n"
+            "try:\n"
+            "    rerum.mcp.run_server()\n"
+            "except ImportError as e:\n"
+            "    print('run-server-raises' if 'rerum[mcp]' in str(e) else 'wrong-error')\n"
+        )
+        out = subprocess.run([sys.executable, "-c", code],
+                             capture_output=True, text=True)
+        assert "import-ok" in out.stdout, out.stderr
+        assert "run-server-raises" in out.stdout, out.stdout + out.stderr
