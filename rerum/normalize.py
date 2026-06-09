@@ -242,16 +242,44 @@ def collect_like_terms(expr: ExprType, theory: Theory) -> ExprType:
     return [head] + args
 
 
-def _fold_constants(expr: ExprType, theory: Theory) -> ExprType:
-    """Fold numeric operands of AC operators using the theory's units.
+def _same_atom(a, b) -> bool:
+    """Equality that does not conflate bool with int (True != 1, False != 0).
 
-    Local fold so Phase 2 needs no prelude. For each AC head, combine numeric
-    operands using the operator's group op (sum for an additive identity 0,
-    product for a multiplicative identity 1) inferred from the identity unit:
-    we accumulate with ``+`` when ``identity == 0`` and with ``*`` when
-    ``identity == 1``. A declared annihilator short-circuits the whole
-    operator. Drop a result equal to the identity; unwrap a single operand.
-    Recurses into children first. Non-AC heads return folded children.
+    Python's ``True == 1`` and ``False == 0``.  This helper keeps bool
+    identity/annihilator atoms (``True``, ``False``) distinct from the
+    arithmetic integers ``1`` and ``0``.  Two bools compare with ``is``
+    (identity), two non-bools compare with ``==`` (value equality, so
+    ``int(0) == float(0.0)`` stays true as expected for an arithmetic
+    theory).  Mixed bool/non-bool pairs are always unequal.
+    """
+    if isinstance(a, bool) or isinstance(b, bool):
+        return a is b
+    return a == b
+
+
+def _fold_constants(expr: ExprType, theory: Theory) -> ExprType:
+    """Domain-agnostic identity/annihilator removal for AC operators.
+
+    This is a STRUCTURAL/algebraic operation only.  Numeric evaluation
+    (``(+ 2 3) -> 5``) is NOT performed here; that belongs to the
+    engine's constant-folding prelude.  What this function does:
+
+    1. Recurse into all children first.
+    2. For an AC operator (``theory.is_ac(op)`` True):
+       - If any arg equals the annihilator (``theory.annihilator(op)``,
+         checked via ``_same_atom``), collapse the whole expression to
+         the annihilator.
+       - Drop any arg that equals the identity (``theory.identity(op)``,
+         checked via ``_same_atom``).
+       - If no args remain, return the identity (if defined) else
+         ``[op]`` (empty application).
+       - If exactly one arg remains, unwrap to that arg.
+       - Otherwise return ``[op] + remaining_args``.
+    3. For a non-AC operator: return ``[op] + folded_children``.
+
+    Uses ``_same_atom`` for all identity/annihilator comparisons so that
+    boolean identities ``True``/``False`` are not conflated with integer
+    ``1``/``0``.
     """
     if not compound(expr) or not expr:
         return expr
@@ -262,35 +290,24 @@ def _fold_constants(expr: ExprType, theory: Theory) -> ExprType:
     if theory.is_ac(head):
         identity = theory.identity(head)
         annihilator = theory.annihilator(head)
-        numbers = [a for a in args if _is_number(a)]
-        rest = [a for a in args if not _is_number(a)]
+
         # Annihilator present among operands: the whole operator collapses.
-        if annihilator is not None and any(a == annihilator for a in args):
+        if annihilator is not None and any(_same_atom(a, annihilator) for a in args):
             return annihilator
-        acc = identity
-        for n in numbers:
-            # The accumulation op is derived from the identity unit:
-            # additive identity 0 -> sum; multiplicative identity 1 -> product.
-            if identity == 0:
-                acc = acc + n
-            elif identity == 1:
-                acc = acc * n
-            else:
-                # No numeric folding rule for this identity; keep numbers as-is.
-                rest.append(n)
-                acc = identity
-        new_args: List[ExprType] = []
-        if identity in (0, 1):
-            if acc != identity or not rest:
-                new_args.append(acc)
-            new_args.extend(rest)
+
+        # Drop identity elements.
+        if identity is not None:
+            remaining = [a for a in args if not _same_atom(a, identity)]
         else:
-            new_args = args
-        if len(new_args) == 1:
-            return new_args[0]
-        if not new_args:
-            return identity
-        return [head] + new_args
+            remaining = list(args)
+
+        if not remaining:
+            # All args were the identity (or there were none): return identity
+            # if defined, otherwise keep the empty application.
+            return identity if identity is not None else [head]
+        if len(remaining) == 1:
+            return remaining[0]
+        return [head] + remaining
 
     return [head] + args
 

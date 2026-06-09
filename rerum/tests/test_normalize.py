@@ -263,12 +263,13 @@ class TestNormalize:
         assert normalize(["+", ["+", "x", 1], "x"], ARITH) == \
             ["+", 1, ["*", 2, "x"]]
 
-    def test_constant_fold_plus(self):
-        assert normalize(["+", 2, 3], ARITH) == 5
-        assert normalize(["+", 1, 2, 3], ARITH) == 6
-
-    def test_constant_fold_times(self):
-        assert normalize(["*", 2, 3, 4], ARITH) == 24
+    def test_numeric_operands_not_evaluated(self):
+        # normalize is structural/algebraic only; numeric evaluation ((+ 2 3) -> 5)
+        # belongs to the engine's constant-folding prelude, not to normalize.
+        # After canonical_sort the numbers come first, but no arithmetic is done.
+        assert normalize(["+", 2, 3], ARITH) == ["+", 2, 3]
+        assert normalize(["+", 1, 2, 3], ARITH) == ["+", 1, 2, 3]
+        assert normalize(["*", 2, 3, 4], ARITH) == ["*", 2, 3, 4]
 
     def test_annihilator_zeroes_product(self):
         # 0 is the * annihilator (declared in the theory).
@@ -302,3 +303,84 @@ class TestNormalize:
         for e in ["x", 5, ["+", ["+", "a", "b"], "c"],
                   ["*", "x", "x"], ["+", "x", "x"]]:
             assert normalize(e, EMPTY) == e
+
+
+class TestNormalizeBoolean:
+    """Boolean-theory normalize tests (the review's critical failing cases).
+
+    These use identity=True/False, which Python's ``True==1`` / ``False==0``
+    previously conflated with integer operands, producing wrong results.
+    The ``_same_atom`` helper fixes the conflation.
+    """
+
+    def test_normalize_bool_strips_identity(self):
+        # and-identity is True: (and True x) -> x
+        assert normalize(["and", True, "x"], BOOL) == "x"
+        # or-identity is False: (or False x) -> x
+        assert normalize(["or", False, "x"], BOOL) == "x"
+
+    def test_normalize_bool_annihilator_collapses(self):
+        # and-annihilator is False: (and False x) -> False
+        result_and = normalize(["and", False, "x"], BOOL)
+        assert result_and is False or result_and == False  # noqa: E712
+        # or-annihilator is True: (or True x) -> True
+        result_or = normalize(["or", True, "x"], BOOL)
+        assert result_or is True or result_or == True  # noqa: E712
+
+    def test_normalize_bool_does_not_conflate_int_with_bool(self):
+        # integer 1 is NOT the boolean identity True; must NOT be stripped.
+        r = normalize(["and", 1, "x"], BOOL)
+        assert isinstance(r, list) and r[0] == "and"
+        assert 1 in r and "x" in r  # ['and', 1, 'x'] in some operand order
+        # integer 0 is NOT the boolean identity False; must NOT be stripped.
+        r2 = normalize(["or", 0, "x"], BOOL)
+        assert isinstance(r2, list) and r2[0] == "or"
+        assert 0 in r2 and "x" in r2
+
+    def test_normalize_bool_idempotent_and(self):
+        # (and a a) -> a via collect (no repeat declared -> idempotent).
+        assert normalize(["and", "a", "a"], BOOL) == "a"
+
+    def test_normalize_bool_idempotent_or(self):
+        assert normalize(["or", "x", "x", "y"], BOOL) == ["or", "x", "y"]
+
+    def test_normalize_bool_all_identities(self):
+        # (and True True) -> True (after identity removal leaves nothing -> return identity)
+        assert normalize(["and", True, True], BOOL) is True
+        # (or False False) -> False
+        assert normalize(["or", False, False], BOOL) is False
+
+
+class TestSameAtom:
+    """Unit tests for the _same_atom bool-safe equality helper."""
+
+    def test_bool_bool_same(self):
+        from rerum.normalize import _same_atom
+        assert _same_atom(True, True) is True
+        assert _same_atom(False, False) is True
+
+    def test_bool_bool_different(self):
+        from rerum.normalize import _same_atom
+        assert _same_atom(True, False) is False
+        assert _same_atom(False, True) is False
+
+    def test_bool_int_not_conflated(self):
+        from rerum.normalize import _same_atom
+        # The critical property: True != 1 and False != 0 under this helper.
+        assert _same_atom(True, 1) is False
+        assert _same_atom(1, True) is False
+        assert _same_atom(False, 0) is False
+        assert _same_atom(0, False) is False
+
+    def test_int_int_equality(self):
+        from rerum.normalize import _same_atom
+        # Normal numeric equality must still work.
+        assert _same_atom(0, 0) is True
+        assert _same_atom(1, 1) is True
+        assert _same_atom(0, 1) is False
+
+    def test_float_int_equality(self):
+        from rerum.normalize import _same_atom
+        # int 0 == float 0.0 (both non-bool, use ==).
+        assert _same_atom(0, 0.0) is True
+        assert _same_atom(1, 1.0) is True
