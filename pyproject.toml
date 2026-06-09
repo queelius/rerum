@@ -48,9 +48,13 @@ docs = [
     "mkdocs>=1.5",
     "mkdocs-material>=9.0",
 ]
+mcp = [
+    "mcp>=1.0",
+]
 
 [project.scripts]
 rerum = "rerum.cli:main"
+rerum-mcp = "rerum.mcp:run_server"
 
 [project.urls]
 Homepage = "https://github.com/queelius/rerum"
