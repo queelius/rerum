@@ -7,6 +7,7 @@ These utilities are pure functions and a single namespace object over the
 without importing the engine and without lazy-import workarounds.
 """
 
+from fractions import Fraction
 from typing import List, Tuple, Union
 
 from .rewriter import ExprType
@@ -222,6 +223,8 @@ def format_sexpr(expr: ExprType, dsl_syntax: bool = True) -> str:
 
         parts = [format_sexpr(e, dsl_syntax) for e in expr]
         return "(" + " ".join(parts) + ")"
+    elif isinstance(expr, Fraction):
+        return f"(/ {expr.numerator} {expr.denominator})"
     elif isinstance(expr, (int, float)):
         return str(expr)
     else:

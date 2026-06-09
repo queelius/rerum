@@ -9,12 +9,40 @@ capabilities for rule-based expression rewriting.
 
 from typing import Any, List, Union, Optional, Callable, Dict
 from copy import deepcopy
+from fractions import Fraction
 import math
 
 # Type aliases
 ExprType = Union[int, float, str, List]
 RuleType = List  # [pattern, skeleton]
 NumericType = Union[int, float]
+
+
+def coerce_number(x):
+    """Normalize a numeric fold result to the tightest exact type.
+
+    Rules:
+    - ``bool`` passes through UNCHANGED (guarded first): Python treats
+      ``True == 1`` and ``isinstance(True, int)`` as true, so a bool must
+      never be narrowed to ``1``/``0``; the same bool object is returned.
+    - ``int`` passes through unchanged.
+    - ``float`` that is integral narrows to ``int``; otherwise stays float.
+    - ``Fraction`` with denominator 1 collapses to ``int``; otherwise
+      stays an exact ``Fraction`` (never silently floated).
+    - any other value passes through unchanged.
+
+    This is the single definition of int/float/Fraction narrowing; all
+    fold handlers and the renarrowing in ``instantiate`` route through it.
+    """
+    if isinstance(x, bool):
+        return x
+    if isinstance(x, int):
+        return x
+    if isinstance(x, float):
+        return int(x) if x.is_integer() else x
+    if isinstance(x, Fraction):
+        return int(x) if x.denominator == 1 else x
+    return x
 # Internal bindings type: a Bindings object on success or None on failure.
 # Public match/lookup/extend_bindings still accept the legacy list-of-pairs
 # and "failed" sentinel for backward compatibility (see below).
@@ -224,6 +252,9 @@ def nary_fold(
 ) -> FoldHandler:
     """Create an n-ary folder with identity element.
 
+    The folded result is normalized via ``coerce_number`` so exact
+    ``Fraction`` operands stay exact (and collapse to ``int`` when whole).
+
     Args:
         identity: Value for 0-arity, e.g., 0 for +, 1 for *
         binary_op: Binary operation for folding
@@ -237,11 +268,11 @@ def nary_fold(
         if len(args) == 0:
             return identity
         if len(args) == 1:
-            return unary(args[0]) if unary else args[0]
+            return coerce_number(unary(args[0]) if unary else args[0])
         result = args[0]
         for a in args[1:]:
             result = binary_op(result, a)
-        return result
+        return coerce_number(result)
     return handler
 
 
@@ -277,13 +308,24 @@ def special_minus() -> FoldHandler:
 
 
 def safe_div() -> FoldHandler:
-    """Safe division handler that returns None on division by zero."""
+    """Safe division handler that returns None on division by zero.
+
+    For integer operands the quotient is computed exactly via ``Fraction``
+    (so ``1/3`` stays ``Fraction(1, 3)`` rather than a lossy float), then
+    narrowed by ``coerce_number`` (a whole quotient collapses to ``int``).
+    Float operands divide as floats (then narrow integral results to int).
+    """
     def handler(args: List[NumericType]) -> Optional[NumericType]:
         if len(args) != 2:
             return None
-        if args[1] == 0:
+        a, b = args
+        if b == 0:
             return None  # Can't fold division by zero
-        return args[0] / args[1]
+        if isinstance(a, int) and isinstance(b, int):
+            return coerce_number(Fraction(a, b))
+        if isinstance(a, Fraction) or isinstance(b, Fraction):
+            return coerce_number(Fraction(a) / Fraction(b))
+        return coerce_number(a / b)
     return handler
 
 
@@ -970,9 +1012,10 @@ def instantiate(
                 try:
                     result = handler(args)
                     if result is not None:
-                        if isinstance(result, float) and result.is_integer():
-                            return int(result)
-                        return result
+                        # Narrow to the tightest exact numeric type
+                        # (int/Fraction/float) via the single chokepoint;
+                        # keeps (! / 1 3) -> Fraction(1, 3) exact.
+                        return coerce_number(result)
                 except Exception as exc:
                     if fold_error_resolver is not None:
                         resolution = fold_error_resolver(op, args, exc)
@@ -1179,8 +1222,8 @@ def rewriter(
         if op not in active_fold_funcs:
             return exp
 
-        # Check if all arguments are numeric constants
-        if not all(isinstance(arg, (int, float)) for arg in args):
+        # Check if all arguments are numeric constants (int/float/Fraction).
+        if not all(isinstance(arg, (int, float, Fraction)) for arg in args):
             return exp
 
         try:
@@ -1191,10 +1234,9 @@ def rewriter(
             if result is None:
                 return exp
 
-            # Preserve integer type when possible
-            if isinstance(result, float) and result.is_integer():
-                result = int(result)
-            return result
+            # Narrow to the tightest exact numeric type (int/Fraction/float)
+            # via the single chokepoint, keeping rationals exact.
+            return coerce_number(result)
         except Exception:
             return exp
 
