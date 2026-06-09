@@ -9,12 +9,40 @@ capabilities for rule-based expression rewriting.
 
 from typing import Any, List, Union, Optional, Callable, Dict
 from copy import deepcopy
+from fractions import Fraction
 import math
 
 # Type aliases
 ExprType = Union[int, float, str, List]
 RuleType = List  # [pattern, skeleton]
 NumericType = Union[int, float]
+
+
+def coerce_number(x):
+    """Normalize a numeric fold result to the tightest exact type.
+
+    Rules:
+    - ``bool`` passes through UNCHANGED (guarded first): Python treats
+      ``True == 1`` and ``isinstance(True, int)`` as true, so a bool must
+      never be narrowed to ``1``/``0``; the same bool object is returned.
+    - ``int`` passes through unchanged.
+    - ``float`` that is integral narrows to ``int``; otherwise stays float.
+    - ``Fraction`` with denominator 1 collapses to ``int``; otherwise
+      stays an exact ``Fraction`` (never silently floated).
+    - any other value passes through unchanged.
+
+    This is the single definition of int/float/Fraction narrowing; all
+    fold handlers and the renarrowing in ``instantiate`` route through it.
+    """
+    if isinstance(x, bool):
+        return x
+    if isinstance(x, int):
+        return x
+    if isinstance(x, float):
+        return int(x) if x.is_integer() else x
+    if isinstance(x, Fraction):
+        return int(x) if x.denominator == 1 else x
+    return x
 # Internal bindings type: a Bindings object on success or None on failure.
 # Public match/lookup/extend_bindings still accept the legacy list-of-pairs
 # and "failed" sentinel for backward compatibility (see below).
@@ -224,6 +252,9 @@ def nary_fold(
 ) -> FoldHandler:
     """Create an n-ary folder with identity element.
 
+    The folded result is normalized via ``coerce_number`` so exact
+    ``Fraction`` operands stay exact (and collapse to ``int`` when whole).
+
     Args:
         identity: Value for 0-arity, e.g., 0 for +, 1 for *
         binary_op: Binary operation for folding
@@ -237,11 +268,11 @@ def nary_fold(
         if len(args) == 0:
             return identity
         if len(args) == 1:
-            return unary(args[0]) if unary else args[0]
+            return coerce_number(unary(args[0]) if unary else args[0])
         result = args[0]
         for a in args[1:]:
             result = binary_op(result, a)
-        return result
+        return coerce_number(result)
     return handler
 
 
@@ -277,13 +308,24 @@ def special_minus() -> FoldHandler:
 
 
 def safe_div() -> FoldHandler:
-    """Safe division handler that returns None on division by zero."""
+    """Safe division handler that returns None on division by zero.
+
+    For integer operands the quotient is computed exactly via ``Fraction``
+    (so ``1/3`` stays ``Fraction(1, 3)`` rather than a lossy float), then
+    narrowed by ``coerce_number`` (a whole quotient collapses to ``int``).
+    Float operands divide as floats (then narrow integral results to int).
+    """
     def handler(args: List[NumericType]) -> Optional[NumericType]:
         if len(args) != 2:
             return None
-        if args[1] == 0:
+        a, b = args
+        if b == 0:
             return None  # Can't fold division by zero
-        return args[0] / args[1]
+        if isinstance(a, int) and isinstance(b, int):
+            return coerce_number(Fraction(a, b))
+        if isinstance(a, Fraction) or isinstance(b, Fraction):
+            return coerce_number(Fraction(a) / Fraction(b))
+        return coerce_number(a / b)
     return handler
 
 
@@ -574,6 +616,14 @@ def skeleton_compute(s: ExprType) -> bool:
     return compound(s) and len(s) >= 2 and car(s) == "!"
 
 
+def skeleton_fresh(s: ExprType) -> bool:
+    """Check if skeleton element is a fresh-variable form (fresh base).
+
+    Form: ["fresh", "base"] - resolve to a gensym not free in the result.
+    """
+    return compound(s) and len(s) == 2 and car(s) == "fresh"
+
+
 def free_in(var: str, expr: ExprType) -> bool:
     """
     Check if a variable appears free in an expression.
@@ -592,6 +642,36 @@ def free_in(var: str, expr: ExprType) -> bool:
     if isinstance(expr, list) and expr:
         return any(free_in(var, sub) for sub in expr)
     return False
+
+
+def free_symbols(expr: ExprType) -> set:
+    """Return the set of all symbol (string) leaves occurring in ``expr``.
+
+    Includes operator-head symbols; for fresh-variable avoidance the
+    conservative superset of "names already present" is exactly what we
+    want, so we do not distinguish head from operand position.
+    """
+    if isinstance(expr, str):
+        return {expr}
+    if isinstance(expr, list):
+        out: set = set()
+        for sub in expr:
+            out |= free_symbols(sub)
+        return out
+    return set()
+
+
+def gensym(base: str, avoid: set) -> str:
+    """Smallest of ``base``, ``base+"1"``, ``base+"2"``, ... not in ``avoid``.
+
+    Deterministic: a pure function of ``base`` and ``avoid``.
+    """
+    if base not in avoid:
+        return base
+    i = 1
+    while f"{base}{i}" in avoid:
+        i += 1
+    return f"{base}{i}"
 
 
 def skeleton_evaluation(s: ExprType) -> bool:
@@ -853,6 +933,8 @@ def instantiate(
     fold_funcs: Optional[FoldFuncsType] = None,
     undefined_op_resolver: Optional[Callable] = None,
     fold_error_resolver: Optional[Callable] = None,
+    *,
+    _resolve_fresh_markers: bool = True,
 ) -> ExprType:
     """
     Instantiate a skeleton with bindings.
@@ -861,7 +943,14 @@ def instantiate(
         [":", "name"]           - substitute with bound value
         [":...", "name"]        - splice bound list into parent
         ["!", "op", args...]    - compute op(args) immediately
+        ["fresh", "base"]       - a name not free in the expression being built
         literal                 - keep as-is
+
+    ``__fresh__`` is a reserved internal sentinel: the ``["fresh", base]``
+    form is emitted as a deferred ``["__fresh__", base]`` marker and resolved
+    in one post-pass, so a literal ``["__fresh__", base]`` in user data is
+    treated as such a marker (the same way ``"!"``/``":"``/``"fresh"`` are
+    reserved skeleton words).
 
     Args:
         skeleton: The skeleton to instantiate
@@ -882,6 +971,11 @@ def instantiate(
             handlers cannot legitimately yield Python None as a result. If
             such a value is needed, return ``Resolution(value=...)`` where
             ``...`` is a sentinel object the caller can interpret.
+        _resolve_fresh_markers: Internal flag. When True (the default,
+            top-level entry), ``["fresh", base]`` forms are resolved to
+            deterministic gensyms after the whole expression is built.
+            Recursive/internal calls pass False so the markers survive to
+            be resolved once, together, by the outermost call.
 
     Returns:
         The instantiated expression
@@ -897,6 +991,10 @@ def instantiate(
             return coerced.lookup(car(cdr(s)))
         if skeleton_splice(s):
             return coerced.lookup(car(cdr(s)))
+        if skeleton_fresh(s):
+            # Defer resolution: emit a unique unresolved marker; the
+            # post-pass picks the smallest gensym not already used.
+            return ["__fresh__", car(cdr(s))]
         if skeleton_compute(s):
             op = s[1]
             raw_args = s[2:]
@@ -922,9 +1020,10 @@ def instantiate(
                 try:
                     result = handler(args)
                     if result is not None:
-                        if isinstance(result, float) and result.is_integer():
-                            return int(result)
-                        return result
+                        # Narrow to the tightest exact numeric type
+                        # (int/Fraction/float) via the single chokepoint;
+                        # keeps (! / 1 3) -> Fraction(1, 3) exact.
+                        return coerce_number(result)
                 except Exception as exc:
                     if fold_error_resolver is not None:
                         resolution = fold_error_resolver(op, args, exc)
@@ -935,7 +1034,14 @@ def instantiate(
         return instantiate_compound(s, coerced, fold_funcs, undefined_op_resolver,
                                     fold_error_resolver)
 
-    return loop(skeleton)
+    built = loop(skeleton)
+    # Resolve ["fresh", base] forms exactly once, at the top-level call,
+    # so every marker in the fully-built expression is resolved together
+    # against one shared avoid-set (recursive/internal calls pass
+    # ``_resolve_fresh_markers=False`` and leave markers intact).
+    if _resolve_fresh_markers:
+        return _resolve_fresh(built)
+    return built
 
 
 def instantiate_compound(
@@ -967,10 +1073,45 @@ def instantiate_compound(
         return [spliced] + rest_instantiated
 
     first_instantiated = instantiate(first, coerced, fold_funcs, undefined_op_resolver,
-                                     fold_error_resolver)
+                                     fold_error_resolver, _resolve_fresh_markers=False)
     rest_instantiated = instantiate_compound(rest, coerced, fold_funcs, undefined_op_resolver,
                                              fold_error_resolver)
     return [first_instantiated] + rest_instantiated
+
+
+def _resolve_fresh(expr: ExprType) -> ExprType:
+    """Replace ["__fresh__", base] markers with deterministic gensyms.
+
+    Resolution is left-to-right (pre-order). Each resolved name is added
+    to the avoid-set so two fresh forms with the same base get distinct
+    names, and every already-present symbol in the expression is avoided.
+    Pure and deterministic: a fixed input yields a fixed output.
+    """
+    # Names already present (excluding the markers themselves).
+    def present(e: ExprType) -> set:
+        if isinstance(e, str):
+            return {e}
+        if isinstance(e, list):
+            if len(e) == 2 and e[0] == "__fresh__":
+                return set()
+            out: set = set()
+            for sub in e:
+                out |= present(sub)
+            return out
+        return set()
+
+    used = present(expr)
+
+    def walk(e: ExprType) -> ExprType:
+        if isinstance(e, list):
+            if len(e) == 2 and e[0] == "__fresh__":
+                name = gensym(e[1], used)
+                used.add(name)
+                return name
+            return [walk(sub) for sub in e]
+        return e
+
+    return walk(expr)
 
 
 # ============================================================
@@ -1089,8 +1230,8 @@ def rewriter(
         if op not in active_fold_funcs:
             return exp
 
-        # Check if all arguments are numeric constants
-        if not all(isinstance(arg, (int, float)) for arg in args):
+        # Check if all arguments are numeric constants (int/float/Fraction).
+        if not all(isinstance(arg, (int, float, Fraction)) for arg in args):
             return exp
 
         try:
@@ -1101,10 +1242,9 @@ def rewriter(
             if result is None:
                 return exp
 
-            # Preserve integer type when possible
-            if isinstance(result, float) and result.is_integer():
-                result = int(result)
-            return result
+            # Narrow to the tightest exact numeric type (int/Fraction/float)
+            # via the single chokepoint, keeping rationals exact.
+            return coerce_number(result)
         except Exception:
             return exp
 

@@ -61,6 +61,9 @@ from .rewriter import (
     binary_only,
     special_minus,
     safe_div,
+    coerce_number,
+    free_symbols,
+    gensym,
     combine_preludes,
     # Standard preludes
     ARITHMETIC_PRELUDE,
@@ -120,6 +123,21 @@ from .hooks import (
     ResolverLoopError,
 )
 
+# Goal-directed search (escalation driver)
+from .solve import (
+    solve,
+    SolveResult,
+    contains_op,
+)
+
+# General numeric evaluation
+from .numeval import (
+    numeval,
+    numeric_equiv,
+    NumevalError,
+    NumevalDomainError,
+)
+
 # Public API
 __all__ = [
     # Version
@@ -146,6 +164,9 @@ __all__ = [
     "binary_only",
     "special_minus",
     "safe_div",
+    "coerce_number",
+    "free_symbols",
+    "gensym",
     "combine_preludes",
     # Standard preludes
     "ARITHMETIC_PRELUDE",
@@ -188,6 +209,15 @@ __all__ = [
     "Resolution",
     "ResolutionError",
     "ResolverLoopError",
+    # Search
+    "solve",
+    "SolveResult",
+    "contains_op",
+    # Numeric evaluation
+    "numeval",
+    "numeric_equiv",
+    "NumevalError",
+    "NumevalDomainError",
     # Theory-driven normalization
     "Theory",
     "normalize",
