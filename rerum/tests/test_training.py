@@ -338,3 +338,96 @@ class TestGenerateCorpusExport:
         assert rerum.to_training_record is to_training_record
         assert rerum.to_prose is to_prose
         assert rerum.generate_corpus is generate_corpus
+
+
+from rerum.engine import format_sexpr
+
+
+class TestCorpusJsonlRoundTrip:
+    """Generate a JSONL corpus over the TOY rules, write it, read it back."""
+
+    REQUIRED_TOP = ("problem", "operator", "steps", "answer", "verified")
+    REQUIRED_STEP = ("kind", "rule_id", "rationale", "before_root",
+                     "after_root", "bindings", "path", "guard")
+
+    def _problems(self):
+        return [
+            ("simplify", ["+", ["+", "x", 0], 0]),  # -> x, two add-zero steps
+            ("simplify", ["*", ["* ", "y", 1] if False else ["*", "y", 1], 1]),
+        ]
+
+    def test_write_and_read_back_jsonl(self, tmp_path):
+        engine = _toy_engine()
+        out = tmp_path / "corpus.jsonl"
+        problems = [
+            ("simplify", ["+", ["+", "x", 0], 0]),
+            ("simplify", ["*", ["*", "y", 1], 1]),
+        ]
+        # Stream records to disk, one JSON object per line.
+        with out.open("w") as fh:
+            for rec in generate_corpus(engine, problems,
+                                       driver=_simplify_driver,
+                                       checker=_is_atom_checker):
+                fh.write(json.dumps(rec) + "\n")
+
+        # Read back and validate.
+        lines = out.read_text().splitlines()
+        assert len(lines) == 2
+        records = [json.loads(line) for line in lines]
+
+        for rec in records:
+            for k in self.REQUIRED_TOP:
+                assert k in rec, f"record missing {k}"
+            assert rec["operator"] == "simplify"
+            assert rec["verified"] is True, "every record passes the checker"
+            assert rec["steps"], "non-empty derivation"
+            for step in rec["steps"]:
+                for k in self.REQUIRED_STEP:
+                    assert k in step, f"step missing {k}"
+            # Chain property survives JSON round-trip.
+            steps = rec["steps"]
+            for i in range(len(steps) - 1):
+                assert steps[i + 1]["before_root"] == steps[i]["after_root"]
+
+    def test_prose_projection_mentions_rule_names(self):
+        # The prose, rendered from the same trace, names the rules that fired.
+        engine = _toy_engine()
+        _, trace = engine.simplify(["+", ["+", "x", 0], 0], trace=True)
+        prose = to_prose(trace)
+        # The prose begins with the problem and ends with the answer.
+        assert "(+ (+ x 0) 0)" in prose.splitlines()[0]
+        # At least one rule id appears (the rule lines name the fired rule).
+        rule_ids = {s.rule_id for s in trace.steps if s.rule_id}
+        assert rule_ids, "expected named rules in the derivation"
+        assert any(rid in prose for rid in rule_ids), (
+            "prose must name a rule that fired")
+
+    def test_record_and_prose_agree_on_step_count(self):
+        # The record's step list and the prose's per-step lines both derive
+        # from to_global_sequence, so their counts match.
+        engine = _toy_engine()
+        full = ["+", ["+", "x", 0], 0]
+        _, trace = engine.simplify(full, trace=True)
+        rec = to_training_record(trace, problem=format_sexpr(full),
+                                 operator="simplify", answer=trace.final)
+        prose_lines = to_prose(trace).splitlines()
+        # prose = 1 problem line + N step lines + 1 answer line.
+        assert len(prose_lines) == len(rec["steps"]) + 2
+
+    def test_training_module_names_no_domain_operator(self):
+        # Guardrail for the general-engine principle: training.py must not
+        # contain any domain operator literal (dd/int/lim/and/or as words).
+        import re
+        from pathlib import Path
+        import rerum.training as _t
+        src = Path(_t.__file__).read_text()
+        # Strip string/quote noise is unnecessary; we look for the operator
+        # tokens as standalone identifiers in code or docstring.
+        for op in ("dd", "int(", "lim", " and ", " or "):
+            # ' and '/' or ' would match Python keywords; restrict to the
+            # operator-symbol sense by requiring quotes around them.
+            pass
+        # Concrete check: the calculus operator symbols must not appear as
+        # quoted string literals (how they would be referenced as ops).
+        for sym in ('"dd"', "'dd'", '"int"', "'int'", '"lim"', "'lim'"):
+            assert sym not in src, f"training.py must not name operator {sym}"
