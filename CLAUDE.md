@@ -73,26 +73,45 @@ The package is split into a *pure functional core* (`rewriter.py`) and a *high-l
 - ``simplify(trace=True)`` registers a temporary ``on_rule_applied``
   hook; the trace is fully integrated with the hook system.
 
-### `rerum/mcp/`, the agent-facing MCP server (v0.8)
+### `rerum/mcp/`, the agent-facing MCP server (v0.9)
 
 The MCP layer is thin orchestration over the general engine: tools marshal
 JSON in and out, the engine does the rewriting. No tool holds domain logic;
 rules, theories, and caller goals all arrive as DATA. ``test_mcp_no_domain.py``
 locks this in.
 
-- ``__init__.py``: ``run_server()`` (stdio), ``PROTOCOL_VERSION``, optional
-  ``mcp`` SDK import guard (the package imports without the ``[mcp]`` extra
-  installed; only ``run_server`` needs it).
-- ``server.py``: ``RerumMCPServer`` per-session engine + ``RuleStore``,
-  18-tool dispatch, ``engine_busy`` guard serializing concurrent calls.
-- ``tools.py``: tool handlers (authoring, persistence, applying, goal
-  solving, agentic loop, admin). No domain logic; rules/theories are data.
-- ``trace.py``: situated ``step_to_dict``, ``assemble_trace`` (global roots
-  + ``prose`` via ``rerum.training.to_prose`` + truncation), ``trace_recorder``.
+- ``registry.py``: the SINGLE SOURCE OF TRUTH. Discovery (every ``tool_*``
+  callable), dependency injection (positional params = injected deps:
+  engine/store/sampler), the typed JSON input schemas (keyword-only
+  params' annotations; ``Literal`` -> enum; ``Args:`` docstring section ->
+  per-param descriptions), and dispatch validation/coercion all DERIVE
+  from the handler signatures. Adding a tool = writing one annotated,
+  docstringed ``tool_*`` function; never edit a parallel table.
+- ``tools.py``: the 18 handlers (authoring, persistence, applying, goal
+  solving, agentic loop, admin). ``prose`` is a TOP-LEVEL response field;
+  ``converged`` is truthful (fixpoint event); inputs are strictly
+  validated at the boundary.
+- ``server.py``: ``RerumMCPServer`` per-session engine + ``RuleStore`` +
+  sampler; registry-driven ``call_tool`` with a lock-guarded
+  ``engine_busy`` flag (dispatch runs in a worker thread).
+- ``__init__.py``: importable WITHOUT the ``mcp`` SDK; ``run_server()``
+  (stdio) and ``_build_sdk_server()`` (used by the in-memory wire tests)
+  require it. ``list_tools`` advertises the registry schemas (the SDK then
+  VALIDATES calls against them). The capability-gated SAMPLING BRIDGE
+  wires ``solve_assisted`` to the client's LLM via
+  ``sampling/createMessage``; without the capability the tool refuses
+  with ``sampling_unsupported``.
+- ``trace.py``: situated ``step_to_dict``, ``assemble_trace`` (global
+  roots + truncation; no prose inside), ``render_prose(trace)``,
+  ``trace_recorder`` (rule_applied + fixpoint observers).
 - ``persistence.py``: ``RuleStore`` (``.rerum/rules/<name>.json`` and
-  ``<name>.theory.json``); git-friendly, rejects path traversal.
+  ``<name>.theory.json``); git-friendly, rejects path traversal. A loaded
+  theory is CONSUMED by ``solve_goal``'s ``normalize_between``.
 - ``solver.py``: LLM-resolver factory used by ``solve_assisted``.
-- ``errors.py``: ``MCPToolError`` (stable codes) + ``map_exception``.
+- ``errors.py``: ``MCPToolError`` (stable codes) + ``map_exception`` (the
+  single mapping point; unwraps ``HookError`` causes, wires tool context).
+- ``utils.py``: ``json_safe``, the transport sanitizer (Fraction +
+  non-finite floats).
 - Naming: engine ``solve()`` (search) vs ``solve_goal`` (its MCP wrapper)
   vs ``solve_assisted`` (LLM-resolver loop) are three distinct things.
 
@@ -149,12 +168,26 @@ locks this in.
   docstrings/comments first, so caller-data examples are fine). The server
   loads rules and theories as data; keep it that way.
 - **MCP responses must be JSON-safe**: every tool response is ``json.dumps``-ed
-  by the transport, but engine values are not all JSON-native -- a
-  ``fractions.Fraction`` in particular has broken serialization repeatedly.
-  The MCP layer renders expressions to s-expr strings via ``format_sexpr``
-  and sanitizes structured values through ``_json_safe`` before returning, so
-  ``expr``/``value`` fields stay serializable. New tools must route any
-  expression or numeric-bearing field through the same path.
+  by the transport (with ``allow_nan=False``), but engine values are not all
+  JSON-native -- a ``fractions.Fraction`` in particular has broken
+  serialization repeatedly, and non-finite floats emit non-spec JSON. The
+  MCP layer renders expressions to s-expr strings via ``format_sexpr`` and
+  sanitizes structured values through ``rerum.mcp.utils.json_safe`` before
+  returning. New tools must route any expression or numeric-bearing field
+  through the same path.
+- **The MCP tool surface IS the tool_* signatures**: the registry derives
+  discovery, dependency injection, the typed input schema, and validation
+  from each handler's signature and ``Args:`` docstring. Changing a
+  keyword-only parameter (name, annotation, default) changes the
+  client-facing schema -- and the SDK VALIDATES calls against it, so a
+  stale client breaks loudly. Positional (pre-``*``) params are injected
+  dependencies and never appear in the schema; the provider map in
+  ``server.py`` must know their names (engine/store/sampler).
+- **solve_assisted requires a sampling channel**: without one (client
+  lacks the MCP sampling capability, or no ``set_sampler``) it raises
+  ``sampling_unsupported`` rather than silently degrading to plain
+  ``simplify``. The stdio bridge is capability-gated per call in
+  ``_build_sdk_server``.
 
 ## Expression representation
 
