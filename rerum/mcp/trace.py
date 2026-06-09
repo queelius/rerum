@@ -10,35 +10,16 @@ plus a domain-agnostic natural-language ``prose`` rendering via
 """
 
 import time
+from collections import Counter
 from contextlib import contextmanager
-from fractions import Fraction
 from typing import Any, Dict, List, Optional
 
 from rerum.engine import format_sexpr
 from rerum.trace import RewriteStep, RewriteTrace
 
-
-def _json_safe(value: Any) -> Any:
-    """Recursively make a value JSON-serializable for the MCP response.
-
-    The expr fields (before/after/roots) are already rendered to s-expr
-    STRINGS via ``format_sexpr``, but ``bindings`` and a guard ``result``
-    are passed through structured and may contain a ``fractions.Fraction``
-    atom (a pattern variable can bind one, a guard can compute one, now that
-    Fraction is a first-class numeric atom). Fraction is not JSON-native, so
-    render it to its exact s-expr string (``"(/ 1 2)"``), recursing through
-    dicts and lists. bool is preserved (and checked before int, since bool is
-    an int subclass). Everything else passes through unchanged.
-    """
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, Fraction):
-        return format_sexpr(value)
-    if isinstance(value, dict):
-        return {k: _json_safe(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_json_safe(v) for v in value]
-    return value
+# The shared sanitizer lives in utils; the old private name is kept as an
+# alias for the transition (tools and tests import it from here).
+from rerum.mcp.utils import json_safe as _json_safe
 
 
 # Trace truncation defaults. When a trace exceeds MAX_STEPS, the response
@@ -117,6 +98,11 @@ class _Recorder:
         self.trace: Optional[RewriteTrace] = None
         self.start_time: Optional[float] = None
         self.end_time: Optional[float] = None
+        # True iff the engine fired its ``fixpoint`` event during the block.
+        # The engine fires fixpoint ONLY on natural convergence (never on
+        # budget exhaustion, cycle-break, or cancellation), so this is the
+        # truthful "converged" signal for tool responses.
+        self.converged: bool = False
 
     @property
     def duration_ms(self) -> float:
@@ -127,12 +113,13 @@ class _Recorder:
 
 @contextmanager
 def trace_recorder(engine, *, initial=None):
-    """Register a temporary on_rule_applied hook and capture situated steps.
+    """Register temporary rule_applied + fixpoint hooks; capture situated steps.
 
-    The hook is removed in a finally block so an exception inside the
-    with-block does not leak the registration. Yields a ``_Recorder``
-    whose ``.steps`` (serialized) and ``.trace`` (raw RewriteTrace) are
-    populated as the engine fires ``rule_applied`` events.
+    Both hooks are removed in a finally block so an exception inside the
+    with-block does not leak a registration. Yields a ``_Recorder`` whose
+    ``.steps`` (serialized) and ``.trace`` (raw RewriteTrace) are populated
+    as the engine fires ``rule_applied`` events, and whose ``.converged``
+    is set when the engine reaches a natural fixpoint.
     """
     recorder = _Recorder()
     recorder.trace = RewriteTrace()
@@ -142,13 +129,18 @@ def trace_recorder(engine, *, initial=None):
         recorder.trace.add_step(step)
         recorder.steps.append(step_to_dict(step))
 
+    def fixpoint_hook(expr, ctx):
+        recorder.converged = True
+
     engine.on_rule_applied(hook)
+    engine.on_fixpoint(fixpoint_hook)
     recorder.start_time = time.perf_counter()
     try:
         yield recorder
     finally:
         recorder.end_time = time.perf_counter()
         engine.off_rule_applied(hook)
+        engine.off_fixpoint(fixpoint_hook)
 
 
 def _attach_global_roots(recorder) -> None:
@@ -166,61 +158,49 @@ def _attach_global_roots(recorder) -> None:
         seq = recorder.trace.to_global_sequence()
     except Exception:
         return
+    def _fmt(v):
+        if v is None or isinstance(v, str):
+            return v
+        return format_sexpr(v)
+
     for serialized, entry in zip(recorder.steps, seq):
-        before_root = entry.get("before_root")
-        after_root = entry.get("after_root")
-        serialized["before_root"] = (
-            format_sexpr(before_root) if not isinstance(before_root, str)
-            and before_root is not None else before_root
-        )
-        serialized["after_root"] = (
-            format_sexpr(after_root) if not isinstance(after_root, str)
-            and after_root is not None else after_root
-        )
+        serialized["before_root"] = _fmt(entry.get("before_root"))
+        serialized["after_root"] = _fmt(entry.get("after_root"))
 
 
-def render_prose(recorder) -> str:
-    """Render the recorded trace to natural-language prose.
+def render_prose(trace) -> str:
+    """Render a ``RewriteTrace`` to natural-language prose.
 
     Delegates to the GENERAL, domain-agnostic ``rerum.training.to_prose``
-    (Phase 4). Returns an empty string if there is no trace to render.
+    (Phase 4). Returns an empty string if there is nothing to render or
+    rendering fails (prose is best-effort garnish, never a crash source).
     """
-    if recorder.trace is None:
+    if trace is None:
         return ""
     try:
         from rerum.training import to_prose
-    except Exception:
-        return ""
-    try:
-        return to_prose(recorder.trace)
+        return to_prose(trace)
     except Exception:
         return ""
 
 
-def assemble_trace(*, initial: str, final: str, recorder=None,
-                   prose: Optional[str] = None) -> Dict[str, Any]:
-    """Build the full situated-trace dict for an MCP response.
+def assemble_trace(*, initial: str, final: str, recorder) -> Dict[str, Any]:
+    """Build the situated-trace dict for an MCP response.
 
     Attaches whole-expression before_root/after_root per step (from
-    ``to_global_sequence``), a ``prose`` rendering (delta 4), and the
-    truncation policy from the prior plan (first HEAD_STEPS + an _elided
-    marker + last TAIL_STEPS). ``prose`` may be passed explicitly (tests);
-    otherwise it is rendered from the recorder's trace.
+    ``to_global_sequence``) and applies the truncation policy (first
+    HEAD_STEPS + an ``_elided`` marker + last TAIL_STEPS). Sets
+    ``recorder.trace.final`` when unset, so a subsequent
+    ``render_prose(recorder.trace)`` closes with the right answer line.
+    Prose itself is NOT embedded here: it lives at the response top level.
     """
-    if recorder is not None:
-        _attach_global_roots(recorder)
-        # The recorder accumulates steps + initial but never the final state,
-        # so set it here for the prose answer line. ``final`` is the
-        # already-rendered s-expr string; ``format_sexpr`` passes a string
-        # through, so the prose reads "Answer: <final>." rather than "None".
-        if recorder.trace is not None and recorder.trace.final is None:
-            recorder.trace.final = final
-        steps = recorder.steps
-    else:
-        steps = []
-
-    if prose is None:
-        prose = render_prose(recorder) if recorder is not None else ""
+    _attach_global_roots(recorder)
+    # The recorder accumulates steps + initial but never the final state.
+    # ``final`` is the already-rendered s-expr string; to_prose passes a
+    # string through, so the prose answer line reads the result.
+    if recorder.trace is not None and recorder.trace.final is None:
+        recorder.trace.final = final
+    steps = recorder.steps
 
     total = len(steps)
     out: Dict[str, Any] = {
@@ -228,14 +208,13 @@ def assemble_trace(*, initial: str, final: str, recorder=None,
         "final": final,
         "total_steps": total,
         "summary": _summarize(steps),
-        "prose": prose,
     }
 
     if total > MAX_STEPS:
+        # total_steps plus the in-stream marker fully encode the elision.
         elided_count = total - HEAD_STEPS - TAIL_STEPS
         marker = {"_elided": True, "count": elided_count}
         out["steps"] = steps[:HEAD_STEPS] + [marker] + steps[-TAIL_STEPS:]
-        out["trace_truncated"] = {"original_length": total}
     else:
         out["steps"] = steps
 
@@ -246,12 +225,12 @@ def _summarize(steps: List[Dict[str, Any]]) -> str:
     """One-line digest of the steps, by rule_id and kind."""
     if not steps:
         return "No rules applied."
-    counts: Dict[str, int] = {}
-    for s in steps:
-        name = s.get("rule_id") or s.get("rule_name") or f"rule[{s.get('rule_index')}]"
-        counts[name] = counts.get(name, 0) + 1
-    most = max(counts.items(), key=lambda kv: kv[1])
+    names = Counter(
+        s.get("rule_id") or s.get("rule_name") or f"rule[{s.get('rule_index')}]"
+        for s in steps
+    )
+    (most_name, most_count), = names.most_common(1)
     return (
-        f"{len(steps)} steps using {len(counts)} unique rules. "
-        f"Most used: {most[0]} ({most[1]}x)."
+        f"{len(steps)} steps using {len(names)} unique rules. "
+        f"Most used: {most_name} ({most_count}x)."
     )

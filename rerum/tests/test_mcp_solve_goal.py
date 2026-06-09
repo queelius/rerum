@@ -106,3 +106,48 @@ class TestSolveGoalJsonSafety:
         assert result["found"] is True
         assert result["result"] == "(/ 1 3)"
         json.dumps(result)
+
+
+class TestGoalValidation:
+    def test_malformed_goal_is_parse_error(self):
+        from rerum import RuleEngine
+        from rerum.mcp.errors import MCPToolError
+        from rerum.mcp.tools import tool_solve_goal
+        engine = RuleEngine.from_dsl("@t: (w ?x) => :x")
+        for bad in (None, "op_free", ["op_free"], 42):
+            with pytest.raises(MCPToolError) as exc_info:
+                tool_solve_goal(engine, expr="(w a)", goal=bad)
+            assert exc_info.value.code == "parse_error", bad
+
+
+class TestTheoryThreading:
+    def test_loaded_theory_canonicalizes_solve_nodes(self, tmp_path):
+        # load_theory is now CONSUMED: solve_goal threads engine._theory into
+        # the search, so normalize_between canonicalizes generated nodes
+        # under the caller's AC signature. The rule produces (+ b a); with
+        # the theory the solution node is its canonical form (+ a b).
+        import json as _json
+        from rerum import RuleEngine
+        from rerum.mcp.persistence import RuleStore
+        from rerum.mcp.tools import tool_load_theory, tool_solve_goal
+
+        store = RuleStore(root=str(tmp_path))
+        theory_path = store._theory_path("arith")
+        store._ensure_dir()
+        with open(theory_path, "w", encoding="utf-8") as fh:
+            _json.dump({"+": {"ac": True}}, fh)
+
+        engine = RuleEngine.from_dsl("@mk: (w) => (+ b a)")
+        goal = {"op_free": ["w"]}
+
+        # Without the theory: the node is exactly what the rule produced.
+        plain = tool_solve_goal(engine, expr="(w)", goal=goal)
+        assert plain["found"] is True
+        assert plain["result"] == "(+ b a)"
+
+        # With the theory loaded: the node is canonicalized.
+        loaded = tool_load_theory(engine, store, name="arith")
+        assert loaded["ok"] is True
+        themed = tool_solve_goal(engine, expr="(w)", goal=goal)
+        assert themed["found"] is True
+        assert themed["result"] == "(+ a b)"

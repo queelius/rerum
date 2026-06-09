@@ -31,12 +31,13 @@ class TestSolveAssisted:
             calls[0] += 1
             return "NONE"
 
-        result = tool_solve_assisted(engine, expr="(+ y 0)", sampler=sampler)
+        result = tool_solve_assisted(engine, sampler, expr="(+ y 0)")
         assert result["result"] == "y"
         assert result["resolver_calls"] == 0
         assert result["inferred_rules"] == []
         assert calls[0] == 0
-        assert "prose" in result["trace"]
+        assert "prose" in result and "prose" not in result["trace"]
+        assert result["converged"] is True  # natural fixpoint, truthful
 
     def test_resolver_supplies_rule_with_provenance(self):
         from rerum import RuleEngine
@@ -74,12 +75,14 @@ class TestSolveAssisted:
         from rerum import RuleEngine
         from rerum.mcp.tools import tool_solve_assisted
 
+        from rerum.mcp.errors import MCPToolError
+
         engine = RuleEngine()
-        # No sampler installed and goal needs one: behaves like simplify and
-        # reports sampling_unsupported if it gets stuck. With no rules,
-        # the expression is unchanged; converged with no inferred rules.
-        result = tool_solve_assisted(engine, expr="(foo bar)", sampler=None)
-        assert result["inferred_rules"] == []
+        # No sampler: the tool REFUSES (honest) rather than silently
+        # degrading to plain simplify.
+        with pytest.raises(MCPToolError) as exc_info:
+            tool_solve_assisted(engine, None, expr="(foo bar)")
+        assert exc_info.value.code == "sampling_unsupported"
 
     def test_response_is_json_serializable(self):
         """Every solve_assisted field must json.dumps cleanly (a proposed
@@ -133,3 +136,25 @@ class TestSolveAssisted:
             engine, expr="(stuck x)",
             sampler=lambda prompt: "(zzz ?y) => :y", max_resolver_calls=2)
         assert engine._hooks.count("no_match") == before
+
+
+class TestTruthfulInferredRules:
+    def test_reproposed_named_rule_counted_once(self):
+        # The engine dedupes a re-proposed named rule; inferred_rules must
+        # report what was ACTUALLY installed (1), not one entry per round.
+        from rerum import RuleEngine
+        from rerum.mcp.tools import tool_solve_assisted
+
+        engine = RuleEngine()
+
+        def sampler(prompt):
+            return "@foo-id: (foo ?x) => :x"
+
+        result = tool_solve_assisted(engine, sampler, expr="(foo bar)",
+                                     max_resolver_calls=3)
+        assert result["result"] == "bar"
+        assert len(result["inferred_rules"]) == 1
+        assert result["inferred_rules"][0]["name"] == "foo-id"
+        # The resolver may have been consulted again on the stuck atom;
+        # the report still reflects installs, not proposals.
+        assert result["resolver_calls"] >= 1

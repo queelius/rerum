@@ -198,9 +198,12 @@ class TestAssembleTrace:
         # Whole-expression roots present per step.
         assert "before_root" in d["steps"][0]
         assert "after_root" in d["steps"][0]
-        # Prose rendering present and a string.
-        assert isinstance(d["prose"], str)
-        assert d["prose"]
+        # Prose is NOT embedded in the trace dict (it is a top-level
+        # response field); render it from the recorder's trace instead.
+        assert "prose" not in d
+        from rerum.mcp.trace import render_prose
+        prose = render_prose(recorder.trace)
+        assert isinstance(prose, str) and prose
         assert "summary" in d
 
     def test_assemble_truncates_long_trace(self):
@@ -216,9 +219,9 @@ class TestAssembleTrace:
              "provenance": None, "before_root": "x", "after_root": "x"}
             for i in range(250)
         ]
-        d = assemble_trace(initial="x", final="x", recorder=rec, prose="")
+        d = assemble_trace(initial="x", final="x", recorder=rec)
         assert len(d["steps"]) == 201  # 100 + marker + 100
-        assert d["trace_truncated"] == {"original_length": 250}
+        assert d["total_steps"] == 250  # full count survives truncation
         assert d["steps"][100].get("_elided") is True
         assert d["steps"][100]["count"] == 50
 
@@ -231,8 +234,9 @@ class TestAssembleTrace:
              "before_root": "x", "after_root": "x"}
             for i in range(150)
         ]
-        d = assemble_trace(initial="x", final="x", recorder=rec, prose="")
-        assert "trace_truncated" not in d
+        d = assemble_trace(initial="x", final="x", recorder=rec)
+        assert not any(isinstance(s, dict) and s.get("_elided")
+                       for s in d["steps"])
         assert len(d["steps"]) == 150
 
     def test_assemble_empty_steps(self):
@@ -240,7 +244,7 @@ class TestAssembleTrace:
 
         rec = _Recorder()
         rec.steps = []
-        d = assemble_trace(initial="x", final="x", recorder=rec, prose="")
+        d = assemble_trace(initial="x", final="x", recorder=rec)
         assert d["steps"] == []
         assert d["total_steps"] == 0
 
@@ -291,10 +295,12 @@ class TestJsonSafety:
     def test_prose_answer_line_reflects_final_not_none(self):
         from rerum.mcp.trace import assemble_trace
         rec = self._fraction_trace()
-        d = assemble_trace(initial="(mk)", final="(/ 1 2)", recorder=rec)
+        from rerum.mcp.trace import render_prose
+        assemble_trace(initial="(mk)", final="(/ 1 2)", recorder=rec)
         # The recorder never set trace.final; assemble_trace must, so the
         # prose answer line is the result, not "None".
-        assert d["prose"].splitlines()[-1] == "Answer: (/ 1 2)."
+        prose = render_prose(rec.trace)
+        assert prose.splitlines()[-1] == "Answer: (/ 1 2)."
 
     def test_json_safe_preserves_native_and_bool(self):
         from rerum.mcp.trace import _json_safe
@@ -302,3 +308,18 @@ class TestJsonSafety:
         assert _json_safe(True) is True
         assert _json_safe({"a": ["+", "x", 1], "b": "y"}) == {
             "a": ["+", "x", 1], "b": "y"}
+
+
+class TestJsonSafeFloats:
+    def test_non_finite_floats_render_as_strings(self):
+        import json
+        from rerum.mcp.utils import json_safe
+        out = json_safe({"a": float("inf"), "b": float("-inf"),
+                         "c": float("nan"), "d": 1.5})
+        assert out["a"] == "inf" and out["b"] == "-inf" and out["c"] == "nan"
+        assert out["d"] == 1.5
+        json.dumps(out, allow_nan=False)  # strictly valid JSON
+
+    def test_trace_alias_is_shared_helper(self):
+        from rerum.mcp import trace, utils
+        assert trace._json_safe is utils.json_safe

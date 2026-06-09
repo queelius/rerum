@@ -5,6 +5,71 @@ All notable changes to RERUM are documented here. Format follows
 [SemVer](https://semver.org/) with the caveat that while `0.x`, minor bumps
 may include breaking changes.
 
+## [0.9.0]
+
+A comprehensive review-driven redesign of the MCP layer (code review +
+design review + simplification audit). Breaking changes throughout the
+MCP surface; the engine API is extended, not broken.
+
+### Breaking (MCP)
+- Tool input schemas are now TYPED and derived from the handler
+  signatures (the registry): real parameter names, types, Literal enums,
+  defaults, required lists, and docstring-sourced descriptions. The SDK
+  validates calls against them (additionalProperties: false), so a
+  misspelled or mistyped argument is rejected at the protocol layer.
+- Response envelopes standardized: ``prose`` is a TOP-LEVEL field on
+  every derivation-bearing response (no longer embedded in the trace
+  dict); ``list_rules`` returns ``{rules, count}`` instead of a bare
+  list; the redundant ``trace_truncated`` field is gone (``total_steps``
+  plus the in-stream ``_elided`` marker encode it).
+- ``solve_assisted``: ``max_depth`` renamed ``max_steps`` (it always fed
+  the simplify step budget); without a client sampling channel the tool
+  now refuses with ``sampling_unsupported`` instead of silently behaving
+  like plain ``simplify``; ``sampler`` is an injected dependency, not a
+  caller parameter.
+- ``solve_goal``: the no-op ``fresh_vars`` parameter is gone;
+  ``normalize_between`` is now REAL (a theory loaded via ``load_theory``
+  is threaded into the search and canonicalizes nodes).
+- ``reset_engine`` delegates to the new public ``engine.reset()``.
+- Unknown tool names map to ``unknown_tool`` (was ``parse_error``).
+- ``rerum.mcp`` imports WITHOUT the optional ``mcp`` SDK; only
+  ``run_server`` requires it.
+
+### Added
+- ``rerum/mcp/registry.py``: the single source of truth -- discovery,
+  dependency injection, JSON schemas, and dispatch validation all derive
+  from the ``tool_*`` signatures. Adding a tool is writing one annotated,
+  docstringed function.
+- MCP SAMPLING BRIDGE: when the connected client advertises the sampling
+  capability, ``solve_assisted`` round-trips rule proposals through the
+  client's LLM (``sampling/createMessage``); end-to-end protocol tests
+  run over the SDK's in-memory streams.
+- Truthful status: ``converged`` reflects the engine's fixpoint event
+  (budget exhaustion is False; one-shot strategy is None);
+  ``inferred_rules`` reports exactly the rules actually installed;
+  ``apply_once`` surfaces ``matched``/``rule``.
+- Strict inputs: empty/garbage expressions and malformed goals are clear
+  ``parse_error``s (previously a ``None`` atom poisoned the engine).
+- Error model: ``map_exception`` wires the tool name into details,
+  unwraps ``HookError`` to the real cause, and adds ``domain_error`` /
+  ``eval_error`` codes; error payload details are JSON-sanitized.
+- Engine public state API: ``iter_rules()``, ``hook_counts()``,
+  ``has_fold_funcs()``, ``has_theory()``, ``reset()``; ``_theory`` is an
+  initialized session slot.
+- ``Theory.from_json`` validates the JSON shape (clean ``ValueError``).
+
+### Fixed
+- ATOMIC rule loading: a mid-batch example-validation failure previously
+  committed the earlier rules with a stale name index (they fired in
+  ``simplify`` but were invisible to ``get_rule``; a retry duplicated
+  them). ``_install`` now validates everything before committing
+  anything.
+- ``prove_equal``/``minimize`` prose: the merged forward-plus-reversed
+  chain mis-narrated; ``prove_equal`` now narrates the two sides
+  separately to the common form.
+- Non-finite floats can no longer emit non-spec JSON (``json_safe``
+  renders them as strings; the transport dumps with ``allow_nan=False``).
+
 ## [0.8.0]
 
 ### Added (MCP server)
