@@ -427,3 +427,32 @@ class TestNormalizeListener:
 
     def test_no_listener_still_works(self):
         assert normalize(["+", "x", "x"], ARITH) == ["*", 2, "x"]
+
+
+class TestTheoryDataFile:
+    def test_load_arithmetic_theory_from_examples(self):
+        import os
+        from rerum.normalize import Theory
+        path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+            "examples", "arithmetic.theory.json",
+        )
+        with open(path) as f:
+            theory = Theory.from_json(f.read())
+        assert theory.is_ac("+") and theory.is_ac("*")
+        assert theory.identity("+") == 0 and theory.identity("*") == 1
+        assert theory.annihilator("*") == 0
+        # The same machinery normalizes via the file-loaded theory.
+        assert normalize(["+", ["*", 1, "x"], ["*", "x", 1]], theory) == \
+            ["*", 2, "x"]
+
+
+class TestExports:
+    def test_top_level_imports(self):
+        import rerum
+        assert hasattr(rerum, "Theory")
+        assert hasattr(rerum, "normalize")
+        assert hasattr(rerum, "flatten")
+        assert hasattr(rerum, "canonical_sort")
+        assert hasattr(rerum, "collect_like_terms")
+        assert hasattr(rerum, "ORDER_KEY")
