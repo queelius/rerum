@@ -427,3 +427,59 @@ class TestPathProse:
         assert lines[-1] == "Answer: (+ b a).", lines[-1]
         # No synthetic "Applying (anonymous rule): X becomes X." filler.
         assert not any("anonymous rule" in line for line in lines)
+
+
+class TestErrorMappingRedesign:
+    """0.9.0 error-model behaviors: context wiring, HookError unwrapping,
+    numeric-failure codes, and JSON-safe details."""
+
+    def test_context_lands_in_details(self):
+        from rerum.mcp.errors import map_exception
+        err = map_exception(ValueError("boom"), context={"tool": "simplify"})
+        assert err["error"]["details"]["context"] == {"tool": "simplify"}
+
+    def test_hook_error_unwraps_mcp_tool_error(self):
+        # An MCPToolError raised inside a hook (e.g. the sampling bridge)
+        # keeps its own code instead of degrading to internal_error.
+        from rerum.mcp.errors import MCPToolError, map_exception
+        from rerum.hooks import HookError
+        inner = MCPToolError("sampling_unsupported", "no sampling channel")
+        try:
+            try:
+                raise inner
+            except MCPToolError as cause:
+                raise HookError(lambda: None, "no_match", cause) from cause
+        except HookError as wrapped:
+            err = map_exception(wrapped, context={"tool": "solve_assisted"})
+        assert err["error"]["code"] == "sampling_unsupported"
+
+    def test_hook_error_unwraps_plain_cause(self):
+        from rerum.mcp.errors import map_exception
+        from rerum.hooks import HookError
+        try:
+            try:
+                raise RuntimeError("kaboom")
+            except RuntimeError as cause:
+                raise HookError(lambda: None, "no_match", cause) from cause
+        except HookError as wrapped:
+            err = map_exception(wrapped, context={"tool": "solve_assisted"})
+        assert err["error"]["code"] == "internal_error"
+        assert "kaboom" in err["error"]["message"]
+        assert "via_hook" in err["error"]["details"]["context"]
+
+    def test_numeval_domain_error_gets_domain_code(self):
+        from rerum.mcp.errors import map_exception
+        from rerum.numeval import NumevalDomainError, NumevalError
+        assert map_exception(NumevalDomainError("log of a negative"))[
+            "error"]["code"] == "domain_error"
+        assert map_exception(NumevalError("unbound symbol: 'q'"))[
+            "error"]["code"] == "eval_error"
+
+    def test_to_dict_sanitizes_fraction_details(self):
+        import json
+        from fractions import Fraction
+        from rerum.mcp.errors import MCPToolError
+        err = MCPToolError("validation_error", "bad example",
+                           details={"example": {"out": Fraction(1, 3)}})
+        json.dumps(err.to_dict())  # must not raise
+        assert err.to_dict()["error"]["details"]["example"]["out"] == "(/ 1 3)"

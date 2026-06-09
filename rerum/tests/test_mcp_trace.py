@@ -302,3 +302,18 @@ class TestJsonSafety:
         assert _json_safe(True) is True
         assert _json_safe({"a": ["+", "x", 1], "b": "y"}) == {
             "a": ["+", "x", 1], "b": "y"}
+
+
+class TestJsonSafeFloats:
+    def test_non_finite_floats_render_as_strings(self):
+        import json
+        from rerum.mcp.utils import json_safe
+        out = json_safe({"a": float("inf"), "b": float("-inf"),
+                         "c": float("nan"), "d": 1.5})
+        assert out["a"] == "inf" and out["b"] == "-inf" and out["c"] == "nan"
+        assert out["d"] == 1.5
+        json.dumps(out, allow_nan=False)  # strictly valid JSON
+
+    def test_trace_alias_is_shared_helper(self):
+        from rerum.mcp import trace, utils
+        assert trace._json_safe is utils.json_safe
