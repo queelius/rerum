@@ -389,3 +389,41 @@ class TestApplyingJsonSafety:
             include_unidirectional=True)
         assert result["best"] == "(/ 1 3)"
         json.dumps(result)
+
+    def test_apply_once_json_dumps_clean_with_rational(self):
+        # apply_once was the one applying tool with no JSON-safety test even
+        # though its single-step trace can carry a Fraction (the review's
+        # most-suspected gap). Pin it.
+        import json
+        from rerum.mcp.tools import tool_apply_once
+        engine = self._compute_engine()
+        result = tool_apply_once(engine, expr="(third a)")
+        assert result["result"] == "(/ 1 3)"
+        assert result["changed"] is True
+        json.dumps(result)  # must not raise
+
+
+class TestPathProse:
+    """The prose answer line for prove_equal / minimize must reflect the
+    result, not 'None'. Regression for the Group 3 review finding: _path_prose
+    never set trace.final, so every path-based prose closed with 'Answer:
+    None.' and prove_equal carried synthetic no-op filler lines."""
+
+    def test_minimize_prose_answer_line_is_result(self):
+        from rerum import RuleEngine
+        from rerum.mcp.tools import tool_minimize
+        engine = RuleEngine.from_dsl("@az {category=identity}: (+ ?x 0) => :x")
+        result = tool_minimize(engine, expr="(+ (+ y 0) 0)")
+        last = result["prose"].splitlines()[-1]
+        assert last == "Answer: y.", last
+
+    def test_prove_equal_prose_answer_line_and_no_filler(self):
+        from rerum import RuleEngine
+        from rerum.mcp.tools import tool_prove_equal
+        engine = RuleEngine.from_dsl("@comm: (+ ?x ?y) <=> (+ :y :x)")
+        result = tool_prove_equal(engine, expr_a="(+ a b)", expr_b="(+ b a)")
+        assert result["proven"] is True
+        lines = result["prose"].splitlines()
+        assert lines[-1] == "Answer: (+ b a).", lines[-1]
+        # No synthetic "Applying (anonymous rule): X becomes X." filler.
+        assert not any("anonymous rule" in line for line in lines)

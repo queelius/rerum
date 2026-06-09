@@ -289,8 +289,20 @@ def _path_prose(initial, steps) -> str:
     try:
         trace = RewriteTrace()
         trace.initial = initial
-        for s in steps:
+        # Drop synthetic anchor steps (a path's kind="initial" head) and
+        # no-op junctions (before == after) so the prose narrates real moves
+        # only, not "Applying (anonymous rule): X becomes X." filler.
+        real = [s for s in steps if s.kind != "initial" and s.before != s.after]
+        for s in real:
             trace.add_step(s)
+        # Set the endpoint so the answer line is the result, not None: the
+        # recorder/to_prose reads trace.final for the closing line.
+        if real:
+            trace.final = real[-1].after
+        elif steps:
+            trace.final = steps[-1].after
+        else:
+            trace.final = initial
         rec.trace = trace
         return render_prose(rec)
     except Exception:
