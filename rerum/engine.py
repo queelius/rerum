@@ -3923,12 +3923,33 @@ class RuleEngine:
                 best_expr = equiv
                 best_cost = equiv_cost
 
+        derivation = None
+        if _expr_to_tuple(best_expr) != _expr_to_tuple(expr):
+            proof = self.prove_equal(
+                expr, best_expr, trace=True,
+                max_depth=max_depth,
+                max_expressions=max_count,
+                include_unidirectional=include_unidirectional,
+                groups=groups,
+                rules=rules,
+            )
+            if proof is not None and proof.path_a is not None and proof.path_b is not None:
+                trace = RewriteTrace()
+                trace.initial = expr
+                trace.final = best_expr
+                for step in proof.path_a[1:]:        # skip synthetic initial
+                    trace(step)
+                for step in reversed(proof.path_b[1:]):  # common -> best
+                    trace(step)
+                derivation = trace
+
         return OptimizationResult(
             expr=best_expr,
             cost=best_cost,
             original=expr,
             original_cost=original_cost,
-            expressions_checked=count
+            expressions_checked=count,
+            derivation=derivation,
         )
 
     # ============================================================
