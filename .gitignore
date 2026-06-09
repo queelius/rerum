@@ -57,3 +57,6 @@ site/
 
 # Claude Code worktrees and local state
 .claude/
+
+# MCP server default rule/theory store (rerum.mcp RuleStore)
+.rerum/
