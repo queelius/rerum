@@ -5,6 +5,41 @@ All notable changes to RERUM are documented here. Format follows
 [SemVer](https://semver.org/) with the caveat that while `0.x`, minor bumps
 may include breaking changes.
 
+## [0.8.0]
+
+### Added (MCP server)
+- ``rerum/mcp/`` submodule: the GENERAL agent surface over the rewriting
+  engine. 18 tools across authoring, persistence, applying, goal solving,
+  the agentic loop, and admin. No domain logic; rules and theories load as
+  data. ``test_mcp_no_domain.py`` mechanizes this guarantee: it fails if any
+  ``rerum/mcp/`` file hardcodes a domain operator literal as code.
+- New console entry point ``rerum-mcp`` and optional install extra
+  ``pip install rerum[mcp]``; ``run_server()`` over stdio.
+- Authoring: ``load_rules``, ``add_rule``, ``list_rules``, ``get_rule``,
+  ``validate_examples``.
+- Persistence (file-backed, git-friendly, default ``.rerum/rules/``):
+  ``save_ruleset``, ``load_ruleset``, ``list_rulesets`` (``<name>.json``)
+  and ``load_theory`` (``<name>.theory.json``). Path traversal is rejected.
+- Applying (return result + situated trace + ``prose``): ``simplify``,
+  ``apply_once``, ``equivalents``, ``prove_equal``, ``minimize``. The trace
+  is the Phase 1 situated trace (rule_id, direction, bindings, path, kind,
+  guard, rationale, whole-expression before_root/after_root) and every
+  response carries a natural-language ``prose`` rendering via
+  ``rerum.training.to_prose``.
+- Goal solving: ``solve_goal`` wraps engine ``solve()`` over a
+  caller-described goal (e.g. ``{"op_free": ["int","lim"]}``); the goal is
+  DATA, so the tool special-cases no operator.
+- Agentic loop: ``solve_assisted`` (renamed from the earlier ``solve``)
+  runs directed simplify with an ``on_no_match`` LLM resolver via MCP
+  sampling; inferred rules install with provenance ``llm-inferred``.
+- Admin: ``reset_engine`` (computation-bundle prelude or combination; no
+  domain bundle) and ``get_status``. ``MCPToolError`` stable codes;
+  ``engine_busy`` guard serializes concurrent calls.
+- Every tool response is ``json.dumps``-able: expressions render to s-expr
+  strings via ``format_sexpr`` and structured values route through a
+  ``_json_safe`` sanitizer, so a ``fractions.Fraction`` in a result never
+  breaks serialization.
+
 ## [0.7.0]
 
 ### Added (metadata layer)
