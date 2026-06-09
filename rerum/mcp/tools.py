@@ -597,3 +597,80 @@ def tool_solve_goal(engine, *, expr: str, goal: Dict[str, Any],
         "stats": {"rules_in_engine": len(engine._rules),
                   "explored": sr.explored},
     }
+
+
+# =====================================================================
+# Agentic loop (solve_assisted; renamed from the prior 'solve')
+# =====================================================================
+
+def tool_solve_assisted(engine, *, expr: str, sampler: Optional[Callable] = None,
+                        goal: Optional[str] = None, max_depth: int = 20,
+                        max_resolver_calls: int = 10,
+                        strategy: str = "exhaustive") -> Dict[str, Any]:
+    """Directed simplify with an on_no_match LLM resolver (agentic loop).
+
+    ``sampler`` is a callable ``str -> str``; in production it is the MCP
+    sampling channel, in tests a stub. When None, no resolver is installed
+    and the call behaves like simplify. Returns {result, converged, trace,
+    prose, inferred_rules, resolver_calls, stats}; the trace is the Phase 1
+    situated trace and carries a prose rendering. The LLM-inferred steps are
+    marked by their provenance ("llm-inferred") in the situated trace.
+
+    JSON-safety: the trace and result are built via the JSON-safe
+    ``assemble_trace``/``step_to_dict`` (a proposed rule could compute a
+    Fraction, which is rendered to its s-expr string, never leaked raw to
+    ``json.dumps``). The result is rendered to an s-expr STRING.
+
+    Termination: the per-solve ``max_resolver_calls`` cap is enforced by the
+    resolver (``resolver_budget_exhausted``); the engine's own resolver
+    retry cap raises ``ResolverLoopError``, mapped here to ``resolver_loop``.
+    A resolver that keeps proposing non-matching rules terminates, never
+    hangs.
+    """
+    from rerum.hooks import ResolverLoopError
+    from rerum.mcp.solver import make_solver_resolver
+    from rerum.mcp.trace import assemble_trace, trace_recorder
+
+    parsed = _parse(expr)
+    initial_str = format_sexpr(parsed)
+    state: Dict[str, Any] = {
+        "call_count": 0, "inferred_rules": [], "last_termination": None}
+
+    resolver = None
+    if sampler is not None:
+        resolver = make_solver_resolver(
+            sampler, goal=goal, max_calls=max_resolver_calls, state=state)
+        engine.on_no_match(resolver)
+
+    termination: Optional[Dict[str, Any]] = None
+    recorder = None
+    try:
+        with trace_recorder(engine, initial=parsed) as recorder:
+            try:
+                result = engine.simplify(parsed, strategy=strategy,
+                                         max_steps=max_depth)
+            except ResolverLoopError as exc:
+                termination = {"reason": "resolver_loop", "detail": str(exc)}
+                result = parsed
+    finally:
+        if resolver is not None:
+            engine.off_no_match(resolver)
+
+    if termination is None and state.get("last_termination"):
+        termination = {"reason": state["last_termination"]}
+
+    final_str = format_sexpr(result)
+    converged = termination is None
+    trace = assemble_trace(initial=initial_str, final=final_str,
+                           recorder=recorder)
+
+    out: Dict[str, Any] = {
+        "result": final_str, "converged": converged, "trace": trace,
+        "prose": trace.get("prose", ""),
+        "inferred_rules": state["inferred_rules"],
+        "resolver_calls": state["call_count"],
+        "stats": _stats(engine, recorder),
+    }
+    if termination is not None:
+        out["termination"] = termination
+    return out
