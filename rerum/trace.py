@@ -63,7 +63,11 @@ class RewriteStep:
     fired (typed loosely here to avoid a circular import on engine.py).
     """
 
-    __slots__ = ("rule_index", "metadata", "before", "after")
+    __slots__ = (
+        "rule_index", "metadata", "before", "after",
+        "rule_id", "direction", "bindings", "path", "kind", "guard",
+        "rationale",
+    )
 
     def __init__(
         self,
@@ -71,11 +75,54 @@ class RewriteStep:
         metadata: Any,
         before: ExprType,
         after: ExprType,
+        *,
+        rule_id: Optional[str] = None,
+        direction: Optional[str] = None,
+        bindings: Optional[dict] = None,
+        path: Optional[List[int]] = None,
+        kind: str = "rule",
+        guard: Optional[dict] = None,
+        rationale: Optional[str] = None,
     ):
         self.rule_index = rule_index
         self.metadata = metadata
         self.before = before
         self.after = after
+        self.rule_id = rule_id
+        self.direction = direction
+        self.bindings = bindings
+        self.path = path
+        self.kind = kind
+        self.guard = guard
+        self.rationale = rationale
+
+    @property
+    def before_redex(self) -> ExprType:
+        """Alias of ``before``: the redex-local subtree before the edit."""
+        return self.before
+
+    @property
+    def after_redex(self) -> ExprType:
+        """Alias of ``after``: the redex-local subtree after the edit."""
+        return self.after
+
+    def __eq__(self, other: Any) -> bool:
+        """Identity for step-vs-step; endpoint match for step-vs-expression.
+
+        Comparing against another RewriteStep is object identity (steps are
+        not value-equal). Comparing against any other operand (an expression:
+        list/str/number) tests ``self.after == other`` so a reconstructed
+        proof path element equals the node expression it represents.
+        """
+        if isinstance(other, RewriteStep):
+            return self is other
+        return self.after == other
+
+    def __ne__(self, other: Any) -> bool:
+        return not self.__eq__(other)
+
+    def __hash__(self) -> int:
+        return id(self)
 
     def _name(self) -> str:
         return self.metadata.name or f"rule[{self.rule_index}]"
@@ -85,13 +132,25 @@ class RewriteStep:
         return f"{self._name()}: {format_sexpr(self.before)} → {format_sexpr(self.after)}"
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert step to dictionary for serialization."""
+        """Convert step to dictionary for serialization.
+
+        Emits the legacy keys (rule_index, rule_name, description, before,
+        after) plus the situated keys (rule_id, direction, kind, path,
+        bindings, guard, rationale).
+        """
         return {
             "rule_index": self.rule_index,
+            "rule_id": self.rule_id,
             "rule_name": self.metadata.name,
+            "direction": self.direction,
             "description": self.metadata.description,
+            "kind": self.kind,
             "before": self.before,
             "after": self.after,
+            "path": self.path,
+            "bindings": self.bindings,
+            "guard": self.guard,
+            "rationale": self.rationale,
         }
 
 

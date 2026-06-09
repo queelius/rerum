@@ -52,3 +52,76 @@ class TestRuleIdentity:
         c = rule_identity(meta, ["*", "?x", 1], ":x")
         assert a == b
         assert a != c
+
+
+class TestRewriteStepFields:
+    """RewriteStep gains additive situated fields; legacy construction works."""
+
+    def _meta(self):
+        return RuleMetadata(name="add-zero", description="x+0=x",
+                            reasoning="additive identity", category="identity")
+
+    def test_legacy_positional_construction_still_works(self):
+        step = RewriteStep(0, self._meta(), ["+", "x", 0], "x")
+        assert step.before == ["+", "x", 0]
+        assert step.after == "x"
+        assert step.rule_id is None
+        assert step.direction is None
+        assert step.bindings is None
+        assert step.path is None
+        assert step.kind == "rule"
+        assert step.guard is None
+        assert step.rationale is None
+
+    def test_redex_aliases(self):
+        step = RewriteStep(0, self._meta(), ["+", "x", 0], "x")
+        assert step.before_redex == step.before == ["+", "x", 0]
+        assert step.after_redex == step.after == "x"
+
+    def test_new_fields_round_trip(self):
+        step = RewriteStep(
+            0, self._meta(), ["+", "x", 0], "x",
+            rule_id="add-zero", direction="fwd",
+            bindings={"x": "x"}, path=[1],
+            kind="rule", guard={"condition": ["true"], "result": True},
+            rationale="additive identity",
+        )
+        assert step.rule_id == "add-zero"
+        assert step.direction == "fwd"
+        assert step.bindings == {"x": "x"}
+        assert step.path == [1]
+        assert step.guard == {"condition": ["true"], "result": True}
+        assert step.rationale == "additive identity"
+
+    def test_to_dict_keeps_legacy_keys(self):
+        step = RewriteStep(0, self._meta(), ["+", "x", 0], "x")
+        d = step.to_dict()
+        for k in ("rule_index", "rule_name", "description", "before", "after"):
+            assert k in d
+
+    def test_to_dict_emits_all_situated_keys(self):
+        step = RewriteStep(
+            0, self._meta(), ["+", "x", 0], "x",
+            rule_id="add-zero", direction="fwd", bindings={"x": "x"},
+            path=[1], kind="rule",
+            guard={"condition": ["true"], "result": True},
+            rationale="additive identity",
+        )
+        d = step.to_dict()
+        for k in ("rule_index", "rule_id", "rule_name", "direction",
+                  "description", "kind", "before", "after", "path",
+                  "bindings", "guard", "rationale"):
+            assert k in d, f"missing key {k}"
+        assert json.dumps(d) is not None
+
+    def test_eq_against_expression_compares_after(self):
+        step = RewriteStep(0, self._meta(), ["+", "x", 0], "x")
+        assert step == "x"
+        assert step != ["+", "x", 0]
+
+    def test_eq_against_step_is_identity(self):
+        m = self._meta()
+        s1 = RewriteStep(0, m, ["+", "x", 0], "x")
+        s2 = RewriteStep(0, m, ["+", "x", 0], "x")
+        assert s1 == s1
+        assert s1 != s2  # distinct objects
