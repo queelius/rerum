@@ -28,9 +28,32 @@ implemented here; those live in ``engine.py``/``solve.py`` and the domain
 content under ``examples/``.
 """
 
+from fractions import Fraction
 from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
 from .expr import ExprType, format_sexpr
+
+
+def corpus_json_default(obj: Any) -> str:
+    """``json.dumps`` ``default`` hook for serializing a record to JSONL.
+
+    Records store the engine's value atoms verbatim, which keeps the
+    structured trace faithful but means a record can contain a
+    ``fractions.Fraction`` (the arithmetic prelude's exact division yields
+    one for a non-whole quotient). ``Fraction`` is not JSON-native, so write
+    a corpus with ``json.dumps(record, default=corpus_json_default)``. A
+    Fraction renders as its exact string form (e.g. ``"1/3"``).
+
+    This is domain-free: it dispatches on the Python TYPE, naming no
+    operator. It is deliberately TARGETED -- any other non-serializable type
+    raises ``TypeError`` rather than being silently coerced, so an unexpected
+    value in a record surfaces as a bug instead of corrupting the corpus.
+    """
+    if isinstance(obj, Fraction):
+        return str(obj)
+    raise TypeError(
+        f"Object of type {type(obj).__name__} is not JSON serializable"
+    )
 
 
 def to_training_record(trace, *, problem, operator, answer,
@@ -165,6 +188,11 @@ def generate_corpus(engine, problems: Sequence[ProblemType], *,
     ``problems`` is a sequence of ``(operator_label, expr)`` pairs. The
     operator label is the caller's free-form tag; this module stores it
     verbatim and never inspects it.
+
+    Serialization: records preserve the engine's exact value atoms verbatim,
+    including ``fractions.Fraction``. To write the stream to JSONL, pass
+    :func:`corpus_json_default` as the ``json.dumps`` ``default`` hook:
+    ``json.dumps(record, default=corpus_json_default)``.
     """
     for problem in problems:
         operator_label, expr = problem

@@ -143,6 +143,7 @@ from .training import (
     to_training_record,
     to_prose,
     generate_corpus,
+    corpus_json_default,
 )
 
 # Public API
@@ -236,4 +237,5 @@ __all__ = [
     "to_training_record",
     "to_prose",
     "generate_corpus",
+    "corpus_json_default",
 ]

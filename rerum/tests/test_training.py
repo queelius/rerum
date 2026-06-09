@@ -8,12 +8,14 @@ rule set so the records under test are genuine AND domain-agnostic.
 """
 
 import json
+from fractions import Fraction
 
 import pytest
 
-from rerum import RuleEngine, E, RewriteStep, RewriteTrace
+from rerum import RuleEngine, RewriteStep, RewriteTrace
 from rerum.engine import RuleMetadata
-from rerum.training import to_training_record
+from rerum.rewriter import ARITHMETIC_PRELUDE
+from rerum.training import to_training_record, corpus_json_default
 
 
 def _hand_trace():
@@ -416,18 +418,40 @@ class TestCorpusJsonlRoundTrip:
 
     def test_training_module_names_no_domain_operator(self):
         # Guardrail for the general-engine principle: training.py must not
-        # contain any domain operator literal (dd/int/lim/and/or as words).
-        import re
+        # name a domain operator as a quoted literal (how an operator would be
+        # referenced in code) nor import a domain-shaped engine module.
         from pathlib import Path
         import rerum.training as _t
         src = Path(_t.__file__).read_text()
-        # Strip string/quote noise is unnecessary; we look for the operator
-        # tokens as standalone identifiers in code or docstring.
-        for op in ("dd", "int(", "lim", " and ", " or "):
-            # ' and '/' or ' would match Python keywords; restrict to the
-            # operator-symbol sense by requiring quotes around them.
-            pass
-        # Concrete check: the calculus operator symbols must not appear as
-        # quoted string literals (how they would be referenced as ops).
-        for sym in ('"dd"', "'dd'", '"int"', "'int'", '"lim"', "'lim'"):
+        # Domain operators across families (calculus, boolean) as quoted
+        # literals. The quotes mean prose words like "and" do not false-match.
+        for sym in ('"dd"', "'dd'", '"int"', "'int'", '"lim"', "'lim'",
+                    '"and"', "'and'", '"or"', "'or'"):
             assert sym not in src, f"training.py must not name operator {sym}"
+        # It is a pure projection layer: no import of a domain-shaped module.
+        for banned in ("from .solve", "from .numeval", "from .normalize",
+                       "import solve", "import numeval", "import normalize"):
+            assert banned not in src, f"training.py must not import: {banned}"
+
+    def test_record_with_fraction_serializes_via_default(self):
+        # Records keep the engine's exact value atoms verbatim, so a trace
+        # that computes an exact rational yields a Fraction-bearing record.
+        # Naive json.dumps raises; corpus_json_default makes it serializable.
+        eng = RuleEngine(fold_funcs=ARITHMETIC_PRELUDE)
+        eng.load_dsl("@half: h => (! / 1 2)")
+        result, trace = eng.simplify("h", trace=True)
+        assert result == Fraction(1, 2)
+        rec = to_training_record(trace, problem="p", operator="half",
+                                 answer=result)
+        with pytest.raises(TypeError):
+            json.dumps(rec)  # Fraction is not JSON-native
+        text = json.dumps(rec, default=corpus_json_default)
+        assert "1/2" in text  # rendered as its exact string form
+        back = json.loads(text)
+        assert back["answer"] == "1/2"
+
+    def test_corpus_json_default_raises_on_unexpected_type(self):
+        # Targeted, fail-loud: it handles Fraction only, so an unexpected
+        # non-serializable type surfaces as a bug, not silent coercion.
+        with pytest.raises(TypeError):
+            corpus_json_default(object())
