@@ -162,3 +162,38 @@ class TestOrderKey:
         # A compound containing bool atoms is orderable.
         k = ORDER_KEY(["and", True, "x"])
         assert isinstance(k, tuple)
+
+
+class TestCanonicalSort:
+    def test_sort_numbers_first_then_vars(self):
+        # The contract's worked example: (+ x 2 y) -> (+ 2 x y).
+        assert canonical_sort(["+", "x", 2, "y"], ARITH) == ["+", 2, "x", "y"]
+
+    def test_sort_times(self):
+        assert canonical_sort(["*", "y", "x", 3], ARITH) == ["*", 3, "x", "y"]
+
+    def test_sort_is_stable_on_already_sorted(self):
+        assert canonical_sort(["+", 2, "x", "y"], ARITH) == ["+", 2, "x", "y"]
+
+    def test_sort_recurses(self):
+        expr = ["+", ["*", "b", "a"], 1]
+        assert canonical_sort(expr, ARITH) == ["+", 1, ["*", "a", "b"]]
+
+    def test_sort_preserves_non_commutative_order(self):
+        # subtraction is not AC: operands not reordered; children still sorted.
+        assert canonical_sort(["-", ["*", "b", "a"], "c"], ARITH) == \
+            ["-", ["*", "a", "b"], "c"]
+
+    def test_sort_atom(self):
+        assert canonical_sort("x", ARITH) == "x"
+        assert canonical_sort(7, ARITH) == 7
+
+    def test_sort_empty_theory_no_change(self):
+        assert canonical_sort(["+", "x", 2, "y"], EMPTY) == ["+", "x", 2, "y"]
+
+    def test_sort_confluent_over_permutations(self):
+        import itertools
+        base = ["+", "c", "a", "b", 2, 1]
+        ref = canonical_sort(base, ARITH)
+        for perm in itertools.permutations(["a", "b", "c", 1, 2]):
+            assert canonical_sort(["+", *perm], ARITH) == ref

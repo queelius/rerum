@@ -135,8 +135,22 @@ def ORDER_KEY(expr: ExprType) -> tuple:
     return (_RANK_COMPOUND, (head_key, arg_keys))
 
 
-def canonical_sort(expr: ExprType, theory: "Theory") -> ExprType:
-    raise NotImplementedError("canonical_sort not yet implemented")
+def canonical_sort(expr: ExprType, theory: Theory) -> ExprType:
+    """Sort operands of AC operators by ``ORDER_KEY``, per the theory.
+
+    Recurses into every child. Operands of AC heads are reordered into
+    ``ORDER_KEY`` order; non-AC heads keep operand order. Atoms unchanged.
+    """
+    if not compound(expr) or not expr:
+        return expr
+
+    head = expr[0]
+    sorted_args = [canonical_sort(a, theory) for a in expr[1:]]
+
+    if theory.is_ac(head):
+        sorted_args = sorted(sorted_args, key=ORDER_KEY)
+
+    return [head] + sorted_args
 
 
 def collect_like_terms(expr: ExprType, theory: "Theory") -> ExprType:
