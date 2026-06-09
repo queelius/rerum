@@ -67,3 +67,39 @@ class TestTheory:
         assert t.is_ac("+") is True
         assert t.identity("+") == 0
         assert t.annihilator("+") is None
+
+
+class TestFlatten:
+    def test_flatten_nested_plus(self):
+        assert flatten(["+", ["+", "a", "b"], "c"], ARITH) == ["+", "a", "b", "c"]
+
+    def test_flatten_nested_times(self):
+        assert flatten(["*", ["*", "a", "b"], "c"], ARITH) == ["*", "a", "b", "c"]
+
+    def test_flatten_right_nested(self):
+        assert flatten(["+", "a", ["+", "b", "c"]], ARITH) == ["+", "a", "b", "c"]
+
+    def test_flatten_deep(self):
+        expr = ["+", ["+", ["+", "a", "b"], "c"], "d"]
+        assert flatten(expr, ARITH) == ["+", "a", "b", "c", "d"]
+
+    def test_flatten_does_not_merge_mixed_ops(self):
+        assert flatten(["+", ["*", "a", "b"], "c"], ARITH) == \
+            ["+", ["*", "a", "b"], "c"]
+
+    def test_flatten_recurses_into_non_ac_ops(self):
+        assert flatten(["-", ["+", ["+", "a", "b"], "c"], "d"], ARITH) == \
+            ["-", ["+", "a", "b", "c"], "d"]
+
+    def test_flatten_atom_unchanged(self):
+        assert flatten("x", ARITH) == "x"
+        assert flatten(5, ARITH) == 5
+
+    def test_flatten_idempotent(self):
+        once = flatten(["+", ["+", "a", "b"], "c"], ARITH)
+        assert flatten(once, ARITH) == once
+
+    def test_flatten_empty_theory_no_change(self):
+        # Empty theory: no operator is AC, so no flattening happens.
+        expr = ["+", ["+", "a", "b"], "c"]
+        assert flatten(expr, EMPTY) == expr

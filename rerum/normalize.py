@@ -80,8 +80,30 @@ def _is_number(x) -> bool:
 # Stubs — replaced task-by-task
 # ---------------------------------------------------------------------------
 
-def flatten(expr: ExprType, theory: "Theory") -> ExprType:
-    raise NotImplementedError("flatten not yet implemented")
+def flatten(expr: ExprType, theory: Theory) -> ExprType:
+    """Recursively make AC operators n-ary, per the theory.
+
+    ``(+ (+ a b) c)`` becomes ``(+ a b c)`` when ``theory.is_ac("+")``. A
+    nested operand is merged into its parent only when their heads match and
+    the head is AC under ``theory``. Children of every compound are flattened
+    first. Atoms are returned unchanged. With an empty theory nothing merges.
+    """
+    if not compound(expr) or not expr:
+        return expr
+
+    head = expr[0]
+    flat_args = [flatten(a, theory) for a in expr[1:]]
+
+    if theory.is_ac(head):
+        merged: List[ExprType] = []
+        for a in flat_args:
+            if compound(a) and a and a[0] == head:
+                merged.extend(a[1:])
+            else:
+                merged.append(a)
+        return [head] + merged
+
+    return [head] + flat_args
 
 
 def ORDER_KEY(expr: ExprType) -> tuple:
