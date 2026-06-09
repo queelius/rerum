@@ -223,3 +223,169 @@ class TestAuthoringJsonSafety:
         json.dumps(result)
         assert result["ok"] is False
         assert any(e["rule_name"] == "frac-bad" for e in result["errors"])
+
+
+class TestApplyingTools:
+    def test_simplify_returns_situated_trace_and_prose(self):
+        from rerum import RuleEngine
+        from rerum.mcp.tools import tool_simplify
+
+        engine = RuleEngine.from_dsl(
+            '@add-zero {category=identity}: (+ ?x 0) => :x'
+        )
+        result = tool_simplify(engine, expr="(+ y 0)")
+        assert result["result"] == "y"
+        assert result["converged"] is True
+        step = result["trace"]["steps"][0]
+        assert step["rule_id"] == "add-zero"
+        assert step["kind"] == "rule"
+        assert "before_root" in step
+        assert isinstance(result["trace"]["prose"], str)
+        assert "prose" in result["trace"]
+
+    def test_apply_once_returns_single_step(self):
+        from rerum import RuleEngine
+        from rerum.mcp.tools import tool_apply_once
+
+        engine = RuleEngine.from_dsl("""
+            @r1: (a ?x) => (b :x)
+            @r2: (b ?x) => (c :x)
+        """)
+        result = tool_apply_once(engine, expr="(a y)")
+        # apply_once does one rewrite, returning matched rule metadata.
+        assert result["result"] == "(b y)"
+        assert result["trace"]["total_steps"] == 1
+
+    def test_equivalents_basic(self):
+        from rerum import RuleEngine
+        from rerum.mcp.tools import tool_equivalents
+
+        engine = RuleEngine.from_dsl('@commute: (+ ?x ?y) <=> (+ :y :x)')
+        result = tool_equivalents(engine, expr="(+ a b)", max_depth=3)
+        assert "(+ a b)" in result["forms"]
+        assert "(+ b a)" in result["forms"]
+
+    def test_prove_equal_proven_carries_prose(self):
+        from rerum import RuleEngine
+        from rerum.mcp.tools import tool_prove_equal
+
+        engine = RuleEngine.from_dsl('@commute: (+ ?x ?y) <=> (+ :y :x)')
+        result = tool_prove_equal(
+            engine, expr_a="(+ a b)", expr_b="(+ b a)", max_depth=3
+        )
+        assert result["proven"] is True
+        assert "prose" in result
+
+    def test_prove_equal_unprovable_budget_reports_not_found(self):
+        # An unprovable query under a tiny budget must return found=False,
+        # never a partial or a hang. The budget is the caller's; honor it.
+        from rerum import RuleEngine
+        from rerum.mcp.tools import tool_prove_equal
+
+        engine = RuleEngine.from_dsl('@commute: (+ ?x ?y) <=> (+ :y :x)')
+        result = tool_prove_equal(
+            engine, expr_a="(+ a b)", expr_b="(* a b)",
+            max_depth=2, max_expressions=10,
+        )
+        assert result["proven"] is False
+        assert isinstance(result["prose"], str)
+
+    def test_minimize_basic(self):
+        from rerum import RuleEngine
+        from rerum.mcp.tools import tool_minimize
+
+        engine = RuleEngine.from_dsl(
+            '@add-zero {category=identity}: (+ ?x 0) => :x'
+        )
+        result = tool_minimize(engine, expr="(+ y 0)", metric="size")
+        assert result["best"] == "y"
+        assert "prose" in result
+
+
+class TestApplyingJsonSafety:
+    """Every applying response must survive json.dumps on a derivation that
+    PRODUCES or BINDS an exact rational (a Fraction atom).
+
+    The applying tools emit the richest data -- full traces, equivalent
+    forms, proof paths, minimize derivations -- all dense with computed
+    VALUES that can be Fraction. A Fraction is not JSON-native, so every
+    result/equivalent/proof-path expression must render via format_sexpr
+    and every structured field (bindings, guard) must route through
+    _json_safe. These tests are the proof, per applying tool.
+    """
+
+    def _compute_engine(self):
+        # (third ?x) computes (! / 1 3) -> Fraction(1, 3) in the rewrite, so
+        # both the simplify result AND the captured step's after are a
+        # Fraction. One-way (=>) so the fixpoint is the rational.
+        from rerum import RuleEngine
+        from rerum.rewriter import ARITHMETIC_PRELUDE
+        return RuleEngine.from_dsl(
+            '@third: (third ?x) => (! / 1 3)', fold_funcs=ARITHMETIC_PRELUDE)
+
+    def _dual_compute_engine(self):
+        # Two compute edges that meet at the SAME Fraction atom: both
+        # (third) and (one-over-three) rewrite to (! / 1 3) -> Fraction(1, 3).
+        # prove_equal's bidirectional BFS then intersects at the Fraction
+        # atom (the proof's common form), so the proof path carries a step
+        # whose after IS a Fraction -- the rational-bearing derivation we
+        # need to prove json-safe. Both endpoints are plain string-spellable
+        # expressions; a Fraction atom is not itself spellable as a parsed
+        # endpoint (it renders to "(/ 1 3)", a list on reparse), so the
+        # rational must be reached via a compute step rather than supplied
+        # directly.
+        from rerum import RuleEngine
+        from rerum.rewriter import ARITHMETIC_PRELUDE
+        return RuleEngine.from_dsl(
+            "@third: (third) => (! / 1 3)\n"
+            "@oot: (one-over-three) => (! / 1 3)",
+            fold_funcs=ARITHMETIC_PRELUDE)
+
+    def test_simplify_json_dumps_clean_with_rational(self):
+        import json
+        from rerum.mcp.tools import tool_simplify
+
+        engine = self._compute_engine()
+        result = tool_simplify(engine, expr="(third a)")
+        # The result and the step's computed value are Fraction(1, 3);
+        # both must have rendered to the s-expr string "(/ 1 3)".
+        assert result["result"] == "(/ 1 3)"
+        json.dumps(result)
+
+    def test_equivalents_json_dumps_clean_with_rational(self):
+        import json
+        from rerum.mcp.tools import tool_equivalents
+
+        engine = self._compute_engine()
+        result = tool_equivalents(
+            engine, expr="(third a)", max_depth=3,
+            include_unidirectional=True)
+        assert "(/ 1 3)" in result["forms"]
+        json.dumps(result)
+
+    def test_prove_equal_json_dumps_clean_with_rational(self):
+        import json
+        from rerum.mcp.tools import tool_prove_equal
+
+        engine = self._dual_compute_engine()
+        result = tool_prove_equal(
+            engine, expr_a="(third)", expr_b="(one-over-three)", max_depth=3,
+            include_unidirectional=True)
+        assert result["proven"] is True
+        # The common form and both path steps' after are Fraction(1, 3),
+        # rendered to "(/ 1 3)".
+        assert result["common_form"] == "(/ 1 3)"
+        json.dumps(result)
+
+    def test_minimize_json_dumps_clean_with_rational(self):
+        import json
+        from rerum.mcp.tools import tool_minimize
+
+        engine = self._compute_engine()
+        # Make (third) expensive so minimize selects the computed (/ 1 3);
+        # the derivation then carries the Fraction-bearing step.
+        result = tool_minimize(
+            engine, expr="(third a)", op_costs={"third": 100},
+            include_unidirectional=True)
+        assert result["best"] == "(/ 1 3)"
+        json.dumps(result)

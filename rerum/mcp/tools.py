@@ -13,7 +13,7 @@ passed through ``_json_safe`` (the shared Group 1 helper). A Fraction is
 not JSON-native, so both routes are load-bearing.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from rerum.engine import (
     ExampleValidationError,
@@ -244,3 +244,255 @@ def tool_list_rulesets(engine, store) -> Dict[str, Any]:
 def tool_load_theory(engine, store, *, name: str) -> Dict[str, Any]:
     """Load a saved theory (``<name>.theory.json``) and apply it."""
     return store.load_theory(engine, name)
+
+
+# =====================================================================
+# Applying
+# =====================================================================
+
+def _stats(engine, recorder=None) -> Dict[str, Any]:
+    """Lightweight, JSON-native run stats.
+
+    ``recorder`` is an optional ``_Recorder`` carrying a wall-clock
+    duration; reasoning tools (equivalents/prove_equal/minimize) call this
+    without one and report just the rule count.
+    """
+    out: Dict[str, Any] = {"rules_in_engine": len(engine._rules)}
+    if recorder is not None:
+        out["duration_ms"] = round(recorder.duration_ms, 3)
+    return out
+
+
+def _parse(expr: str):
+    try:
+        return parse_sexpr(expr)
+    except Exception as exc:
+        raise MCPToolError(
+            "parse_error", f"failed to parse expr: {exc}", cause=exc
+        ) from exc
+
+
+def _path_prose(initial, steps) -> str:
+    """Render prose for a hand-assembled situated path.
+
+    ``prove_equal`` and ``minimize`` build their step list out of proof
+    paths / a derivation trace rather than via the live ``trace_recorder``
+    hook, so this helper wires those raw ``RewriteStep`` objects into a
+    fresh ``_Recorder`` and delegates to the domain-agnostic
+    ``render_prose`` (``rerum.training.to_prose``). Best-effort: any
+    reconstruction failure yields an empty string rather than raising.
+    """
+    from rerum.mcp.trace import _Recorder, render_prose
+    from rerum.trace import RewriteTrace
+
+    rec = _Recorder()
+    try:
+        trace = RewriteTrace()
+        trace.initial = initial
+        for s in steps:
+            trace.add_step(s)
+        rec.trace = trace
+        return render_prose(rec)
+    except Exception:
+        return ""
+
+
+def tool_simplify(engine, *, expr: str, strategy: str = "exhaustive",
+                  max_steps: int = 1000,
+                  groups: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Simplify ``expr`` to fixpoint; return result + situated trace + prose.
+
+    The situated trace is captured via ``trace_recorder`` (a temporary
+    ``on_rule_applied`` hook); ``assemble_trace`` renders it JSON-safe with
+    a domain-agnostic prose answer line. The result is rendered to an
+    s-expr STRING so a Fraction-valued normal form stays serializable.
+    """
+    from rerum.mcp.trace import assemble_trace, trace_recorder
+
+    parsed = _parse(expr)
+    initial_str = format_sexpr(parsed)
+    try:
+        with trace_recorder(engine, initial=parsed) as recorder:
+            result = engine.simplify(
+                parsed, strategy=strategy, max_steps=max_steps, groups=groups)
+    except MCPToolError:
+        raise
+    except Exception as exc:
+        raise MCPToolError("internal_error", f"simplify failed: {exc}",
+                           cause=exc) from exc
+
+    final_str = format_sexpr(result)
+    trace = assemble_trace(initial=initial_str, final=final_str,
+                           recorder=recorder)
+    return {"result": final_str, "converged": True, "trace": trace,
+            "stats": _stats(engine, recorder)}
+
+
+def tool_apply_once(engine, *, expr: str,
+                    groups: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Apply the first matching rule once; return result + situated trace + prose.
+
+    ``engine.apply_once`` returns ``(result, metadata)``; this takes the
+    expression form and renders it to a string. The trace is at most one
+    step. ``changed`` reports whether the one-shot rewrite altered the
+    expression.
+    """
+    from rerum.mcp.trace import assemble_trace, trace_recorder
+
+    parsed = _parse(expr)
+    initial_str = format_sexpr(parsed)
+    try:
+        with trace_recorder(engine, initial=parsed) as recorder:
+            outcome = engine.apply_once(parsed, groups=groups)
+    except MCPToolError:
+        raise
+    except Exception as exc:
+        raise MCPToolError("internal_error", f"apply_once failed: {exc}",
+                           cause=exc) from exc
+
+    # apply_once returns (result, metadata); take the expression form.
+    result_expr = outcome[0] if isinstance(outcome, tuple) else outcome
+    final_str = format_sexpr(result_expr)
+    trace = assemble_trace(initial=initial_str, final=final_str,
+                           recorder=recorder)
+    return {"result": final_str,
+            "changed": final_str != initial_str,
+            "trace": trace, "stats": _stats(engine, recorder)}
+
+
+def tool_equivalents(engine, *, expr: str, max_depth: int = 10,
+                     max_count: int = 100, strategy: str = "bfs",
+                     include_unidirectional: bool = False,
+                     groups: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Enumerate expressions equivalent to ``expr``.
+
+    Every form is rendered to an s-expr STRING via ``format_sexpr`` so a
+    rational-bearing equivalent (e.g. ``(/ 1 3)``) stays JSON-serializable.
+    """
+    parsed = _parse(expr)
+    try:
+        forms = list(engine.equivalents(
+            parsed, max_depth=max_depth, max_count=max_count,
+            strategy=strategy,
+            include_unidirectional=include_unidirectional, groups=groups))
+    except MCPToolError:
+        raise
+    except Exception as exc:
+        raise MCPToolError("internal_error", f"equivalents failed: {exc}",
+                           cause=exc) from exc
+
+    return {"forms": [format_sexpr(f) for f in forms],
+            "total_count": len(forms), "stats": _stats(engine)}
+
+
+def tool_prove_equal(engine, *, expr_a: str, expr_b: str, max_depth: int = 10,
+                     max_expressions: Optional[int] = None,
+                     include_unidirectional: bool = False,
+                     trace: bool = True,
+                     groups: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Prove ``expr_a`` and ``expr_b`` equivalent via bidirectional BFS.
+
+    On success returns the meeting form, both labeled paths (lists of
+    situated step dicts from ``EqualityProof.path_a``/``path_b``), and a
+    prose rendering of the combined proof. On budget exhaustion (no common
+    form within ``max_depth``/``max_expressions``) returns ``proven=False``
+    with a clear message -- never a partial or a hang.
+
+    Each path step is serialized via ``step_to_dict`` (already JSON-safe:
+    bindings and any Fraction-valued ``after`` are routed through
+    ``_json_safe``/``format_sexpr``).
+    """
+    from rerum.mcp.trace import step_to_dict
+
+    parsed_a = _parse(expr_a)
+    parsed_b = _parse(expr_b)
+    try:
+        proof = engine.prove_equal(
+            parsed_a, parsed_b, max_depth=max_depth,
+            max_expressions=max_expressions, trace=trace,
+            include_unidirectional=include_unidirectional, groups=groups)
+    except MCPToolError:
+        raise
+    except Exception as exc:
+        raise MCPToolError("internal_error", f"prove_equal failed: {exc}",
+                           cause=exc) from exc
+
+    if proof is None:
+        # Budget exhausted (max_depth / max_expressions) with no common
+        # form. Surface a clear not-found result, not a partial.
+        return {"proven": False, "prose": "No proof found within budget.",
+                "stats": _stats(engine)}
+
+    out: Dict[str, Any] = {
+        "proven": True,
+        "common_form": format_sexpr(proof.common),
+        "depth_a": proof.depth_a,
+        "depth_b": proof.depth_b,
+        "stats": _stats(engine),
+    }
+    # path_a/path_b are List[RewriteStep] (situated) when trace=True.
+    path_a = proof.path_a if trace else None
+    path_b = proof.path_b if trace else None
+    if path_a is not None:
+        out["path_a"] = [step_to_dict(s) for s in path_a]
+    if path_b is not None:
+        out["path_b"] = [step_to_dict(s) for s in path_b]
+    # Prose over the combined path: A -> common -> B. The reversed B path
+    # walks common -> B. Each is a situated RewriteStep; reconstruction is
+    # best-effort.
+    combined = list(path_a or []) + list(reversed(path_b or []))
+    out["prose"] = _path_prose(parsed_a, combined)
+    return out
+
+
+def tool_minimize(engine, *, expr: str, metric: str = "size",
+                  op_costs: Optional[Dict[str, float]] = None,
+                  max_depth: int = 10, max_count: int = 10000,
+                  include_unidirectional: bool = True,
+                  groups: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Find the minimum-cost equivalent of ``expr``; include the derivation prose.
+
+    ``OptimizationResult.derivation`` is a ``RewriteTrace`` from the
+    original to the best form (or ``None`` when the original is already
+    optimal). Its steps are serialized via ``step_to_dict`` (JSON-safe) and
+    rendered to prose. Costs are JSON-native numbers; the best expression
+    is rendered to an s-expr STRING.
+    """
+    from rerum.mcp.trace import step_to_dict
+
+    parsed = _parse(expr)
+    kwargs: Dict[str, Any] = {
+        "max_depth": max_depth, "max_count": max_count,
+        "include_unidirectional": include_unidirectional, "groups": groups,
+    }
+    if op_costs is not None:
+        kwargs["op_costs"] = op_costs
+    else:
+        kwargs["metric"] = metric
+
+    try:
+        opt = engine.minimize(parsed, **kwargs)
+    except MCPToolError:
+        raise
+    except Exception as exc:
+        raise MCPToolError("internal_error", f"minimize failed: {exc}",
+                           cause=exc) from exc
+
+    out: Dict[str, Any] = {
+        "original": format_sexpr(opt.original),
+        "original_cost": opt.original_cost,
+        "best": format_sexpr(opt.expr),
+        "best_cost": opt.cost,
+        "improvement_ratio": opt.improvement_ratio,
+        "expressions_checked": opt.expressions_checked,
+        "stats": _stats(engine),
+    }
+    # derivation is a RewriteTrace (iterable of RewriteStep) or None.
+    derivation = getattr(opt, "derivation", None)
+    if derivation is not None:
+        steps = list(derivation)
+        out["derivation"] = [step_to_dict(s) for s in steps]
+        out["prose"] = _path_prose(opt.original, steps)
+    else:
+        out["prose"] = ""
+    return out
