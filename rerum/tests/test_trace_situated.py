@@ -196,3 +196,52 @@ class TestGlobalSequence:
         assert [e["before_root"] for e in seq] == [["+", "x", 0], "x"]
         assert [e["after_root"] for e in seq] == ["x", ["g", "x"]]
         assert seq[-1]["after_root"] == t.final
+
+
+class TestPathThreading:
+    """Emitted steps carry the redex path under each strategy."""
+
+    def _engine(self):
+        return RuleEngine.from_dsl("@add-zero: (+ ?x 0) => :x")
+
+    def test_root_redex_has_empty_path(self):
+        eng = self._engine()
+        _, trace = eng.simplify(E("(+ x 0)"), trace=True)
+        assert trace.steps, "expected at least one step"
+        assert trace.steps[0].path == []
+
+    def test_child_redex_carries_path_exhaustive(self):
+        eng = self._engine()
+        _, trace = eng.simplify(E("(* (+ x 0) y)"), trace=True, strategy="exhaustive")
+        paths = [s.path for s in trace.steps]
+        assert [1] in paths, f"expected redex path [1] among {paths}"
+
+    def test_child_redex_carries_path_bottomup(self):
+        eng = self._engine()
+        _, trace = eng.simplify(E("(* (+ x 0) y)"), trace=True, strategy="bottomup")
+        paths = [s.path for s in trace.steps]
+        assert [1] in paths, f"expected redex path [1] among {paths}"
+
+    def test_child_redex_carries_path_topdown(self):
+        eng = self._engine()
+        _, trace = eng.simplify(E("(* (+ x 0) y)"), trace=True, strategy="topdown")
+        paths = [s.path for s in trace.steps]
+        assert [1] in paths, f"expected redex path [1] among {paths}"
+
+    def test_global_sequence_roundtrips_after_threading(self):
+        eng = self._engine()
+        result, trace = eng.simplify(E("(* (+ x 0) y)"), trace=True)
+        seq = trace.to_global_sequence()
+        assert seq[-1]["after_root"] == result
+        assert seq[0]["before_root"] == trace.initial
+
+    def test_hook_context_expr_path_populated(self):
+        eng = self._engine()
+        seen = []
+
+        def observer(step, ctx):
+            seen.append(tuple(ctx.expr_path))
+
+        eng.on_rule_applied(observer)
+        eng.simplify(E("(* (+ x 0) y)"))
+        assert (1,) in seen, f"expected (1,) among {seen}"

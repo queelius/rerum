@@ -2189,7 +2189,8 @@ class RuleEngine:
             Simplified expression, or (expression, trace) if trace=True
         """
         if trace:
-            return self._simplify_with_trace(expr, max_steps, groups=groups)
+            return self._simplify_with_trace(expr, max_steps, groups=groups,
+                                             strategy=strategy)
 
         # Check if we need slow path (conditions or groups)
         has_conditions = any(m.condition is not None for m in self._metadata)
@@ -2249,7 +2250,8 @@ class RuleEngine:
 
         return expr
 
-    def _fire_rule_applied(self, step: RewriteStep, *, depth: int = 0) -> bool:
+    def _fire_rule_applied(self, step: RewriteStep, *, depth: int = 0,
+                           expr_path: Optional[List[int]] = None) -> bool:
         """Fire the rule_applied event with a standard HookContext.
 
         Returns True if any observer requested cancellation via ctx.cancel().
@@ -2265,13 +2267,18 @@ class RuleEngine:
         ``depth`` is the recursion depth of the expression position being
         matched (root = 0, root's child = 1, etc.). Pass-methods thread this
         value through their recursive calls.
+
+        ``expr_path`` is the integer-index path from the running root to the
+        redex position ([] for a root-level redex, [1] for the first operand,
+        etc.). Strategy drivers populate this from their accumulated path;
+        callers that do not thread a path leave it None (treated as []).
         """
         self._step_count += 1
         if not self._hooks.count("rule_applied"):
             return False
         ctx = HookContext(
             engine=self,
-            expr_path=[],
+            expr_path=list(expr_path) if expr_path is not None else [],
             depth=depth,
             step_count=self._step_count,
             event_name="rule_applied",
@@ -2540,7 +2547,8 @@ class RuleEngine:
 
     def _simplify_exhaustive(self, expr: ExprType, max_steps: int,
                               groups: Optional[List[str]] = None,
-                              _top_level: bool = True) -> ExprType:
+                              _top_level: bool = True,
+                              path: Optional[List[int]] = None) -> ExprType:
         """Exhaustive strategy with condition and group support.
 
         Uses a visited set to terminate on cycles (e.g. bidirectional rules
@@ -2551,7 +2559,14 @@ class RuleEngine:
         to all registered ``on_rule_applied`` hooks. Tracing is done by
         registering a temporary hook in ``_simplify_with_trace`` rather than
         passing a listener through.
+
+        ``path`` is the integer-index path from the running root to the
+        position being simplified: [] at the root, [i] for a direct child,
+        etc. Used to stamp ``RewriteStep.path`` and populate
+        ``HookContext.expr_path``.
         """
+        if path is None:
+            path = []
         current = expr
         visited = set()
         if _top_level:
@@ -2596,8 +2611,9 @@ class RuleEngine:
                             metadata=metadata,
                             before=current,
                             after=new_expr,
+                            path=list(path),
                         )
-                        if self._fire_rule_applied(step):
+                        if self._fire_rule_applied(step, expr_path=path):
                             return new_expr  # Hook requested cancellation after this step.
                         current = new_expr
                         changed = True
@@ -2646,9 +2662,10 @@ class RuleEngine:
                 if isinstance(current, list) and len(current) > 0:
                     new_children = []
                     subexpr_changed = False
-                    for child in current:
+                    for idx, child in enumerate(current):
                         new_child = self._simplify_exhaustive(
                             child, max_steps // 10 or 1, groups=groups, _top_level=False,
+                            path=path + [idx],
                         )
                         new_children.append(new_child)
                         if new_child != child:
@@ -2692,20 +2709,31 @@ class RuleEngine:
         return expr
 
     def _bottomup_pass(self, expr: ExprType, groups: Optional[List[str]] = None,
-                        depth: int = 0) -> ExprType:
+                        depth: int = 0,
+                        path: Optional[List[int]] = None) -> ExprType:
         """Single bottom-up pass: simplify children, then apply rules to parent.
 
         no_match resolvers may install rules and request retry. Retry loops
         within this pass invocation up to max_resolver_retries times before
         raising ResolverLoopError, matching the safeguard in
         _simplify_exhaustive.
+
+        ``path`` is the integer-index path from the running root to the
+        position being simplified: [] at the root, [i] for a direct child,
+        etc. Used to stamp ``RewriteStep.path`` and populate
+        ``HookContext.expr_path``.
         """
+        if path is None:
+            path = []
         # Base case: atoms can't be simplified structurally
         if not isinstance(expr, list) or len(expr) == 0:
             return expr
 
-        # First, recursively simplify all children
-        new_children = [self._bottomup_pass(child, groups=groups, depth=depth + 1) for child in expr]
+        # First, recursively simplify all children (threading their path)
+        new_children = [
+            self._bottomup_pass(child, groups=groups, depth=depth + 1, path=path + [i])
+            for i, child in enumerate(expr)
+        ]
         current = new_children
 
         # Try to apply rules to the parent. Loop allows a resolver returning
@@ -2738,8 +2766,9 @@ class RuleEngine:
                         metadata=metadata,
                         before=current,
                         after=result,
+                        path=list(path),
                     )
-                    self._fire_rule_applied(step, depth=depth)
+                    self._fire_rule_applied(step, depth=depth, expr_path=path)
                     return result
 
             # No rule fired. Try the no_match resolver.
@@ -2797,14 +2826,22 @@ class RuleEngine:
         return expr
 
     def _topdown_pass(self, expr: ExprType, groups: Optional[List[str]] = None,
-                      depth: int = 0) -> ExprType:
+                      depth: int = 0,
+                      path: Optional[List[int]] = None) -> ExprType:
         """Single top-down pass: apply rules to parent, then simplify children.
 
         no_match resolvers may install rules and request retry. Retry loops
         within this pass invocation up to max_resolver_retries times before
         raising ResolverLoopError, matching the safeguard in
         _simplify_exhaustive.
+
+        ``path`` is the integer-index path from the running root to the
+        position being simplified: [] at the root, [i] for a direct child,
+        etc. Used to stamp ``RewriteStep.path`` and populate
+        ``HookContext.expr_path``.
         """
+        if path is None:
+            path = []
         current = expr
 
         # Try to apply rules at this node first. Loop allows a resolver
@@ -2837,8 +2874,9 @@ class RuleEngine:
                         metadata=metadata,
                         before=current,
                         after=result,
+                        path=list(path),
                     )
-                    self._fire_rule_applied(step, depth=depth)
+                    self._fire_rule_applied(step, depth=depth, expr_path=path)
                     return result  # Return immediately - will be called again
 
             # No rule fired. Try the no_match resolver.
@@ -2869,14 +2907,18 @@ class RuleEngine:
 
         # No rule applied at this node - recursively process children
         if isinstance(current, list) and len(current) > 0:
-            new_children = [self._topdown_pass(child, groups=groups, depth=depth + 1) for child in current]
+            new_children = [
+                self._topdown_pass(child, groups=groups, depth=depth + 1, path=path + [i])
+                for i, child in enumerate(current)
+            ]
             if new_children != list(current):
                 return new_children
 
         return current
 
     def _simplify_with_trace(self, expr: ExprType, max_steps: int,
-                             groups: Optional[List[str]] = None) -> Tuple[ExprType, RewriteTrace]:
+                             groups: Optional[List[str]] = None,
+                             strategy: str = "exhaustive") -> Tuple[ExprType, RewriteTrace]:
         """Traced simplification implemented as a temporary on_rule_applied hook.
 
         A ``RewriteTrace`` instance is registered as an ``on_rule_applied``
@@ -2886,6 +2928,10 @@ class RuleEngine:
 
         Behavioral compatibility: returns ``(result, RewriteTrace)`` with the
         same trace contents as before.
+
+        ``strategy`` selects the rewriting strategy: "exhaustive" (default),
+        "bottomup", or "topdown". The trace receives steps stamped with the
+        redex path under whichever strategy is active.
         """
         trace_obj = RewriteTrace()
         trace_obj.initial = expr
@@ -2895,7 +2941,12 @@ class RuleEngine:
 
         self.on_rule_applied(trace_hook)
         try:
-            result = self._simplify_exhaustive(expr, max_steps, groups=groups)
+            if strategy == "bottomup":
+                result = self._simplify_bottomup(expr, max_steps, groups=groups)
+            elif strategy == "topdown":
+                result = self._simplify_topdown(expr, max_steps, groups=groups)
+            else:
+                result = self._simplify_exhaustive(expr, max_steps, groups=groups)
         finally:
             self.off_rule_applied(trace_hook)
 
