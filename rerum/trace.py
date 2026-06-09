@@ -122,6 +122,11 @@ class RewriteStep:
         return not self.__eq__(other)
 
     def __hash__(self) -> int:
+        # Identity hash, consistent with step-vs-step identity equality.
+        # CAVEAT: a step and the expression it equals (its ``after``) hash
+        # differently, so do NOT mix steps and raw expressions in the same
+        # set/dict (membership would silently miss). Proof/derivation paths
+        # keep steps in plain lists, where ``==`` is used, not hashing.
         return id(self)
 
     def _name(self) -> str:
