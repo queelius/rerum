@@ -241,14 +241,54 @@ class RewriteTrace:
         """True if any rewriting was done."""
         return len(self.steps) > 0
 
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert trace to JSON-serializable dictionary."""
-        return {
+    def to_global_sequence(self) -> List[Dict[str, Any]]:
+        """Replay the trace from ``self.initial`` as whole-expression states.
+
+        Each entry is ``{"before_root", "after_root", "step"}``. The running
+        root starts at ``self.initial``; for each step, ``after_root`` is the
+        running root with ``step.after`` (the redex result) spliced in at
+        ``step.path`` (``[]`` when a step predates path threading, meaning a
+        root-level edit). The new ``after_root`` becomes the next
+        ``before_root``. Lossless: the redex-local edits plus paths fully
+        determine the global derivation, so it need not be stored per step.
+        """
+        sequence: List[Dict[str, Any]] = []
+        root = self.initial
+        for step in self.steps:
+            path = step.path if step.path is not None else []
+            before_root = root
+            after_root = splice_at(root, path, step.after)
+            sequence.append({
+                "before_root": before_root,
+                "after_root": after_root,
+                "step": step,
+            })
+            root = after_root
+        return sequence
+
+    def to_dict(self, global_sequence: bool = False) -> Dict[str, Any]:
+        """Convert trace to JSON-serializable dictionary.
+
+        When ``global_sequence`` is True, include a ``global_sequence`` key:
+        the whole-expression replay from ``to_global_sequence()`` with each
+        step rendered via ``RewriteStep.to_dict()``.
+        """
+        d: Dict[str, Any] = {
             "initial": self.initial,
             "final": self.final,
             "steps": [step.to_dict() for step in self.steps],
             "step_count": len(self.steps),
         }
+        if global_sequence:
+            d["global_sequence"] = [
+                {
+                    "before_root": entry["before_root"],
+                    "after_root": entry["after_root"],
+                    "step": entry["step"].to_dict(),
+                }
+                for entry in self.to_global_sequence()
+            ]
+        return d
 
     def rule_counts(self) -> Dict[str, int]:
         """Count how many times each rule was applied."""

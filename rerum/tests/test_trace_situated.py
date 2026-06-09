@@ -125,3 +125,54 @@ class TestRewriteStepFields:
         s2 = RewriteStep(0, m, ["+", "x", 0], "x")
         assert s1 == s1
         assert s1 != s2  # distinct objects
+
+
+class TestGlobalSequence:
+    """to_global_sequence replays redex edits at their paths from initial."""
+
+    def _trace(self):
+        # Build a trace by hand: two steps editing different redexes of a root.
+        meta = RuleMetadata(name="add-zero")
+        t = RewriteTrace()
+        t.initial = ["+", ["+", "x", 0], 0]
+        # Step 1: inner (+ x 0) at path [1] -> x.  Root becomes (+ x 0).
+        t(RewriteStep(0, meta, ["+", "x", 0], "x", path=[1]))
+        # Step 2: outer (+ x 0) at path [] -> x.  Root becomes x.
+        t(RewriteStep(0, meta, ["+", "x", 0], "x", path=[]))
+        t.final = "x"
+        return t
+
+    def test_global_sequence_roots(self):
+        t = self._trace()
+        seq = t.to_global_sequence()
+        assert len(seq) == 2
+        assert seq[0]["before_root"] == ["+", ["+", "x", 0], 0]
+        assert seq[0]["after_root"] == ["+", "x", 0]
+        assert seq[1]["before_root"] == ["+", "x", 0]
+        assert seq[1]["after_root"] == "x"
+
+    def test_global_sequence_carries_step(self):
+        t = self._trace()
+        seq = t.to_global_sequence()
+        assert seq[0]["step"] is t.steps[0]
+        assert seq[1]["step"] is t.steps[1]
+
+    def test_global_sequence_final_matches(self):
+        t = self._trace()
+        seq = t.to_global_sequence()
+        assert seq[-1]["after_root"] == t.final
+
+    def test_to_dict_global_sequence_flag(self):
+        t = self._trace()
+        d_plain = t.to_dict()
+        assert "global_sequence" not in d_plain
+        d_glob = t.to_dict(global_sequence=True)
+        assert "global_sequence" in d_glob
+        assert len(d_glob["global_sequence"]) == 2
+        assert json.dumps(d_glob) is not None
+
+    def test_to_dict_keeps_legacy_keys(self):
+        t = self._trace()
+        d = t.to_dict()
+        for k in ("initial", "final", "steps", "step_count"):
+            assert k in d
