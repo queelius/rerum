@@ -27,14 +27,15 @@ def make_solver_resolver(sampler: Callable[[str], str], *,
                          state: Dict[str, Any]) -> Callable[[Any, Any], Optional[Resolution]]:
     """Build a no_match resolver that delegates to ``sampler`` for new rules.
 
-    ``state`` is a shared dict the caller owns; the resolver records
-    ``call_count``, the list of ``inferred_rules`` (JSON-native dicts), and
-    a ``last_termination`` code (``"resolver_budget_exhausted"`` when the
-    per-solve cap is hit). The caller reads these after the rewrite to shape
-    the response.
+    ``state`` is a shared dict the caller owns (this factory initializes its
+    defaults); the resolver records ``call_count`` and a ``last_termination``
+    code (``"resolver_budget_exhausted"`` when the per-solve cap is hit).
+    Which rules were ACTUALLY installed is read off the engine afterwards by
+    the caller (provenance metadata), not bookkept here -- the engine
+    deduplicates re-proposed named rules, so resolver-side accounting would
+    over-count.
     """
     state.setdefault("call_count", 0)
-    state.setdefault("inferred_rules", [])
     state.setdefault("last_termination", None)
 
     def resolver(expr, ctx):
@@ -68,11 +69,6 @@ def make_solver_resolver(sampler: Callable[[str], str], *,
                 return None
 
         rules_for_resolution = [(meta, [pat, skel]) for meta, pat, skel in rule_pairs]
-        for meta, pat, skel in rule_pairs:
-            state["inferred_rules"].append({
-                "name": meta.name, "category": meta.category,
-                "dsl": _rule_to_dsl(meta, pat, skel), "round": round_num})
-
         return Resolution(rules=rules_for_resolution, metadata={
             "provenance": "llm-inferred", "via_solve": True, "round": round_num})
 
@@ -82,8 +78,9 @@ def make_solver_resolver(sampler: Callable[[str], str], *,
 def _build_prompt(expr, goal, engine) -> str:
     from rerum.engine import format_sexpr
     expr_str = format_sexpr(expr)
-    rules_count = len(engine._rules)
-    categories = sorted({m.category for m in engine._metadata if m.category})
+    rules_count = len(engine)
+    categories = sorted({meta.category for _, _, meta in engine.iter_rules()
+                         if meta.category})
     cats_str = ", ".join(categories) if categories else "(none)"
     return (
         "The rewrite engine is stuck. Propose ONE rewrite rule that "
@@ -114,27 +111,11 @@ def _try_parse_rule_reply(reply: str):
 
 
 def _validate_pairs(rule_pairs, engine) -> None:
-    from rerum.engine import _validate_example
+    """Delegate per-rule example validation to the engine's own validator.
+
+    ``_validate_rule_examples`` honors the bidirectional direction-skip and
+    threads the engine's undefined_op/fold_error resolvers; re-implementing
+    that loop here had already drifted (it dropped the resolver threading).
+    """
     for meta, pat, skel in rule_pairs:
-        if not meta.examples:
-            continue
-        for example in meta.examples:
-            direction = example.get("direction", "fwd")
-            if meta.bidirectional and direction != meta.direction:
-                continue
-            _validate_example(pat, skel, meta, example, engine._fold_funcs or {})
-
-
-def _rule_to_dsl(meta, pat, skel) -> str:
-    from rerum.engine import format_sexpr
-    name_part = f"@{meta.name}" if meta.name else ""
-    if meta.priority:
-        name_part += f"[{meta.priority}]"
-    if meta.description:
-        name_part += f' "{meta.description}"'
-    if meta.category:
-        name_part += f" {{category={meta.category}}}"
-    if name_part:
-        name_part += ": "
-    arrow = "<=>" if meta.bidirectional else "=>"
-    return f"{name_part}{format_sexpr(pat)} {arrow} {format_sexpr(skel)}"
+        engine._validate_rule_examples([pat, skel], meta)

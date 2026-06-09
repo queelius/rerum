@@ -64,7 +64,7 @@ class RuleStore:
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(text)
         return {"ok": True, "name": name, "path": path,
-                "rules_saved": len(engine._rules)}
+                "rules_saved": len(engine)}
 
     def load_ruleset(self, engine, name: str,
                      validate_examples: bool = True) -> Dict[str, Any]:
@@ -81,12 +81,12 @@ class RuleStore:
                          "available": [r["name"]
                                        for r in self.list_rulesets()]},
             )
-        before = len(engine._rules)
+        before = len(engine)
         with open(path, "r", encoding="utf-8") as fh:
             text = fh.read()
         engine.load_rules_from_json(text, validate_examples=validate_examples)
         return {"ok": True, "name": name,
-                "rules_added": len(engine._rules) - before}
+                "rules_added": len(engine) - before}
 
     def list_rulesets(self) -> List[Dict[str, Any]]:
         """List saved rule sets (``*.json``, excluding ``*.theory.json``)."""
@@ -108,18 +108,14 @@ class RuleStore:
         return out
 
     def load_theory(self, engine, name: str) -> Dict[str, Any]:
-        """Load ``<name>.theory.json`` and attach it to the engine as data.
+        """Load ``<name>.theory.json`` into the session theory slot.
 
         The Theory is operator-signature DATA declaring which operators are
-        AC and their units. No operator name is special-cased here.
-
-        This worktree's engine exposes no ``with_theory`` wiring, so the
-        loaded Theory is stashed on ``engine._theory`` (a plain attribute,
-        forward-compatible with a future ``with_theory``). NOTE: nothing in
-        this worktree yet CONSUMES ``engine._theory`` -- it is stored for
-        forward-compat, not applied to any engine operation. The response
-        reports the loaded operator signature but does not claim the theory
-        is active. A missing file raises a mapped ``not_found`` error.
+        AC and their units. No operator name is special-cased here. The
+        loaded theory IS consumed: ``solve_goal`` threads ``engine._theory``
+        into the engine's search so ``normalize_between`` canonicalizes
+        nodes under the caller's operator signature. A missing file raises
+        a mapped ``not_found``; malformed theory JSON is a ``parse_error``.
         """
         path = self._theory_path(name)
         if not os.path.exists(path):
@@ -130,16 +126,15 @@ class RuleStore:
         from rerum.normalize import Theory
         with open(path, "r", encoding="utf-8") as fh:
             text = fh.read()
-        theory = Theory.from_json(text)
+        try:
+            theory = Theory.from_json(text)
+        except ValueError as exc:
+            raise MCPToolError(
+                "parse_error", f"malformed theory: {exc}",
+                details={"name": name, "path": path}, cause=exc,
+            ) from exc
 
-        # Prefer a real attachment method if one exists; otherwise stash the
-        # theory on the engine without inventing engine behavior.
-        attach = getattr(engine, "with_theory", None)
-        if callable(attach):
-            attach(theory)
-        else:
-            engine._theory = theory
-
+        engine._theory = theory
         operators = sorted(getattr(theory, "_sig", {}))
         return {"ok": True, "name": name, "path": path,
                 "operators": operators}

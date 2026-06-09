@@ -102,7 +102,7 @@ class RerumMCPServer:
             # Persistence
             "save_ruleset": lambda **kw: T.tool_save_ruleset(self.engine, self.store, **kw),
             "load_ruleset": lambda **kw: T.tool_load_ruleset(self.engine, self.store, **kw),
-            "list_rulesets": lambda **kw: T.tool_list_rulesets(self.engine, self.store, **kw),
+            "list_rulesets": lambda **kw: T.tool_list_rulesets(self.store, **kw),
             "load_theory": lambda **kw: T.tool_load_theory(self.engine, self.store, **kw),
             # Applying
             "simplify": lambda **kw: T.tool_simplify(self.engine, **kw),

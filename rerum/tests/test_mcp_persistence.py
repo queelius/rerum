@@ -136,7 +136,7 @@ class TestPersistenceToolWrappers:
         save = tool_save_ruleset(engine, store, name="algebra")
         assert save["ok"] is True
 
-        listing = tool_list_rulesets(engine, store)
+        listing = tool_list_rulesets(store)
         assert "algebra" in [r["name"] for r in listing["rulesets"]]
 
         fresh = RuleEngine()
