@@ -933,6 +933,7 @@ def instantiate(
     fold_funcs: Optional[FoldFuncsType] = None,
     undefined_op_resolver: Optional[Callable] = None,
     fold_error_resolver: Optional[Callable] = None,
+    *,
     _resolve_fresh_markers: bool = True,
 ) -> ExprType:
     """
@@ -942,7 +943,14 @@ def instantiate(
         [":", "name"]           - substitute with bound value
         [":...", "name"]        - splice bound list into parent
         ["!", "op", args...]    - compute op(args) immediately
+        ["fresh", "base"]       - a name not free in the expression being built
         literal                 - keep as-is
+
+    ``__fresh__`` is a reserved internal sentinel: the ``["fresh", base]``
+    form is emitted as a deferred ``["__fresh__", base]`` marker and resolved
+    in one post-pass, so a literal ``["__fresh__", base]`` in user data is
+    treated as such a marker (the same way ``"!"``/``":"``/``"fresh"`` are
+    reserved skeleton words).
 
     Args:
         skeleton: The skeleton to instantiate
