@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "rerum"
-version = "0.7.0"
+version = "0.8.0"
 description = "RERUM - Rewriting Expressions via Rules Using Morphisms"
 readme = "README.md"
 license = "MIT"
@@ -48,9 +48,13 @@ docs = [
     "mkdocs>=1.5",
     "mkdocs-material>=9.0",
 ]
+mcp = [
+    "mcp>=1.0",
+]
 
 [project.scripts]
 rerum = "rerum.cli:main"
+rerum-mcp = "rerum.mcp:run_server"
 
 [project.urls]
 Homepage = "https://github.com/queelius/rerum"

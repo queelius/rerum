@@ -73,6 +73,29 @@ The package is split into a *pure functional core* (`rewriter.py`) and a *high-l
 - ``simplify(trace=True)`` registers a temporary ``on_rule_applied``
   hook; the trace is fully integrated with the hook system.
 
+### `rerum/mcp/`, the agent-facing MCP server (v0.8)
+
+The MCP layer is thin orchestration over the general engine: tools marshal
+JSON in and out, the engine does the rewriting. No tool holds domain logic;
+rules, theories, and caller goals all arrive as DATA. ``test_mcp_no_domain.py``
+locks this in.
+
+- ``__init__.py``: ``run_server()`` (stdio), ``PROTOCOL_VERSION``, optional
+  ``mcp`` SDK import guard (the package imports without the ``[mcp]`` extra
+  installed; only ``run_server`` needs it).
+- ``server.py``: ``RerumMCPServer`` per-session engine + ``RuleStore``,
+  18-tool dispatch, ``engine_busy`` guard serializing concurrent calls.
+- ``tools.py``: tool handlers (authoring, persistence, applying, goal
+  solving, agentic loop, admin). No domain logic; rules/theories are data.
+- ``trace.py``: situated ``step_to_dict``, ``assemble_trace`` (global roots
+  + ``prose`` via ``rerum.training.to_prose`` + truncation), ``trace_recorder``.
+- ``persistence.py``: ``RuleStore`` (``.rerum/rules/<name>.json`` and
+  ``<name>.theory.json``); git-friendly, rejects path traversal.
+- ``solver.py``: LLM-resolver factory used by ``solve_assisted``.
+- ``errors.py``: ``MCPToolError`` (stable codes) + ``map_exception``.
+- Naming: engine ``solve()`` (search) vs ``solve_goal`` (its MCP wrapper)
+  vs ``solve_assisted`` (LLM-resolver loop) are three distinct things.
+
 ### Key design boundaries
 - **Rules are data; preludes are code.** Rules can only invoke operations the developer has explicitly enabled in the prelude. That is the security boundary for loading rules from untrusted sources, so preserve it when adding features that touch rule evaluation.
 - **Pure core, mutable engine.** `rewriter.py` does not allocate engine state. Rule storage, group enable/disable, and trace accumulation all live in `engine.py`.
@@ -117,6 +140,21 @@ The package is split into a *pure functional core* (`rewriter.py`) and a *high-l
   also honor it. ``apply_once`` is one-shot so it doesn't need to check.
   Cancellation from a ``fixpoint`` observer is silently ignored because
   the engine has already converged.
+- **MCP solve naming**: ``solve_goal`` is goal-directed search (engine
+  ``solve()``); ``solve_assisted`` is the LLM-resolver agentic loop (the
+  old ``solve`` tool). They do not share an implementation, and no tool is
+  named bare ``solve``.
+- **MCP is domain-agnostic by test**: ``test_mcp_no_domain.py`` fails if any
+  ``rerum/mcp/`` file hardcodes a domain operator literal as code (it strips
+  docstrings/comments first, so caller-data examples are fine). The server
+  loads rules and theories as data; keep it that way.
+- **MCP responses must be JSON-safe**: every tool response is ``json.dumps``-ed
+  by the transport, but engine values are not all JSON-native -- a
+  ``fractions.Fraction`` in particular has broken serialization repeatedly.
+  The MCP layer renders expressions to s-expr strings via ``format_sexpr``
+  and sanitizes structured values through ``_json_safe`` before returning, so
+  ``expr``/``value`` fields stay serializable. New tools must route any
+  expression or numeric-bearing field through the same path.
 
 ## Expression representation
 

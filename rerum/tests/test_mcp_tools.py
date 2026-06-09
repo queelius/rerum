@@ -1,0 +1,429 @@
+"""Tests for MCP tool handlers and error mapping."""
+
+import pytest
+
+
+class TestErrorMapping:
+    def test_explicit_parse_error_code(self):
+        from rerum.mcp.errors import MCPToolError
+        err = MCPToolError("parse_error", "bad input", details={"input": "(a"})
+        assert err.code == "parse_error"
+        assert err.message == "bad input"
+        assert err.details == {"input": "(a"}
+
+    def test_to_dict_shape(self):
+        from rerum.mcp.errors import MCPToolError
+        err = MCPToolError("unknown_rule", "no rule named 'x'",
+                           details={"name": "x", "available": ["a", "b"]})
+        d = err.to_dict()
+        assert d["error"]["code"] == "unknown_rule"
+        assert d["error"]["message"] == "no rule named 'x'"
+        assert d["error"]["details"] == {"name": "x", "available": ["a", "b"]}
+
+    def test_validation_error_from_example_validation(self):
+        from rerum.mcp.errors import map_exception
+        from rerum.engine import ExampleValidationError
+
+        exc = ExampleValidationError(
+            "Rule 'x': pattern does not match",
+            rule_name="x",
+            example={"in": "(a 1)", "out": "1"},
+        )
+        err = map_exception(exc, context={"tool": "load_rules"})
+        assert err["error"]["code"] == "validation_error"
+        assert "Rule 'x'" in err["error"]["message"]
+        assert err["error"]["details"]["rule_name"] == "x"
+
+    def test_resolver_loop_error_mapping(self):
+        from rerum.mcp.errors import map_exception
+        from rerum.hooks import ResolverLoopError
+
+        exc = ResolverLoopError("retry cap (100) exceeded")
+        err = map_exception(exc, context={"tool": "solve_assisted"})
+        assert err["error"]["code"] == "resolver_loop"
+
+    def test_generic_value_error_is_internal(self):
+        from rerum.mcp.errors import map_exception
+        err = map_exception(ValueError("boom"), context={"tool": "simplify"})
+        assert err["error"]["code"] == "internal_error"
+
+
+class TestAuthoringTools:
+    def test_load_rules_dsl(self):
+        from rerum import RuleEngine
+        from rerum.mcp.tools import tool_load_rules
+
+        engine = RuleEngine()
+        result = tool_load_rules(
+            engine,
+            text='@add-zero {category=identity}: (+ ?x 0) => :x',
+            format="dsl",
+        )
+        assert result["ok"] is True
+        assert result["rules_added"] == 1
+        assert "add-zero" in engine
+
+    def test_load_rules_auto_detect_json(self):
+        from rerum import RuleEngine
+        from rerum.mcp.tools import tool_load_rules
+
+        engine = RuleEngine()
+        text = ('{"rules": [{"name": "r1", "category": "identity",'
+                ' "pattern": ["a", ["?", "x"]], "skeleton": [":", "x"]}]}')
+        result = tool_load_rules(engine, text=text)  # no format kwarg
+        assert result["ok"] is True
+
+    def test_add_rule_basic(self):
+        from rerum import RuleEngine
+        from rerum.mcp.tools import tool_add_rule
+
+        engine = RuleEngine()
+        result = tool_add_rule(
+            engine, pattern="(a ?x)", skeleton=":x",
+            name="r1", category="identity",
+        )
+        assert result["ok"] is True
+        assert result["rule_index"] >= 0
+
+    def test_add_rule_index_resolved_by_name_under_priority_shuffle(self):
+        # add_rule re-sorts by priority, so a later higher-priority add can
+        # move the earlier rule. The returned rule_index must point at the
+        # rule JUST added (resolved by name), and get_rule(name=...) is the
+        # durable handle regardless of the shuffle.
+        from rerum import RuleEngine
+        from rerum.mcp.tools import tool_add_rule, tool_get_rule
+
+        engine = RuleEngine()
+        low = tool_add_rule(engine, pattern="(low ?x)", skeleton=":x",
+                            name="low", priority=1)
+        high = tool_add_rule(engine, pattern="(high ?x)", skeleton=":x",
+                             name="high", priority=100)
+        # Each returned index points at its OWN rule at the time of the call.
+        assert tool_get_rule(engine, rule_index=high["rule_index"])["name"] == "high"
+        # The durable handle is the name, even after the priority re-sort.
+        assert tool_get_rule(engine, name="low")["name"] == "low"
+        assert tool_get_rule(engine, name="high")["name"] == "high"
+
+    def test_add_rule_bad_example_raises_validation_error(self):
+        from rerum import RuleEngine
+        from rerum.mcp.tools import tool_add_rule
+        from rerum.mcp.errors import MCPToolError
+
+        engine = RuleEngine()
+        with pytest.raises(MCPToolError) as exc_info:
+            tool_add_rule(
+                engine, pattern="(+ ?x 0)", skeleton=":x", name="bad",
+                examples=[{"in": "(+ y 0)", "out": "wrong"}],
+            )
+        assert exc_info.value.code == "validation_error"
+
+    def test_list_rules_filter_by_category(self):
+        from rerum import RuleEngine
+        from rerum.mcp.tools import tool_list_rules
+
+        engine = RuleEngine.from_dsl("""
+            @r1 {category=identity}: (a ?x) => :x
+            @r2 {category=distributivity}: (b ?x) => :x
+        """)
+        result = tool_list_rules(engine, category="identity")
+        assert len(result) == 1
+        assert result[0]["name"] == "r1"
+
+    def test_get_rule_unknown_raises(self):
+        from rerum import RuleEngine
+        from rerum.mcp.tools import tool_get_rule
+        from rerum.mcp.errors import MCPToolError
+
+        engine = RuleEngine()
+        with pytest.raises(MCPToolError) as exc_info:
+            tool_get_rule(engine, name="nonexistent")
+        assert exc_info.value.code == "unknown_rule"
+
+    def test_validate_examples_returns_failures_as_data(self):
+        from rerum import RuleEngine
+        from rerum.mcp.tools import tool_validate_examples
+
+        engine = RuleEngine()
+        engine.add_rule(
+            pattern=["a", ["?", "x"]], skeleton=[":", "x"], name="bad",
+            examples=[{"in": "(a 1)", "out": "wrong"}],
+            validate_examples=False,
+        )
+        result = tool_validate_examples(engine)
+        assert result["ok"] is False
+        assert result["errors"][0]["rule_name"] == "bad"
+
+
+class TestAuthoringJsonSafety:
+    """Every authoring response must survive json.dumps, even when a rule
+    or example carries an exact rational (a Fraction atom).
+
+    Fraction is not JSON-native; expression fields must render to s-expr
+    strings via format_sexpr and structured fields must pass through
+    _json_safe. These tests are the proof.
+    """
+
+    def _rational_engine(self):
+        from rerum import RuleEngine
+        from fractions import Fraction
+        engine = RuleEngine()
+        # A Fraction atom in both pattern and skeleton: this is the value
+        # that breaks raw json.dumps and must be rendered via format_sexpr.
+        # The example uses s-expr STRINGS (the validator parses them), and
+        # rewriting (half (/ 1 2)) -> (/ 1 1) holds, so it validates clean.
+        engine.add_rule(
+            pattern=["half", Fraction(1, 2)],
+            skeleton=Fraction(1, 1),
+            name="frac",
+            category="arith",
+            examples=[{"in": "(half (/ 1 2))", "out": "(/ 1 1)"}],
+            validate_examples=False,
+        )
+        return engine
+
+    def test_get_rule_json_dumps_clean_with_rational(self):
+        import json
+        from rerum.mcp.tools import tool_get_rule
+
+        engine = self._rational_engine()
+        result = tool_get_rule(engine, name="frac")
+        # Must not raise. The expr fields are strings; examples are sanitized.
+        json.dumps(result)
+        assert result["pattern"] == "(half (/ 1 2))"
+        assert result["skeleton"] == "(/ 1 1)"
+
+    def test_list_rules_json_dumps_clean_with_rational(self):
+        import json
+        from rerum.mcp.tools import tool_list_rules
+
+        engine = self._rational_engine()
+        result = tool_list_rules(engine)
+        json.dumps(result)
+        assert any(r["name"] == "frac" for r in result)
+
+    def test_validate_examples_json_dumps_clean_with_rational(self):
+        import json
+        from fractions import Fraction
+        from rerum.mcp.tools import tool_validate_examples
+
+        engine = self._rational_engine()
+        # A second rule that carries a Fraction atom AND a wrong example, so
+        # the failure-as-data path reports an example referencing a rational.
+        # (half (/ 1 3)) rewrites to (/ 1 1), not (/ 1 3), so this fails.
+        engine.add_rule(
+            pattern=["half", Fraction(1, 2)],
+            skeleton=Fraction(1, 1),
+            name="frac-bad",
+            examples=[{"in": "(half (/ 1 3))", "out": "(/ 1 3)"}],
+            validate_examples=False,
+        )
+        result = tool_validate_examples(engine)
+        # The response must json.dumps regardless of pass/fail, and the bad
+        # rule must surface as data (not a raised traceback).
+        json.dumps(result)
+        assert result["ok"] is False
+        assert any(e["rule_name"] == "frac-bad" for e in result["errors"])
+
+
+class TestApplyingTools:
+    def test_simplify_returns_situated_trace_and_prose(self):
+        from rerum import RuleEngine
+        from rerum.mcp.tools import tool_simplify
+
+        engine = RuleEngine.from_dsl(
+            '@add-zero {category=identity}: (+ ?x 0) => :x'
+        )
+        result = tool_simplify(engine, expr="(+ y 0)")
+        assert result["result"] == "y"
+        assert result["converged"] is True
+        step = result["trace"]["steps"][0]
+        assert step["rule_id"] == "add-zero"
+        assert step["kind"] == "rule"
+        assert "before_root" in step
+        assert isinstance(result["trace"]["prose"], str)
+        assert "prose" in result["trace"]
+
+    def test_apply_once_returns_single_step(self):
+        from rerum import RuleEngine
+        from rerum.mcp.tools import tool_apply_once
+
+        engine = RuleEngine.from_dsl("""
+            @r1: (a ?x) => (b :x)
+            @r2: (b ?x) => (c :x)
+        """)
+        result = tool_apply_once(engine, expr="(a y)")
+        # apply_once does one rewrite, returning matched rule metadata.
+        assert result["result"] == "(b y)"
+        assert result["trace"]["total_steps"] == 1
+
+    def test_equivalents_basic(self):
+        from rerum import RuleEngine
+        from rerum.mcp.tools import tool_equivalents
+
+        engine = RuleEngine.from_dsl('@commute: (+ ?x ?y) <=> (+ :y :x)')
+        result = tool_equivalents(engine, expr="(+ a b)", max_depth=3)
+        assert "(+ a b)" in result["forms"]
+        assert "(+ b a)" in result["forms"]
+
+    def test_prove_equal_proven_carries_prose(self):
+        from rerum import RuleEngine
+        from rerum.mcp.tools import tool_prove_equal
+
+        engine = RuleEngine.from_dsl('@commute: (+ ?x ?y) <=> (+ :y :x)')
+        result = tool_prove_equal(
+            engine, expr_a="(+ a b)", expr_b="(+ b a)", max_depth=3
+        )
+        assert result["proven"] is True
+        assert "prose" in result
+
+    def test_prove_equal_unprovable_budget_reports_not_found(self):
+        # An unprovable query under a tiny budget must return found=False,
+        # never a partial or a hang. The budget is the caller's; honor it.
+        from rerum import RuleEngine
+        from rerum.mcp.tools import tool_prove_equal
+
+        engine = RuleEngine.from_dsl('@commute: (+ ?x ?y) <=> (+ :y :x)')
+        result = tool_prove_equal(
+            engine, expr_a="(+ a b)", expr_b="(* a b)",
+            max_depth=2, max_expressions=10,
+        )
+        assert result["proven"] is False
+        assert isinstance(result["prose"], str)
+
+    def test_minimize_basic(self):
+        from rerum import RuleEngine
+        from rerum.mcp.tools import tool_minimize
+
+        engine = RuleEngine.from_dsl(
+            '@add-zero {category=identity}: (+ ?x 0) => :x'
+        )
+        result = tool_minimize(engine, expr="(+ y 0)", metric="size")
+        assert result["best"] == "y"
+        assert "prose" in result
+
+
+class TestApplyingJsonSafety:
+    """Every applying response must survive json.dumps on a derivation that
+    PRODUCES or BINDS an exact rational (a Fraction atom).
+
+    The applying tools emit the richest data -- full traces, equivalent
+    forms, proof paths, minimize derivations -- all dense with computed
+    VALUES that can be Fraction. A Fraction is not JSON-native, so every
+    result/equivalent/proof-path expression must render via format_sexpr
+    and every structured field (bindings, guard) must route through
+    _json_safe. These tests are the proof, per applying tool.
+    """
+
+    def _compute_engine(self):
+        # (third ?x) computes (! / 1 3) -> Fraction(1, 3) in the rewrite, so
+        # both the simplify result AND the captured step's after are a
+        # Fraction. One-way (=>) so the fixpoint is the rational.
+        from rerum import RuleEngine
+        from rerum.rewriter import ARITHMETIC_PRELUDE
+        return RuleEngine.from_dsl(
+            '@third: (third ?x) => (! / 1 3)', fold_funcs=ARITHMETIC_PRELUDE)
+
+    def _dual_compute_engine(self):
+        # Two compute edges that meet at the SAME Fraction atom: both
+        # (third) and (one-over-three) rewrite to (! / 1 3) -> Fraction(1, 3).
+        # prove_equal's bidirectional BFS then intersects at the Fraction
+        # atom (the proof's common form), so the proof path carries a step
+        # whose after IS a Fraction -- the rational-bearing derivation we
+        # need to prove json-safe. Both endpoints are plain string-spellable
+        # expressions; a Fraction atom is not itself spellable as a parsed
+        # endpoint (it renders to "(/ 1 3)", a list on reparse), so the
+        # rational must be reached via a compute step rather than supplied
+        # directly.
+        from rerum import RuleEngine
+        from rerum.rewriter import ARITHMETIC_PRELUDE
+        return RuleEngine.from_dsl(
+            "@third: (third) => (! / 1 3)\n"
+            "@oot: (one-over-three) => (! / 1 3)",
+            fold_funcs=ARITHMETIC_PRELUDE)
+
+    def test_simplify_json_dumps_clean_with_rational(self):
+        import json
+        from rerum.mcp.tools import tool_simplify
+
+        engine = self._compute_engine()
+        result = tool_simplify(engine, expr="(third a)")
+        # The result and the step's computed value are Fraction(1, 3);
+        # both must have rendered to the s-expr string "(/ 1 3)".
+        assert result["result"] == "(/ 1 3)"
+        json.dumps(result)
+
+    def test_equivalents_json_dumps_clean_with_rational(self):
+        import json
+        from rerum.mcp.tools import tool_equivalents
+
+        engine = self._compute_engine()
+        result = tool_equivalents(
+            engine, expr="(third a)", max_depth=3,
+            include_unidirectional=True)
+        assert "(/ 1 3)" in result["forms"]
+        json.dumps(result)
+
+    def test_prove_equal_json_dumps_clean_with_rational(self):
+        import json
+        from rerum.mcp.tools import tool_prove_equal
+
+        engine = self._dual_compute_engine()
+        result = tool_prove_equal(
+            engine, expr_a="(third)", expr_b="(one-over-three)", max_depth=3,
+            include_unidirectional=True)
+        assert result["proven"] is True
+        # The common form and both path steps' after are Fraction(1, 3),
+        # rendered to "(/ 1 3)".
+        assert result["common_form"] == "(/ 1 3)"
+        json.dumps(result)
+
+    def test_minimize_json_dumps_clean_with_rational(self):
+        import json
+        from rerum.mcp.tools import tool_minimize
+
+        engine = self._compute_engine()
+        # Make (third) expensive so minimize selects the computed (/ 1 3);
+        # the derivation then carries the Fraction-bearing step.
+        result = tool_minimize(
+            engine, expr="(third a)", op_costs={"third": 100},
+            include_unidirectional=True)
+        assert result["best"] == "(/ 1 3)"
+        json.dumps(result)
+
+    def test_apply_once_json_dumps_clean_with_rational(self):
+        # apply_once was the one applying tool with no JSON-safety test even
+        # though its single-step trace can carry a Fraction (the review's
+        # most-suspected gap). Pin it.
+        import json
+        from rerum.mcp.tools import tool_apply_once
+        engine = self._compute_engine()
+        result = tool_apply_once(engine, expr="(third a)")
+        assert result["result"] == "(/ 1 3)"
+        assert result["changed"] is True
+        json.dumps(result)  # must not raise
+
+
+class TestPathProse:
+    """The prose answer line for prove_equal / minimize must reflect the
+    result, not 'None'. Regression for the Group 3 review finding: _path_prose
+    never set trace.final, so every path-based prose closed with 'Answer:
+    None.' and prove_equal carried synthetic no-op filler lines."""
+
+    def test_minimize_prose_answer_line_is_result(self):
+        from rerum import RuleEngine
+        from rerum.mcp.tools import tool_minimize
+        engine = RuleEngine.from_dsl("@az {category=identity}: (+ ?x 0) => :x")
+        result = tool_minimize(engine, expr="(+ (+ y 0) 0)")
+        last = result["prose"].splitlines()[-1]
+        assert last == "Answer: y.", last
+
+    def test_prove_equal_prose_answer_line_and_no_filler(self):
+        from rerum import RuleEngine
+        from rerum.mcp.tools import tool_prove_equal
+        engine = RuleEngine.from_dsl("@comm: (+ ?x ?y) <=> (+ :y :x)")
+        result = tool_prove_equal(engine, expr_a="(+ a b)", expr_b="(+ b a)")
+        assert result["proven"] is True
+        lines = result["prose"].splitlines()
+        assert lines[-1] == "Answer: (+ b a).", lines[-1]
+        # No synthetic "Applying (anonymous rule): X becomes X." filler.
+        assert not any("anonymous rule" in line for line in lines)
