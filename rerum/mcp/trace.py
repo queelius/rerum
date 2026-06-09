@@ -73,3 +73,51 @@ def step_to_dict(step: RewriteStep) -> Dict[str, Any]:
             out["direction_label"] = meta.rev_label
 
     return out
+
+
+class _Recorder:
+    """Holds the captured situated steps and the RewriteTrace for a block.
+
+    ``steps`` is the list of ``step_to_dict`` outputs (rule-local). ``trace``
+    is a ``RewriteTrace`` accumulating the raw situated ``RewriteStep`` objects
+    so ``assemble_trace`` can reconstruct whole-expression before/after via
+    ``to_global_sequence()``.
+    """
+
+    def __init__(self):
+        self.steps: List[Dict[str, Any]] = []
+        self.trace: Optional[RewriteTrace] = None
+        self.start_time: Optional[float] = None
+        self.end_time: Optional[float] = None
+
+    @property
+    def duration_ms(self) -> float:
+        if self.start_time is None or self.end_time is None:
+            return 0.0
+        return (self.end_time - self.start_time) * 1000.0
+
+
+@contextmanager
+def trace_recorder(engine, *, initial=None):
+    """Register a temporary on_rule_applied hook and capture situated steps.
+
+    The hook is removed in a finally block so an exception inside the
+    with-block does not leak the registration. Yields a ``_Recorder``
+    whose ``.steps`` (serialized) and ``.trace`` (raw RewriteTrace) are
+    populated as the engine fires ``rule_applied`` events.
+    """
+    recorder = _Recorder()
+    recorder.trace = RewriteTrace()
+    recorder.trace.initial = initial
+
+    def hook(step, ctx):
+        recorder.trace.add_step(step)
+        recorder.steps.append(step_to_dict(step))
+
+    engine.on_rule_applied(hook)
+    recorder.start_time = time.perf_counter()
+    try:
+        yield recorder
+    finally:
+        recorder.end_time = time.perf_counter()
+        engine.off_rule_applied(hook)

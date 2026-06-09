@@ -122,3 +122,54 @@ class TestStepToDict:
         d = step_to_dict(step)
         assert d["direction"] == "fwd"
         assert d["direction_label"] == "regroup-right"
+
+
+class TestTraceRecorder:
+    def test_recorder_captures_steps(self):
+        from rerum import RuleEngine
+        from rerum.mcp.trace import trace_recorder
+
+        engine = RuleEngine.from_dsl(
+            '@add-zero {category=identity}: (+ ?x 0) => :x'
+        )
+        with trace_recorder(engine) as recorder:
+            engine.simplify(["+", "y", 0])
+
+        steps = recorder.steps
+        assert len(steps) == 1
+        assert steps[0]["rule_name"] == "add-zero"
+        assert steps[0]["kind"] == "rule"
+
+    def test_recorder_unregisters_after_block(self):
+        from rerum import RuleEngine
+        from rerum.mcp.trace import trace_recorder
+
+        engine = RuleEngine.from_dsl('@r1: (a ?x) => :x')
+        before = engine._hooks.count("rule_applied")
+        with trace_recorder(engine):
+            engine.simplify(["a", "y"])
+        after = engine._hooks.count("rule_applied")
+        assert after == before
+
+    def test_recorder_unregisters_on_exception(self):
+        from rerum import RuleEngine
+        from rerum.mcp.trace import trace_recorder
+
+        engine = RuleEngine.from_dsl('@r1: (a ?x) => :x')
+        before = engine._hooks.count("rule_applied")
+        with pytest.raises(ValueError):
+            with trace_recorder(engine):
+                raise ValueError("boom")
+        after = engine._hooks.count("rule_applied")
+        assert after == before
+
+    def test_recorder_holds_initial_trace_object(self):
+        # The recorder also retains the engine's RewriteTrace so callers can
+        # call to_global_sequence() in assemble_trace.
+        from rerum import RuleEngine
+        from rerum.mcp.trace import trace_recorder
+
+        engine = RuleEngine.from_dsl('@r1: (a ?x) => :x')
+        with trace_recorder(engine) as recorder:
+            engine.simplify(["a", "y"])
+        assert recorder.trace is not None
