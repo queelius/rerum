@@ -120,6 +120,13 @@ from .hooks import (
     ResolverLoopError,
 )
 
+# Goal-directed search (escalation driver)
+from .solve import (
+    solve,
+    SolveResult,
+    contains_op,
+)
+
 # Public API
 __all__ = [
     # Version
@@ -188,6 +195,10 @@ __all__ = [
     "Resolution",
     "ResolutionError",
     "ResolverLoopError",
+    # Search
+    "solve",
+    "SolveResult",
+    "contains_op",
     # Theory-driven normalization
     "Theory",
     "normalize",
