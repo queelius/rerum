@@ -85,6 +85,25 @@ class TestAuthoringTools:
         assert result["ok"] is True
         assert result["rule_index"] >= 0
 
+    def test_add_rule_index_resolved_by_name_under_priority_shuffle(self):
+        # add_rule re-sorts by priority, so a later higher-priority add can
+        # move the earlier rule. The returned rule_index must point at the
+        # rule JUST added (resolved by name), and get_rule(name=...) is the
+        # durable handle regardless of the shuffle.
+        from rerum import RuleEngine
+        from rerum.mcp.tools import tool_add_rule, tool_get_rule
+
+        engine = RuleEngine()
+        low = tool_add_rule(engine, pattern="(low ?x)", skeleton=":x",
+                            name="low", priority=1)
+        high = tool_add_rule(engine, pattern="(high ?x)", skeleton=":x",
+                             name="high", priority=100)
+        # Each returned index points at its OWN rule at the time of the call.
+        assert tool_get_rule(engine, rule_index=high["rule_index"])["name"] == "high"
+        # The durable handle is the name, even after the priority re-sort.
+        assert tool_get_rule(engine, name="low")["name"] == "low"
+        assert tool_get_rule(engine, name="high")["name"] == "high"
+
     def test_add_rule_bad_example_raises_validation_error(self):
         from rerum import RuleEngine
         from rerum.mcp.tools import tool_add_rule

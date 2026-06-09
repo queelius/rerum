@@ -115,10 +115,11 @@ class RuleStore:
 
         This worktree's engine exposes no ``with_theory`` wiring, so the
         loaded Theory is stashed on ``engine._theory`` (a plain attribute,
-        forward-compatible with a future ``with_theory``). The engine's
-        ``solve``/``normalize_between`` take a ``theory`` argument; the
-        server passes the stashed theory through. A missing file raises a
-        mapped ``not_found`` error.
+        forward-compatible with a future ``with_theory``). NOTE: nothing in
+        this worktree yet CONSUMES ``engine._theory`` -- it is stored for
+        forward-compat, not applied to any engine operation. The response
+        reports the loaded operator signature but does not claim the theory
+        is active. A missing file raises a mapped ``not_found`` error.
         """
         path = self._theory_path(name)
         if not os.path.exists(path):

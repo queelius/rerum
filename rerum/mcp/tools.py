@@ -80,6 +80,11 @@ def tool_add_rule(engine, *, pattern: str, skeleton: str,
     are parsed with ``parse_sexpr``. This is a unidirectional rule (the
     engine's ``add_rule`` is unidirectional only); for ``<=>`` rules load
     DSL/JSON via ``tool_load_rules``.
+
+    The returned ``rule_index`` is a SNAPSHOT: ``add_rule`` re-sorts rules by
+    priority, so a later add with a different priority can shift indices and
+    invalidate a previously-returned ``rule_index``. The durable handle is the
+    rule ``name`` -- pass it to ``tool_get_rule`` rather than caching an index.
     """
     try:
         pat = parse_sexpr(pattern)
