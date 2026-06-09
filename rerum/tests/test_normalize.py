@@ -384,3 +384,46 @@ class TestSameAtom:
         # int 0 == float 0.0 (both non-bool, use ==).
         assert _same_atom(0, 0.0) is True
         assert _same_atom(1, 1.0) is True
+
+
+class TestNormalizeListener:
+    def _collect_steps(self, expr, theory=ARITH):
+        steps = []
+        normalize(expr, theory, listener=steps.append)
+        return steps
+
+    def test_listener_receives_normalize_steps(self):
+        steps = self._collect_steps(["+", ["*", 1, "x"], ["*", "x", 1]])
+        assert len(steps) >= 1
+        assert all(s.kind == "normalize" for s in steps)
+
+    def test_listener_steps_have_before_after(self):
+        steps = self._collect_steps(["+", ["+", "a", "b"], "c"])
+        assert steps  # flatten changes it
+        first = steps[0]
+        assert first.before == ["+", ["+", "a", "b"], "c"]
+        assert first.after is not None
+
+    def test_listener_names_substeps(self):
+        steps = self._collect_steps(["+", ["+", "a", "b"], "c"])
+        names = {s.metadata.name for s in steps}
+        assert "normalize:flatten" in names
+
+    def test_listener_noop_emits_nothing(self):
+        steps = self._collect_steps("x")
+        assert steps == []
+
+    def test_listener_empty_theory_emits_nothing(self):
+        # Empty theory is the identity, so nothing changes, nothing emits.
+        steps = self._collect_steps(["+", ["+", "a", "b"], "c"], theory=EMPTY)
+        assert steps == []
+
+    def test_rewrite_trace_consumes_steps(self):
+        from rerum.trace import RewriteTrace
+        trace = RewriteTrace()
+        normalize(["+", "x", "x"], ARITH, listener=trace)
+        assert len(trace) >= 1
+        assert all(s.kind == "normalize" for s in trace)
+
+    def test_no_listener_still_works(self):
+        assert normalize(["+", "x", "x"], ARITH) == ["*", 2, "x"]

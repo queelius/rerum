@@ -312,13 +312,54 @@ def _fold_constants(expr: ExprType, theory: Theory) -> ExprType:
     return [head] + args
 
 
-def _normalize_once(expr: ExprType, theory: Theory) -> ExprType:
-    """One full pass: flatten -> sort -> collect -> fold."""
-    e = flatten(expr, theory)
-    e = canonical_sort(e, theory)
-    e = collect_like_terms(e, theory)
-    e = _fold_constants(e, theory)
-    return e
+class _NormalizeMeta:
+    """Minimal metadata stand-in for normalize steps.
+
+    ``RewriteStep`` reads ``metadata.name`` and ``metadata.description`` for
+    its repr/``to_dict``; ``rationale`` derives from ``reasoning``/``category``.
+    A full ``RuleMetadata`` is not needed for normalization steps.
+    """
+
+    __slots__ = ("name", "description", "reasoning", "category")
+
+    def __init__(self, name: str, description: str):
+        self.name = name
+        self.description = description
+        self.reasoning = None
+        self.category = "normalize"
+
+
+def _emit(listener, name, description, before, after):
+    """Emit a kind="normalize" RewriteStep if before != after."""
+    if listener is None or before == after:
+        return
+    from .trace import RewriteStep
+    step = RewriteStep(
+        rule_index=-1,
+        metadata=_NormalizeMeta(name, description),
+        before=before,
+        after=after,
+        kind="normalize",
+    )
+    listener(step)
+
+
+def _normalize_once(expr: ExprType, theory: Theory,
+                    listener: Optional[Callable] = None) -> ExprType:
+    """One full pass, emitting a step per changed sub-transformation."""
+    flat = flatten(expr, theory)
+    _emit(listener, "normalize:flatten", "Flatten AC operators", expr, flat)
+
+    srt = canonical_sort(flat, theory)
+    _emit(listener, "normalize:sort", "Sort AC operands", flat, srt)
+
+    col = collect_like_terms(srt, theory)
+    _emit(listener, "normalize:collect", "Collect like terms", srt, col)
+
+    fld = _fold_constants(col, theory)
+    _emit(listener, "normalize:fold", "Fold constants", col, fld)
+
+    return fld
 
 
 def normalize(expr: ExprType, theory: Theory, *,
@@ -331,7 +372,7 @@ def normalize(expr: ExprType, theory: Theory, *,
     """
     current = expr
     for _ in range(1000):  # fixpoint bound; mirrors rewriter's iteration cap
-        nxt = _normalize_once(current, theory)
+        nxt = _normalize_once(current, theory, listener=listener)
         if nxt == current:
             break
         current = nxt
