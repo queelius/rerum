@@ -309,8 +309,8 @@ class TestPopulatedFields:
     def test_direction_for_bidirectional(self):
         eng = RuleEngine.from_dsl("@commute: (+ ?x ?y) <=> (+ :y :x)")
         _, trace = eng.simplify(E("(+ a b)"), trace=True, max_steps=1)
-        if trace.steps:
-            assert trace.steps[0].direction in ("fwd", "rev")
+        assert trace.steps, "commute rule should fire at least once"
+        assert trace.steps[0].direction in ("fwd", "rev")
 
     def test_unguarded_rule_has_none_guard(self):
         eng = RuleEngine.from_dsl("@add-zero: (+ ?x 0) => :x")
@@ -338,11 +338,11 @@ class TestGuardField:
             fold_funcs=PREDICATE_PRELUDE,
         )
         _, trace = eng.simplify(E("(abs 5)"), trace=True)
-        if trace.steps:
-            g = trace.steps[0].guard
-            assert g is not None
-            assert g["result"] is True
-            assert "condition" in g
+        assert trace.steps, "guarded rule should fire on (abs 5)"
+        g = trace.steps[0].guard
+        assert g is not None
+        assert g["result"] is True
+        assert "condition" in g
 
 
 class TestOncePathRoundTrip:
