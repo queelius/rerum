@@ -251,6 +251,14 @@ class RewriteTrace:
         root-level edit). The new ``after_root`` becomes the next
         ``before_root``. Lossless: the redex-local edits plus paths fully
         determine the global derivation, so it need not be stored per step.
+
+        CONTRACT: each ``step.path`` must be recorded relative to the
+        *running root at the moment that step fired*, not relative to
+        ``self.initial``. The strategy drivers that emit steps are
+        responsible for this (a step firing on a child threads the path to
+        that child). A legacy step with ``path`` ``None`` is treated as a
+        whole-expression edit (``[]``), which is correct when its
+        ``before``/``after`` are themselves whole expressions.
         """
         sequence: List[Dict[str, Any]] = []
         root = self.initial

@@ -176,3 +176,23 @@ class TestGlobalSequence:
         d = t.to_dict()
         for k in ("initial", "final", "steps", "step_count"):
             assert k in d
+
+    def test_empty_trace_global_sequence_is_empty(self):
+        t = RewriteTrace()
+        t.initial = ["+", "x", 0]
+        t.final = ["+", "x", 0]
+        assert t.to_global_sequence() == []
+
+    def test_legacy_none_path_treats_steps_as_whole_expression(self):
+        # Pre-path-threading steps (path=None) carry whole expressions in
+        # before/after; the None->[] fallback reconstructs roots correctly.
+        meta = RuleMetadata(name="r")
+        t = RewriteTrace()
+        t.initial = ["+", "x", 0]
+        t(RewriteStep(0, meta, ["+", "x", 0], "x"))          # path defaults to None
+        t(RewriteStep(0, meta, "x", ["g", "x"]))             # whole-expr edit
+        t.final = ["g", "x"]
+        seq = t.to_global_sequence()
+        assert [e["before_root"] for e in seq] == [["+", "x", 0], "x"]
+        assert [e["after_root"] for e in seq] == ["x", ["g", "x"]]
+        assert seq[-1]["after_root"] == t.final
