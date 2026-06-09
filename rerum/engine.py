@@ -2065,7 +2065,8 @@ class RuleEngine:
         return rs
 
     def apply_once(self, expr: ExprType, groups: Optional[List[str]] = None,
-                   _top_level: bool = True) -> Tuple[ExprType, Optional[RuleMetadata]]:
+                   _top_level: bool = True,
+                   path: Optional[List[int]] = None) -> Tuple[ExprType, Optional[RuleMetadata]]:
         """
         Apply at most one rule to the expression.
 
@@ -2076,6 +2077,9 @@ class RuleEngine:
             expr: Expression to rewrite.
             groups: If specified, only use rules from these groups.
                     If None, use all rules except those in disabled groups.
+            path: Optional redex path from the running root ([] for root-level,
+                  [i] for a child, etc.). Used to populate RewriteStep.path so
+                  traces produced via the "once" strategy reconstruct correctly.
 
         Returns:
             Tuple of (result, metadata) where:
@@ -2107,13 +2111,12 @@ class RuleEngine:
                                      undefined_op_resolver=self._undefined_op_resolver,
                                      fold_error_resolver=self._fold_error_resolver)
                 if result != expr:
-                    step = RewriteStep(
-                        rule_index=rule_idx,
-                        metadata=metadata,
-                        before=expr,
-                        after=result,
+                    guard = self._evaluate_guard(metadata.condition, bindings)
+                    step = self._build_step(
+                        rule_idx, rule, metadata, expr, result, bindings,
+                        path=path, guard=guard,
                     )
-                    self._fire_rule_applied(step)
+                    self._fire_rule_applied(step, expr_path=path)
                 return result, metadata
 
         return expr, None
@@ -2230,20 +2233,33 @@ class RuleEngine:
                            f"Valid options: exhaustive, once, bottomup, topdown")
 
     def _simplify_once(self, expr: ExprType, groups: Optional[List[str]] = None,
-                       _top_level: bool = True) -> ExprType:
-        """Apply at most one rule anywhere in the expression tree."""
+                       _top_level: bool = True,
+                       path: Optional[List[int]] = None) -> ExprType:
+        """Apply at most one rule anywhere in the expression tree.
+
+        ``path`` is the integer-index path from the running root to the
+        current position being examined ([] at the root, [i] for a child).
+        Threading it through to ``apply_once`` ensures that steps emitted
+        by the "once" strategy carry the correct redex path for
+        ``to_global_sequence`` reconstruction.
+        """
+        if path is None:
+            path = []
         if _top_level:
             self._step_count = 0
             self._cancel_requested = False
         # Try to apply a rule at the top level
-        result, applied = self.apply_once(expr, groups=groups, _top_level=False)
+        result, applied = self.apply_once(expr, groups=groups, _top_level=False,
+                                          path=path)
         if applied:
             return result
 
         # If no rule applied at top level, try children (depth-first)
         if isinstance(expr, list) and len(expr) > 0:
             for i, child in enumerate(expr):
-                new_child = self._simplify_once(child, groups=groups, _top_level=False)
+                new_child = self._simplify_once(child, groups=groups,
+                                                _top_level=False,
+                                                path=path + [i])
                 if new_child != child:
                     # Found a rewrite - apply it and return
                     return expr[:i] + [new_child] + expr[i+1:]
@@ -2545,6 +2561,44 @@ class RuleEngine:
             return False
         return result
 
+    def _build_step(self, rule_idx, rule, metadata, before, after, bindings,
+                    *, path=None, guard=None):
+        """Construct a fully-populated situated RewriteStep.
+
+        Derives rule_id (rule_identity over pattern/skeleton), direction
+        (metadata.direction), serialized bindings, kind, and rationale
+        (reasoning else category). ``guard`` is a {"condition","result"}
+        dict when a condition was evaluated, else None. ``path`` defaults to [].
+        """
+        from .trace import rule_identity
+        pattern, skeleton = rule
+        return RewriteStep(
+            rule_index=rule_idx,
+            metadata=metadata,
+            before=before,
+            after=after,
+            rule_id=rule_identity(metadata, pattern, skeleton),
+            direction=metadata.direction,
+            bindings=bindings.to_dict() if bindings is not None else None,
+            path=list(path) if path is not None else [],
+            kind="rule",
+            guard=guard,
+            rationale=metadata.reasoning or metadata.category,
+        )
+
+    def _evaluate_guard(self, condition, bindings):
+        """Return {"condition": <instantiated>, "result": <bool>} when
+        ``condition`` is not None, else None. Same instantiation/truthiness
+        path as _check_condition."""
+        if condition is None:
+            return None
+        instantiated = instantiate(
+            condition, bindings, self._fold_funcs,
+            undefined_op_resolver=self._undefined_op_resolver,
+            fold_error_resolver=self._fold_error_resolver,
+        )
+        return {"condition": instantiated, "result": _condition_truthy(instantiated)}
+
     def _simplify_exhaustive(self, expr: ExprType, max_steps: int,
                               groups: Optional[List[str]] = None,
                               _top_level: bool = True,
@@ -2606,12 +2660,10 @@ class RuleEngine:
                                            undefined_op_resolver=self._undefined_op_resolver,
                                            fold_error_resolver=self._fold_error_resolver)
                     if new_expr != current:
-                        step = RewriteStep(
-                            rule_index=rule_idx,
-                            metadata=metadata,
-                            before=current,
-                            after=new_expr,
-                            path=list(path),
+                        guard = self._evaluate_guard(metadata.condition, bindings)
+                        step = self._build_step(
+                            rule_idx, rule, metadata, current, new_expr, bindings,
+                            path=path, guard=guard,
                         )
                         if self._fire_rule_applied(step, expr_path=path):
                             return new_expr  # Hook requested cancellation after this step.
@@ -2761,12 +2813,10 @@ class RuleEngine:
                     fold_error_resolver=self._fold_error_resolver,
                 )
                 if result != current:
-                    step = RewriteStep(
-                        rule_index=rule_idx,
-                        metadata=metadata,
-                        before=current,
-                        after=result,
-                        path=list(path),
+                    guard = self._evaluate_guard(metadata.condition, bindings)
+                    step = self._build_step(
+                        rule_idx, rule, metadata, current, result, bindings,
+                        path=path, guard=guard,
                     )
                     self._fire_rule_applied(step, depth=depth, expr_path=path)
                     return result
@@ -2869,12 +2919,10 @@ class RuleEngine:
                     fold_error_resolver=self._fold_error_resolver,
                 )
                 if result != current:
-                    step = RewriteStep(
-                        rule_index=rule_idx,
-                        metadata=metadata,
-                        before=current,
-                        after=result,
-                        path=list(path),
+                    guard = self._evaluate_guard(metadata.condition, bindings)
+                    step = self._build_step(
+                        rule_idx, rule, metadata, current, result, bindings,
+                        path=path, guard=guard,
                     )
                     self._fire_rule_applied(step, depth=depth, expr_path=path)
                     return result  # Return immediately - will be called again

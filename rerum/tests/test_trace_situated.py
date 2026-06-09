@@ -286,3 +286,71 @@ class TestPathThreading:
         _, trace = eng.simplify(E("(f (g (+ x 0)))"), trace=True)
         paths = [s.path for s in trace.steps]
         assert [1, 1] in paths, f"expected [1, 1] among {paths}"
+
+
+class TestPopulatedFields:
+    """Situated fields are populated at the emit sites during simplify."""
+
+    def test_named_rule_id_and_rationale(self):
+        eng = RuleEngine.from_dsl('@add-zero {category=identity}: (+ ?x 0) => :x')
+        _, trace = eng.simplify(E("(+ x 0)"), trace=True)
+        step = trace.steps[0]
+        assert step.rule_id == "add-zero"
+        assert step.kind == "rule"
+        assert step.rationale == "identity"  # reasoning or category
+
+    def test_bindings_captured(self):
+        eng = RuleEngine.from_dsl("@add-zero: (+ ?x 0) => :x")
+        _, trace = eng.simplify(E("(+ y 0)"), trace=True)
+        step = trace.steps[0]
+        assert step.bindings is not None
+        assert step.bindings.get("x") == "y"
+
+    def test_direction_for_bidirectional(self):
+        eng = RuleEngine.from_dsl("@commute: (+ ?x ?y) <=> (+ :y :x)")
+        _, trace = eng.simplify(E("(+ a b)"), trace=True, max_steps=1)
+        if trace.steps:
+            assert trace.steps[0].direction in ("fwd", "rev")
+
+    def test_unguarded_rule_has_none_guard(self):
+        eng = RuleEngine.from_dsl("@add-zero: (+ ?x 0) => :x")
+        _, trace = eng.simplify(E("(+ x 0)"), trace=True)
+        assert trace.steps[0].guard is None
+
+    def test_apply_once_populates_fields(self):
+        eng = RuleEngine.from_dsl("@add-zero: (+ ?x 0) => :x")
+        captured = []
+        eng.on_rule_applied(lambda step, ctx: captured.append(step))
+        result, meta = eng.apply_once(E("(+ x 0)"))
+        assert result == "x"
+        assert captured
+        assert captured[0].rule_id == "add-zero"
+        assert captured[0].bindings is not None
+
+
+class TestGuardField:
+    """A checked condition is recorded in step.guard."""
+
+    def test_guard_dict_present(self):
+        from rerum.rewriter import PREDICATE_PRELUDE
+        eng = RuleEngine.from_dsl(
+            "@drop-abs: (abs ?x) => :x when (! >= :x 0)",
+            fold_funcs=PREDICATE_PRELUDE,
+        )
+        _, trace = eng.simplify(E("(abs 5)"), trace=True)
+        if trace.steps:
+            g = trace.steps[0].guard
+            assert g is not None
+            assert g["result"] is True
+            assert "condition" in g
+
+
+class TestOncePathRoundTrip:
+    def test_once_trace_global_sequence_roundtrips(self):
+        eng = RuleEngine.from_dsl("@add-zero: (+ ?x 0) => :x")
+        # redex (+ x 0) is at child path [1] of (* (+ x 0) y)
+        result, trace = eng.simplify(E("(* (+ x 0) y)"), trace=True, strategy="once")
+        assert len(trace.steps) == 1
+        assert trace.steps[0].path == [1]
+        seq = trace.to_global_sequence()
+        assert seq[-1]["after_root"] == result  # reconstructs (* x y), not "x"
