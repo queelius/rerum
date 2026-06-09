@@ -266,7 +266,11 @@ def solve(
                            explored=0, found=True)
 
     start_key = _expr_to_tuple(start)
-    # Parent pointers: key -> (parent_key | None, step | None).
+    # Parent pointers double as the visited set: key -> (parent_key, step).
+    # The key is _expr_to_tuple (identity on atoms), so node identity tracks
+    # Python equality exactly: True/1 and False/0 alias deliberately (they are
+    # == and hash-equal everywhere else in the engine) and no != pair is ever
+    # merged. A str()-based key would be unsafe here (it would alias "1" and 1).
     parents = {start_key: (None, None)}
     # Priority queue of (cost, tiebreak, expr). tiebreak keeps it total.
     counter = 0
