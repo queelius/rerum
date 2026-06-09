@@ -132,6 +132,29 @@ class TestConcurrency:
         result = srv.call_tool("simplify", {"expr": "(a y)"})
         assert result["result"] == "y"
 
+    def test_busy_flag_cleared_when_handler_raises(self):
+        # The finally-clear must hold even when a handler raises a
+        # non-MCPToolError: a raising sampler propagates through solve_assisted,
+        # the dispatch maps it to a JSON-safe error, and _busy is released so
+        # the engine is not wedged for the next call.
+        import json
+        from rerum.mcp.server import RerumMCPServer
+        srv = RerumMCPServer()
+
+        def boom(prompt):
+            raise RuntimeError("kaboom")
+
+        srv.set_sampler(boom)
+        result = srv.call_tool("solve_assisted", {"expr": "(foo bar)"})
+        assert "error" in result
+        json.dumps(result)  # mapped error is JSON-safe, no traceback leak
+        assert srv._busy is False  # released despite the raise
+        # The engine is not wedged: a normal call still runs.
+        srv.set_sampler(None)
+        srv.call_tool("load_rules", {"text": "@r: (a ?x) => :x"})
+        ok = srv.call_tool("simplify", {"expr": "(a y)"})
+        assert ok["result"] == "y"
+
 
 class TestRunServerWiring:
     def test_run_server_builds_sdk_server_without_transport(self):

@@ -94,3 +94,42 @@ class TestSolveAssisted:
         # Must not raise; a Fraction would break json.dumps if it leaked.
         json.dumps(result)
         assert result["result"] == "(/ 1 3)"
+
+    def test_inferred_rule_cannot_execute_op_outside_prelude(self):
+        # THE security boundary for pattern #2 (rules from an untrusted LLM):
+        # a proposed rule is DATA. Its (! op ...) compute forms can ONLY
+        # invoke operators already in the prelude. An op the LLM names that is
+        # NOT in the prelude (here a scary __import__) is never executed -- it
+        # is left as an inert unfolded compound, not run as Python, and is not
+        # added to the prelude. "Rules are data; preludes are code."
+        from rerum import RuleEngine, ARITHMETIC_PRELUDE
+        from rerum.mcp.tools import tool_solve_assisted
+
+        engine = RuleEngine(fold_funcs=ARITHMETIC_PRELUDE)
+        assert "__import__" not in engine._fold_funcs
+        sampler = make_sampler(["@evil: (danger ?x) => (! __import__ os)"])
+        result = tool_solve_assisted(engine, expr="(danger q)", sampler=sampler)
+        json.dumps(result)  # JSON-safe
+        # The dangerous compute was NOT folded/executed: it survives as an
+        # inert compound in the output, and the prelude is unchanged.
+        assert "__import__" in result["result"]
+        assert "__import__" not in engine._fold_funcs
+
+    def test_resolver_hook_removed_after_solve_assisted(self):
+        # The agentic resolver is temporary: after solve_assisted (on both the
+        # success and the resolver-cap paths) the no_match hook is gone, so it
+        # cannot leak into later engine operations on the same session.
+        from rerum import RuleEngine
+        from rerum.mcp.tools import tool_solve_assisted
+
+        engine = RuleEngine()
+        before = engine._hooks.count("no_match")
+        tool_solve_assisted(
+            engine, expr="(foo bar)",
+            sampler=make_sampler(["@foo-id: (foo ?x) => :x"]))
+        assert engine._hooks.count("no_match") == before
+        # Resolver-loop path (a never-matching rule) must also clean up.
+        tool_solve_assisted(
+            engine, expr="(stuck x)",
+            sampler=lambda prompt: "(zzz ?y) => :y", max_resolver_calls=2)
+        assert engine._hooks.count("no_match") == before
