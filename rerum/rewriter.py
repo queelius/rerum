@@ -594,6 +594,36 @@ def free_in(var: str, expr: ExprType) -> bool:
     return False
 
 
+def free_symbols(expr: ExprType) -> set:
+    """Return the set of all symbol (string) leaves occurring in ``expr``.
+
+    Includes operator-head symbols; for fresh-variable avoidance the
+    conservative superset of "names already present" is exactly what we
+    want, so we do not distinguish head from operand position.
+    """
+    if isinstance(expr, str):
+        return {expr}
+    if isinstance(expr, list):
+        out: set = set()
+        for sub in expr:
+            out |= free_symbols(sub)
+        return out
+    return set()
+
+
+def gensym(base: str, avoid: set) -> str:
+    """Smallest of ``base``, ``base+"1"``, ``base+"2"``, ... not in ``avoid``.
+
+    Deterministic: a pure function of ``base`` and ``avoid``.
+    """
+    if base not in avoid:
+        return base
+    i = 1
+    while f"{base}{i}" in avoid:
+        i += 1
+    return f"{base}{i}"
+
+
 def skeleton_evaluation(s: ExprType) -> bool:
     """Check if skeleton element should be evaluated (:)."""
     return compound(s) and car(s) == ":"
