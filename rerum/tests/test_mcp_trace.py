@@ -243,3 +243,62 @@ class TestAssembleTrace:
         d = assemble_trace(initial="x", final="x", recorder=rec, prose="")
         assert d["steps"] == []
         assert d["total_steps"] == 0
+
+
+class TestJsonSafety:
+    """The MCP response is JSON. Steps can carry Fraction atoms (a pattern
+    var binds one, a guard computes one) now that Fraction is a numeric atom;
+    the assembled response must stay json.dumps-serializable. Regression for
+    the Group 1 review's blocking finding (raw bindings/guard.result)."""
+
+    def _fraction_trace(self):
+        from rerum.engine import RuleEngine
+        from rerum.rewriter import ARITHMETIC_PRELUDE
+        from rerum.mcp.trace import trace_recorder
+        eng = RuleEngine(fold_funcs=ARITHMETIC_PRELUDE)
+        eng.load_dsl("@mkhalf: (mk) => (wrap (! / 1 2))\n@unwrap: (wrap ?x) => :x")
+        with trace_recorder(eng, initial=["mk"]) as rec:
+            eng.simplify(["mk"])
+        return rec
+
+    def test_fraction_binding_assembled_response_serializes(self):
+        import json
+        from rerum.mcp.trace import assemble_trace
+        rec = self._fraction_trace()
+        d = assemble_trace(initial="(mk)", final="(/ 1 2)", recorder=rec)
+        text = json.dumps(d)  # must not raise
+        back = json.loads(text)
+        # The Fraction binding was rendered to its exact s-expr string.
+        unwrap = [s for s in back["steps"]
+                  if isinstance(s, dict) and "unwrap" in str(s.get("rule_id"))]
+        assert unwrap and unwrap[0]["bindings"]["x"] == "(/ 1 2)"
+
+    def test_guard_result_fraction_serializes(self):
+        import json
+        from fractions import Fraction
+        from rerum.mcp.trace import step_to_dict
+        from rerum.engine import RuleMetadata
+        from rerum.trace import RewriteStep
+        meta = RuleMetadata(name="g", category="test")
+        step = RewriteStep(
+            0, meta, ["a"], ["b"], kind="rule",
+            guard={"condition": [">", "x", 0], "result": Fraction(3, 4)},
+        )
+        d = step_to_dict(step)
+        text = json.dumps(d)  # must not raise
+        assert json.loads(text)["guard"]["result"] == "(/ 3 4)"
+
+    def test_prose_answer_line_reflects_final_not_none(self):
+        from rerum.mcp.trace import assemble_trace
+        rec = self._fraction_trace()
+        d = assemble_trace(initial="(mk)", final="(/ 1 2)", recorder=rec)
+        # The recorder never set trace.final; assemble_trace must, so the
+        # prose answer line is the result, not "None".
+        assert d["prose"].splitlines()[-1] == "Answer: (/ 1 2)."
+
+    def test_json_safe_preserves_native_and_bool(self):
+        from rerum.mcp.trace import _json_safe
+        # bool stays bool (checked before int); native structure unchanged.
+        assert _json_safe(True) is True
+        assert _json_safe({"a": ["+", "x", 1], "b": "y"}) == {
+            "a": ["+", "x", 1], "b": "y"}

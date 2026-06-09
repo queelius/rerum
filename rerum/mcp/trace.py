@@ -11,10 +11,34 @@ plus a domain-agnostic natural-language ``prose`` rendering via
 
 import time
 from contextlib import contextmanager
+from fractions import Fraction
 from typing import Any, Dict, List, Optional
 
 from rerum.engine import format_sexpr
 from rerum.trace import RewriteStep, RewriteTrace
+
+
+def _json_safe(value: Any) -> Any:
+    """Recursively make a value JSON-serializable for the MCP response.
+
+    The expr fields (before/after/roots) are already rendered to s-expr
+    STRINGS via ``format_sexpr``, but ``bindings`` and a guard ``result``
+    are passed through structured and may contain a ``fractions.Fraction``
+    atom (a pattern variable can bind one, a guard can compute one, now that
+    Fraction is a first-class numeric atom). Fraction is not JSON-native, so
+    render it to its exact s-expr string (``"(/ 1 2)"``), recursing through
+    dicts and lists. bool is preserved (and checked before int, since bool is
+    an int subclass). Everything else passes through unchanged.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, Fraction):
+        return format_sexpr(value)
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    return value
 
 
 # Trace truncation defaults. When a trace exceeds MAX_STEPS, the response
@@ -40,17 +64,21 @@ def step_to_dict(step: RewriteStep) -> Dict[str, Any]:
     """
     meta = step.metadata
     guard = step.guard
-    if guard is not None and isinstance(guard.get("condition"), (list, str, int, float)):
+    if guard is not None:
+        # Render the condition as an s-expr string (format_sexpr is
+        # Fraction-safe) and JSON-sanitize the computed result (it may be a
+        # Fraction). Keeps the whole guard JSON-serializable.
+        cond = guard.get("condition")
         guard = {
-            "condition": format_sexpr(guard["condition"]),
-            "result": guard.get("result"),
+            "condition": format_sexpr(cond) if cond is not None else None,
+            "result": _json_safe(guard.get("result")),
         }
 
     out: Dict[str, Any] = {
         # Phase 1 situated fields.
         "rule_id": step.rule_id,
         "direction": step.direction,
-        "bindings": step.bindings,
+        "bindings": _json_safe(step.bindings),
         "path": list(step.path) if step.path is not None else [],
         "kind": step.kind,
         "guard": guard,
@@ -181,6 +209,12 @@ def assemble_trace(*, initial: str, final: str, recorder=None,
     """
     if recorder is not None:
         _attach_global_roots(recorder)
+        # The recorder accumulates steps + initial but never the final state,
+        # so set it here for the prose answer line. ``final`` is the
+        # already-rendered s-expr string; ``format_sexpr`` passes a string
+        # through, so the prose reads "Answer: <final>." rather than "None".
+        if recorder.trace is not None and recorder.trace.final is None:
+            recorder.trace.final = final
         steps = recorder.steps
     else:
         steps = []
