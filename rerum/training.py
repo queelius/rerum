@@ -72,3 +72,58 @@ def to_training_record(trace, *, problem, operator, answer,
         "answer": answer,
         "verified": verified,
     }
+
+
+def _render(expr: ExprType) -> str:
+    """Render an expression to a DSL s-expr string for prose/labels."""
+    return format_sexpr(expr)
+
+
+def _prose_line(entry: Dict[str, Any]) -> str:
+    """Render ONE global-sequence entry as a chain-of-thought line.
+
+    Dispatches on the step's ``kind`` to a fixed template, filling the
+    ``rule_id``, the ``rationale`` (when present), and the rendered
+    whole-expression ``before_root``/``after_root``. The line is a pure
+    function of the structured fields, which is what makes the prose a
+    projection of the record (no field is invented). The dispatch is on
+    ``kind`` only; no operator name is consulted, so this is domain-agnostic.
+
+    Templates (kind -> shape):
+      rule      -> "Applying <rule_id> (<rationale>): <before> becomes <after>."
+      normalize -> "Simplifying with <rule_id> (<rationale>): <before> becomes <after>."
+      fold      -> "Computing with <rule_id> (<rationale>): <before> becomes <after>."
+    The "(<rationale>)" clause is omitted when ``rationale`` is None/empty.
+    """
+    step = entry["step"]
+    before = _render(entry["before_root"])
+    after = _render(entry["after_root"])
+    rule_id = step.rule_id if step.rule_id is not None else "(anonymous rule)"
+    reason = f" ({step.rationale})" if step.rationale else ""
+    if step.kind == "normalize":
+        verb = "Simplifying with"
+    elif step.kind == "fold":
+        verb = "Computing with"
+    else:  # "rule" and any future kind default to the rule template
+        verb = "Applying"
+    return f"{verb} {rule_id}{reason}: {before} becomes {after}."
+
+
+def to_prose(trace) -> str:
+    """Render a deterministic natural-language chain-of-thought.
+
+    A PROJECTION of the structured trace: it begins with the problem
+    (``trace.initial``), emits one per-``kind`` templated line for each
+    global-sequence step (rule / normalize / fold), and ends with the
+    answer (``trace.final``). No LLM call, no randomness: the same trace
+    yields the same prose every time. Because the lines are derived from
+    the same fields ``to_training_record`` exposes, the prose and the
+    structured record cannot drift. Templates key on ``kind`` only, so this
+    is domain-agnostic.
+    """
+    lines: List[str] = []
+    lines.append(f"Problem: {_render(trace.initial)}.")
+    for entry in trace.to_global_sequence():
+        lines.append(_prose_line(entry))
+    lines.append(f"Answer: {_render(trace.final)}.")
+    return "\n".join(lines)

@@ -122,3 +122,109 @@ class TestGlobalSequenceJoin:
         rec = to_training_record(_hand_trace(), problem="p",
                                  operator="simplify", answer="x", verified=False)
         assert json.dumps(rec) is not None
+
+
+from rerum.training import to_prose
+
+
+def _mixed_kind_trace():
+    """A trace with one rule step and one normalize step (domain-free).
+
+    Root: (+ (* 2 x) (+ y 0)).
+    Step 1 (rule): rewrite inner (+ y 0) at path [2] -> y; root ->
+                   (+ (* 2 x) y).
+    Step 2 (normalize): reorder operands of the + at path [] ->
+                   (+ y (* 2 x)).
+    """
+    meta_rule = RuleMetadata(name="add-zero", category="identity",
+                             reasoning="additive identity")
+    meta_norm = RuleMetadata(name="canonical-sort", category="normalize",
+                             reasoning="commutative ordering")
+    t = RewriteTrace()
+    t.initial = ["+", ["*", 2, "x"], ["+", "y", 0]]
+    t(RewriteStep(0, meta_rule, ["+", "y", 0], "y", path=[2],
+                  rule_id="add-zero", kind="rule",
+                  rationale="additive identity"))
+    t(RewriteStep(0, meta_norm, ["+", ["*", 2, "x"], "y"],
+                  ["+", "y", ["*", 2, "x"]], path=[],
+                  rule_id="canonical-sort", kind="normalize",
+                  rationale="commutative ordering"))
+    t.final = ["+", "y", ["*", 2, "x"]]
+    return t
+
+
+class TestToProseProjection:
+    def test_starts_with_problem(self):
+        prose = to_prose(_mixed_kind_trace())
+        first = prose.splitlines()[0]
+        assert "(+ (* 2 x) (+ y 0))" in first
+
+    def test_ends_with_answer(self):
+        prose = to_prose(_mixed_kind_trace())
+        last = prose.splitlines()[-1]
+        assert "(+ y (* 2 x))" in last
+
+    def test_rule_step_mentions_rule_id_and_rationale(self):
+        prose = to_prose(_mixed_kind_trace())
+        assert "add-zero" in prose
+        assert "additive identity" in prose
+        # The rule template reads "becomes".
+        assert "becomes" in prose
+
+    def test_rule_step_renders_before_and_after_roots(self):
+        prose = to_prose(_mixed_kind_trace())
+        # The rule step's whole-expression before/after roots appear.
+        assert "(+ (* 2 x) (+ y 0))" in prose   # before_root of step 1
+        assert "(+ (* 2 x) y)" in prose          # after_root of step 1
+
+    def test_normalize_step_uses_simplifying_template(self):
+        prose = to_prose(_mixed_kind_trace())
+        assert "Simplifying" in prose
+        assert "canonical-sort" in prose
+
+    def test_deterministic(self):
+        t = _mixed_kind_trace()
+        assert to_prose(t) == to_prose(t)
+
+    def test_anonymous_rule_id_is_handled(self):
+        # A step with rule_id=None renders without crashing.
+        t = RewriteTrace()
+        t.initial = ["+", "x", 0]
+        t(RewriteStep(0, RuleMetadata(), ["+", "x", 0], "x", path=[],
+                      rule_id=None, kind="rule"))
+        t.final = "x"
+        prose = to_prose(t)
+        assert "x" in prose
+
+    def test_empty_trace_is_problem_then_answer(self):
+        t = RewriteTrace()
+        t.initial = ["+", "x", "y"]
+        t.final = ["+", "x", "y"]
+        prose = to_prose(t)
+        lines = prose.splitlines()
+        # No steps: just the problem framing and the (unchanged) answer.
+        assert "(+ x y)" in lines[0]
+        assert "(+ x y)" in lines[-1]
+
+
+class TestToProseFoldTemplate:
+    """A fold step reads as 'Computing with ...'."""
+
+    def _fold_trace(self):
+        meta_fold = RuleMetadata(name="fold-add", category="fold",
+                                 reasoning="constant folding")
+        t = RewriteTrace()
+        t.initial = ["+", ["+", 2, 3], "x"]
+        t(RewriteStep(0, meta_fold, ["+", 2, 3], 5, path=[1],
+                      rule_id="fold-add", kind="fold",
+                      rationale="constant folding"))
+        t.final = ["+", 5, "x"]
+        return t
+
+    def test_fold_step_uses_computing_template(self):
+        prose = to_prose(self._fold_trace())
+        assert "Computing" in prose
+        assert "fold-add" in prose
+        # before_root -> after_root for the fold.
+        assert "(+ (+ 2 3) x)" in prose
+        assert "(+ 5 x)" in prose
