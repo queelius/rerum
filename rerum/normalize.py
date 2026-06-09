@@ -16,7 +16,7 @@ fold is local and uses the theory's units.
 """
 
 import json as _json
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .rewriter import ExprType, compound, constant, variable
 
@@ -153,8 +153,93 @@ def canonical_sort(expr: ExprType, theory: Theory) -> ExprType:
     return [head] + sorted_args
 
 
-def collect_like_terms(expr: ExprType, theory: "Theory") -> ExprType:
-    raise NotImplementedError("collect_like_terms not yet implemented")
+def _read_multiplicity(operand: ExprType, repeat: Dict[str, Any]):
+    """Read (base, count) from an operand given the theory's repeat rule.
+
+    ``via="count"``: ``(repeat_op k base)`` -> ``(base, k)``; bare ``b`` ->
+    ``(b, 1)``. ``via="exp"``: ``(repeat_op base e)`` -> ``(base, e)``; bare
+    ``b`` -> ``(b, 1)``. The shape is read from ``repeat``, never hardcoded.
+    """
+    rop = repeat["op"]
+    via = repeat["via"]
+    if compound(operand) and operand and operand[0] == rop:
+        if via == "count" and len(operand) == 3 and _is_number(operand[1]):
+            return operand[2], operand[1]
+        if via == "exp" and len(operand) == 3 and _is_number(operand[2]):
+            return operand[1], operand[2]
+    return operand, 1
+
+
+def _emit_group(base: ExprType, total, repeat: Optional[Dict[str, Any]]):
+    """Re-emit a collected group as an operand (or None to drop it).
+
+    ``repeat is None`` (idempotent op): a single ``base``. ``via="count"``:
+    ``base`` if total 1, ``None`` if total 0, else ``(repeat_op total base)``.
+    ``via="exp"``: ``base`` if total 1, else ``(repeat_op base total)``.
+    """
+    if repeat is None:
+        return base
+    rop = repeat["op"]
+    via = repeat["via"]
+    if via == "count":
+        if total == 0:
+            return None
+        if total == 1:
+            return base
+        return [rop, total, base]
+    # via == "exp"
+    if total == 1:
+        return base
+    return [rop, base, total]
+
+
+def _collect_ac(args: List[ExprType], op: str, theory: Theory) -> List[ExprType]:
+    """Combine repeated operands under AC operator ``op`` using the theory."""
+    repeat = theory.repeat(op)
+    order: List[tuple] = []          # first-seen base keys
+    groups: Dict[tuple, list] = {}   # key -> [total, base_expr]
+    for operand in args:
+        if repeat is None:
+            base, count = operand, 1
+        else:
+            base, count = _read_multiplicity(operand, repeat)
+        k = ORDER_KEY(base)
+        if k not in groups:
+            groups[k] = [count, base]
+            order.append(k)
+        else:
+            groups[k][0] = groups[k][0] + count
+    out: List[ExprType] = []
+    for k in order:
+        total, base = groups[k]
+        emitted = _emit_group(base, total, repeat)
+        if emitted is not None:
+            out.append(emitted)
+    return out
+
+
+def collect_like_terms(expr: ExprType, theory: Theory) -> ExprType:
+    """Combine repeated operands of AC operators using the theory's repeat rule.
+
+    Theory-driven, no ``+``/``*``/``^`` literal: for ``+`` (repeat ``*`` count)
+    ``x + x`` -> ``(* 2 x)``; for ``*`` (repeat ``^`` exp) ``x * x`` ->
+    ``(^ x 2)``; for an idempotent boolean ``and`` (no repeat) ``(and a a)`` ->
+    ``a``. Recurses into children first. A head left with a single operand
+    unwraps. Non-AC heads keep their operands.
+    """
+    if not compound(expr) or not expr:
+        return expr
+
+    head = expr[0]
+    args = [collect_like_terms(a, theory) for a in expr[1:]]
+
+    if theory.is_ac(head):
+        args = _collect_ac(args, head, theory)
+        if len(args) == 1:
+            return args[0]
+        return [head] + args
+
+    return [head] + args
 
 
 def normalize(expr: ExprType, theory: "Theory", *, listener=None) -> ExprType:

@@ -197,3 +197,56 @@ class TestCanonicalSort:
         ref = canonical_sort(base, ARITH)
         for perm in itertools.permutations(["a", "b", "c", 1, 2]):
             assert canonical_sort(["+", *perm], ARITH) == ref
+
+
+class TestCollectLikeTerms:
+    def test_collect_x_plus_x(self):
+        # x + x -> (* 2 x) via repeat {op:*, via:count}
+        assert collect_like_terms(["+", "x", "x"], ARITH) == ["*", 2, "x"]
+
+    def test_collect_coeff_terms(self):
+        # (* 2 x) + (* 3 x) -> (* 5 x)
+        assert collect_like_terms(["+", ["*", 2, "x"], ["*", 3, "x"]], ARITH) == \
+            ["*", 5, "x"]
+
+    def test_collect_mixed_coeff_and_bare(self):
+        # x + (* 2 x) -> (* 3 x)
+        assert collect_like_terms(["+", "x", ["*", 2, "x"]], ARITH) == \
+            ["*", 3, "x"]
+
+    def test_collect_keeps_distinct_terms(self):
+        assert collect_like_terms(["+", "x", "y"], ARITH) == ["+", "x", "y"]
+
+    def test_collect_x_times_x(self):
+        # x * x -> (^ x 2) via repeat {op:^, via:exp}
+        assert collect_like_terms(["*", "x", "x"], ARITH) == ["^", "x", 2]
+
+    def test_collect_power_factors(self):
+        # (^ x 2) * (^ x 3) -> (^ x 5)
+        assert collect_like_terms(["*", ["^", "x", 2], ["^", "x", 3]], ARITH) == \
+            ["^", "x", 5]
+
+    def test_collect_mixed_power_and_bare(self):
+        # x * (^ x 2) -> (^ x 3)
+        assert collect_like_terms(["*", "x", ["^", "x", 2]], ARITH) == \
+            ["^", "x", 3]
+
+    def test_collect_distinct_factors(self):
+        assert collect_like_terms(["*", "x", "y"], ARITH) == ["*", "x", "y"]
+
+    def test_collect_recurses(self):
+        assert collect_like_terms(["-", ["+", "x", "x"], "y"], ARITH) == \
+            ["-", ["*", 2, "x"], "y"]
+
+    def test_collect_single_operand_unwraps(self):
+        assert collect_like_terms(["+", "x"], ARITH) == "x"
+        assert collect_like_terms(["*", "x"], ARITH) == "x"
+
+    def test_collect_idempotent_op_collapses(self):
+        # No repeat declared (boolean and is idempotent): (and a a) -> a.
+        assert collect_like_terms(["and", "a", "a"], BOOL) == "a"
+        assert collect_like_terms(["or", "x", "x", "y"], BOOL) == ["or", "x", "y"]
+
+    def test_collect_empty_theory_no_change(self):
+        # No AC op: nothing collected.
+        assert collect_like_terms(["+", "x", "x"], EMPTY) == ["+", "x", "x"]
