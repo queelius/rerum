@@ -16,7 +16,7 @@ fold is local and uses the theory's units.
 """
 
 import json as _json
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from .rewriter import ExprType, compound, constant, variable
 
@@ -122,6 +122,8 @@ def ORDER_KEY(expr: ExprType) -> tuple:
     makes keys of different shapes always comparable without ``TypeError``.
     Takes no theory: this is pure structure, no domain knowledge.
     """
+    if isinstance(expr, bool):
+        return (_RANK_NUMBER, (float(expr), "bool"))
     if _is_number(expr):
         return (_RANK_NUMBER, (float(expr), type(expr).__name__))
     if variable(expr):

@@ -147,3 +147,18 @@ class TestOrderKey:
         exprs = [1, 2, "a", "b", ["+", "a", "b"], ["*", "a", "b"]]
         keys = [ORDER_KEY(e) for e in exprs]
         assert len(set(keys)) == len(exprs)
+
+    def test_order_key_handles_bool_without_crash(self):
+        # Bools are valid atoms (boolean-theory identities/annihilators).
+        # ORDER_KEY must not crash on them.
+        kt = ORDER_KEY(True)
+        kf = ORDER_KEY(False)
+        assert kf < kt  # False sorts before True
+        # comparable with numbers and symbols without TypeError
+        keys = [ORDER_KEY(x) for x in [True, False, 1, 0, "x", ["+", "a"]]]
+        assert sorted(keys) == sorted(keys)  # no TypeError raised by sorting
+
+    def test_order_key_bool_in_compound(self):
+        # A compound containing bool atoms is orderable.
+        k = ORDER_KEY(["and", True, "x"])
+        assert isinstance(k, tuple)
