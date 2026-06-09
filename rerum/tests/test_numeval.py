@@ -45,3 +45,63 @@ class TestNumevalCompounds:
         # (log -1) is a math domain error under MATH_PRELUDE.
         with pytest.raises(NumevalError):
             numeval(["log", -1], {}, MATH_PRELUDE)
+
+
+def _fixed_sampler(points):
+    """A deterministic sampler: cycles through a fixed list of envs."""
+    it = iter(points)
+
+    def sample():
+        return next(it)
+
+    return sample
+
+
+class TestNumericEquiv:
+    def test_equivalent_expressions_agree(self):
+        # (+ x x) and (* 2 x) agree everywhere.
+        a = ["+", "x", "x"]
+        b = ["*", 2, "x"]
+        sampler = lambda: {"x": 1.0}  # constant sampler is fine
+        assert numeric_equiv(a, b, sampler, ARITHMETIC_PRELUDE, samples=8) is True
+
+    def test_inequivalent_expressions_disagree(self):
+        # (* x x) and (+ x 1) differ (e.g. at x=3: 9 vs 4).
+        a = ["*", "x", "x"]
+        b = ["+", "x", 1]
+        # Sample a spread of points so at least one separates them.
+        pts = [{"x": float(v)} for v in (0, 1, 2, 3, 4, 5, 6, 7)]
+        sampler = _fixed_sampler(pts)
+        assert numeric_equiv(a, b, sampler, ARITHMETIC_PRELUDE, samples=8) is False
+
+    def test_dict_of_ranges_sampler(self):
+        # A dict {var: (lo, hi)} is accepted as a sampler spec.
+        a = ["+", "x", "x"]
+        b = ["*", 2, "x"]
+        assert numeric_equiv(a, b, {"x": (-5.0, 5.0)},
+                             MATH_PRELUDE, samples=16) is True
+
+    def test_domain_error_points_are_skipped_not_crashed(self):
+        # (log x) vs (log x): identical, so always equal where defined.
+        # Sampling includes x <= 0 (domain error for log); those points
+        # must be skipped, not crash, and the verdict stays True.
+        a = ["log", "x"]
+        b = ["log", "x"]
+        pts = [{"x": float(v)} for v in (-2, -1, 0, 1, 2, 3, 4, 5)]
+        sampler = _fixed_sampler(pts)
+        assert numeric_equiv(a, b, sampler, MATH_PRELUDE, samples=8) is True
+
+    def test_within_tolerance(self):
+        # Two expressions equal up to floating slack are equivalent.
+        a = ["*", "x", 1]
+        b = "x"
+        assert numeric_equiv(a, b, lambda: {"x": 0.1},
+                             ARITHMETIC_PRELUDE, samples=4, tol=1e-9) is True
+
+
+class TestNumevalExports:
+    def test_exports(self):
+        import rerum
+        assert rerum.numeval is numeval
+        assert rerum.numeric_equiv is numeric_equiv
+        assert rerum.NumevalError is NumevalError

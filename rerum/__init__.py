@@ -130,6 +130,13 @@ from .solve import (
     contains_op,
 )
 
+# General numeric evaluation
+from .numeval import (
+    numeval,
+    numeric_equiv,
+    NumevalError,
+)
+
 # Public API
 __all__ = [
     # Version
@@ -205,6 +212,10 @@ __all__ = [
     "solve",
     "SolveResult",
     "contains_op",
+    # Numeric evaluation
+    "numeval",
+    "numeric_equiv",
+    "NumevalError",
     # Theory-driven normalization
     "Theory",
     "normalize",
