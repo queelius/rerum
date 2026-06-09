@@ -674,3 +674,93 @@ def tool_solve_assisted(engine, *, expr: str, sampler: Optional[Callable] = None
     if termination is not None:
         out["termination"] = termination
     return out
+
+
+# =====================================================================
+# Admin
+# =====================================================================
+
+# Computation bundles ONLY. No domain bundle (no calculus). The values are
+# attribute names re-exported from the rerum package (the underlying
+# constants live in rerum.rewriter but that module name is shadowed by the
+# rewriter() FUNCTION in rerum's namespace, so the package-level re-export
+# is the canonical access path here).
+_PRELUDE_BUNDLES = {
+    "arithmetic": "ARITHMETIC_PRELUDE",
+    "math": "MATH_PRELUDE",
+    "predicate": "PREDICATE_PRELUDE",
+    "full": "FULL_PRELUDE",
+    "none": None,
+}
+
+
+def _resolve_prelude(prelude):
+    """Resolve a prelude spec (DATA) to fold_funcs or None.
+
+    ``prelude`` is a single computation-bundle name (arithmetic/math/
+    predicate/full/none) or a list of names combined via combine_preludes.
+    There is NO domain bundle; an unknown name is a parse_error.
+    """
+    import rerum
+    from rerum import combine_preludes
+
+    names = [prelude] if isinstance(prelude, str) else list(prelude)
+    resolved = []
+    for nm in names:
+        if nm not in _PRELUDE_BUNDLES:
+            raise MCPToolError(
+                "parse_error",
+                f"unknown prelude {nm!r}; valid computation bundles: "
+                f"{sorted(_PRELUDE_BUNDLES)} (there is no domain bundle)",
+                details={"prelude": nm})
+        attr = _PRELUDE_BUNDLES[nm]
+        if attr is not None:
+            resolved.append(getattr(rerum, attr))
+    if not resolved:
+        return None
+    if len(resolved) == 1:
+        return resolved[0]
+    return combine_preludes(*resolved)
+
+
+def tool_reset_engine(engine, *, prelude="none") -> Dict[str, Any]:
+    """Clear rules, hooks, theory, and fold_funcs; optionally set a prelude.
+
+    ``prelude`` names a computation bundle or a combination thereof (DATA).
+    NO domain bundle is accepted (the general-engine principle).
+    """
+    fold = _resolve_prelude(prelude)
+    engine._rules = []
+    engine._metadata = []
+    engine._rule_names = {}
+    engine._simplifier = None
+    engine._disabled_groups = set()
+    engine._step_count = 0
+    engine._cancel_requested = False
+    engine._hooks.clear()
+    if hasattr(engine, "_theory"):
+        engine._theory = None
+    engine._fold_funcs = fold
+    return {"ok": True}
+
+
+def tool_get_status(engine) -> Dict[str, Any]:
+    """Inspection: how is the engine currently configured?"""
+    from rerum import __version__ as engine_version
+    from rerum.mcp import PROTOCOL_VERSION
+
+    categories = sorted({m.category for m in engine._metadata if m.category})
+    groups = sorted({t for m in engine._metadata for t in (m.tags or [])})
+    hooks = {ev: engine._hooks.count(ev) for ev in (
+        "rule_applied", "fixpoint", "no_match", "undefined_op",
+        "fold_error", "max_depth", "cycle", "should_fire")}
+    return {
+        "rules_count": len(engine._rules),
+        "has_fold_funcs": engine._fold_funcs is not None,
+        "has_theory": getattr(engine, "_theory", None) is not None,
+        "hooks": hooks,
+        "categories": categories,
+        "groups": groups,
+        "engine_version": engine_version,
+        "protocol_version": PROTOCOL_VERSION,
+    }
