@@ -496,3 +496,92 @@ def tool_minimize(engine, *, expr: str, metric: str = "size",
     else:
         out["prose"] = ""
     return out
+
+
+# =====================================================================
+# Goal solving (wraps engine.solve)
+# =====================================================================
+
+def _compile_goal(goal: Dict[str, Any]) -> Callable[[Any], bool]:
+    """Compile a caller-described goal (DATA) into a predicate.
+
+    The goal is the CALLER's data, never a hardcoded domain predicate.
+    This keeps ``solve_goal`` domain-free: the tool special-cases NO
+    operator; the operator names come entirely from the caller's ``goal``.
+
+    Supported goal kinds:
+      ``{"op_free": ["op1", "op2", ...]}`` -> True when none of those
+      operators remain anywhere in the expression. Built on the general
+      ``rerum.solve.contains_op`` helper.
+
+    Unknown goal kinds raise ``parse_error`` so the caller learns the
+    contract without a traceback.
+    """
+    from rerum.solve import contains_op
+
+    if "op_free" in goal:
+        ops = set(goal["op_free"])
+        return lambda e: not contains_op(e, ops)
+
+    raise MCPToolError(
+        "parse_error",
+        f"unknown goal kind; supported: 'op_free'. Got keys: {sorted(goal)}",
+        details={"goal": goal},
+    )
+
+
+def tool_solve_goal(engine, *, expr: str, goal: Dict[str, Any],
+                    max_nodes: int = 10000,
+                    fresh_vars: bool = True,
+                    normalize_between: bool = True) -> Dict[str, Any]:
+    """Goal-directed search via ``engine.solve`` over a caller-described goal.
+
+    Returns ``{result, found, explored, trace, prose, stats}``. The goal is
+    DATA (e.g. ``{"op_free": ["int", "lim"]}``); the tool holds no domain
+    logic and no operator literal. On budget exhaustion (``max_nodes``
+    expanded with no goal node reached) ``engine.solve`` returns
+    ``found=False`` and the tool surfaces it as a clear not-found result --
+    never a partial or a hang. The solution and every derivation step
+    expression render to s-expr STRINGS, and step fields route through
+    ``_json_safe``, so a Fraction-bearing solution stays json-serializable.
+    """
+    from rerum.mcp.trace import _Recorder, assemble_trace, step_to_dict
+
+    parsed = _parse(expr)
+    initial_str = format_sexpr(parsed)
+    # _compile_goal may raise parse_error for an unknown goal kind; let it
+    # propagate (it is the caller's contract, not an engine failure).
+    predicate = _compile_goal(goal)
+
+    try:
+        sr = engine.solve(
+            parsed, predicate, max_nodes=max_nodes,
+            fresh_vars=fresh_vars, normalize_between=normalize_between)
+    except MCPToolError:
+        raise
+    except Exception as exc:
+        raise MCPToolError("internal_error", f"solve failed: {exc}",
+                           cause=exc) from exc
+
+    final_str = (format_sexpr(sr.solution)
+                 if sr.solution is not None else initial_str)
+    # sr.derivation is a RewriteTrace (Phase 3 SolveResult). Wire it into a
+    # recorder so assemble_trace can attach global roots + render prose.
+    rec = _Recorder()
+    rec.trace = sr.derivation
+    if rec.trace is not None:
+        try:
+            rec.steps = [step_to_dict(s) for s in rec.trace.steps]
+        except Exception:
+            rec.steps = []
+    trace = assemble_trace(initial=initial_str, final=final_str, recorder=rec)
+
+    return {
+        "result": final_str,
+        "found": sr.found,
+        "explored": sr.explored,
+        "trace": trace,
+        "prose": trace.get("prose", ""),
+        "stats": {"rules_in_engine": len(engine._rules),
+                  "explored": sr.explored},
+    }
