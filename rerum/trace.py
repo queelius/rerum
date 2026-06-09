@@ -13,9 +13,46 @@ expressions. Other listeners might be progress bars, debugging stoppers, or
 custom counters.
 """
 
+import hashlib
+
 from typing import Any, Callable, Dict, List, Optional
 
 from .rewriter import ExprType
+
+
+def splice_at(root: ExprType, path: List[int], subtree: ExprType) -> ExprType:
+    """Return a copy of ``root`` with the subtree at ``path`` replaced.
+
+    ``path`` is a list of child indices: ``[]`` addresses the root itself,
+    ``[1]`` the element at index 1 of a list expression, ``[1, 2]`` the
+    element at index 2 of the element at index 1, and so on. Pure: ``root``
+    is never mutated and the returned structure shares no mutable nodes on
+    the spliced path with ``root``.
+    """
+    if not path:
+        return subtree
+    if not isinstance(root, list):
+        raise ValueError(f"cannot splice into non-list at path {path}: {root!r}")
+    i = path[0]
+    if i < 0 or i >= len(root):
+        raise IndexError(f"path index {i} out of range for {root!r}")
+    new_child = splice_at(root[i], path[1:], subtree)
+    return root[:i] + [new_child] + root[i + 1:]
+
+
+def rule_identity(metadata: Any, pattern: ExprType, skeleton: ExprType) -> str:
+    """Stable identity for a rule.
+
+    Returns ``metadata.name`` when set, else ``"#"`` followed by the first 12
+    hex chars of the sha1 of the rule's ``(pattern)(skeleton)`` rendering.
+    Robust to the post-desugar rule-index churn that makes ``rule_index``
+    brittle as an identity.
+    """
+    name = getattr(metadata, "name", None)
+    if name:
+        return name
+    payload = f"({pattern!r})({skeleton!r})".encode("utf-8")
+    return "#" + hashlib.sha1(payload).hexdigest()[:12]
 
 
 class RewriteStep:
