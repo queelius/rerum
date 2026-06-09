@@ -456,3 +456,90 @@ class TestExports:
         assert hasattr(rerum, "canonical_sort")
         assert hasattr(rerum, "collect_like_terms")
         assert hasattr(rerum, "ORDER_KEY")
+
+
+import itertools
+
+
+class TestBooleanGenerality:
+    """The SAME machinery, driven by a boolean theory, with no engine change."""
+
+    def test_flatten_boolean(self):
+        # (and (and a b) c) flattens to (and a b c) via is_ac("and").
+        assert flatten(["and", ["and", "a", "b"], "c"], BOOL) == \
+            ["and", "a", "b", "c"]
+
+    def test_canonical_sort_boolean(self):
+        # (or y x) sorts to (or x y) by the same ORDER_KEY.
+        assert canonical_sort(["or", "y", "x"], BOOL) == ["or", "x", "y"]
+
+    def test_normalize_boolean_pipeline(self):
+        # flatten + sort + idempotent collapse, all from the boolean theory.
+        assert normalize(["and", ["and", "b", "a"], "a"], BOOL) == \
+            ["and", "a", "b"]
+
+    def test_boolean_does_not_touch_arithmetic_ops(self):
+        # + is unknown to the boolean theory: left structurally intact.
+        assert flatten(["+", ["+", "a", "b"], "c"], BOOL) == \
+            ["+", ["+", "a", "b"], "c"]
+        assert canonical_sort(["+", "y", "x"], BOOL) == ["+", "y", "x"]
+
+
+def _sample_exprs():
+    """A spread of arithmetic expressions: atoms, sums, products, nesting, powers."""
+    return [
+        "x", 3, ["+", "x", "x"], ["*", "x", "x"],
+        ["+", ["*", 1, "x"], ["*", "x", 1]],
+        ["+", "c", "a", "b", 1, 2],
+        ["*", "y", "x", 2, 3],
+        ["+", ["+", "a", "b"], ["+", "c", "d"]],
+        ["*", ["^", "x", 2], ["^", "x", 3]],
+        ["-", ["+", "x", "x"], "y"],
+        ["+", ["*", 2, "x"], ["*", 3, "x"], "y"],
+    ]
+
+
+class TestIdempotence:
+    def test_idempotent_arithmetic(self):
+        for e in _sample_exprs():
+            once = normalize(e, ARITH)
+            assert normalize(once, ARITH) == once, f"not idempotent on {e}"
+
+    def test_idempotent_boolean(self):
+        for e in [["and", ["and", "a", "b"], "c"], ["or", "x", "x", "y"],
+                  ["and", "b", "a", "a"]]:
+            once = normalize(e, BOOL)
+            assert normalize(once, BOOL) == once, f"not idempotent on {e}"
+
+
+class TestConfluence:
+    def test_permutations_of_sum_converge(self):
+        operands = ["a", "b", "c", 1, 2]
+        ref = normalize(["+", *operands], ARITH)
+        for perm in itertools.permutations(operands):
+            assert normalize(["+", *perm], ARITH) == ref
+
+    def test_permutations_of_product_converge(self):
+        operands = ["x", "y", "z", 2]
+        ref = normalize(["*", *operands], ARITH)
+        for perm in itertools.permutations(operands):
+            assert normalize(["*", *perm], ARITH) == ref
+
+    def test_reassociation_converges(self):
+        forms = [
+            ["+", ["+", ["+", "a", "b"], "c"], "d"],
+            ["+", "a", ["+", "b", ["+", "c", "d"]]],
+            ["+", ["+", "a", "b"], ["+", "c", "d"]],
+            ["+", "a", ["+", ["+", "b", "c"], "d"]],
+        ]
+        ref = normalize(forms[0], ARITH)
+        for f in forms[1:]:
+            assert normalize(f, ARITH) == ref
+        assert ref == ["+", "a", "b", "c", "d"]
+
+    def test_boolean_permutations_converge(self):
+        # Confluence is theory-agnostic: the boolean theory converges too.
+        operands = ["a", "b", "c"]
+        ref = normalize(["or", *operands], BOOL)
+        for perm in itertools.permutations(operands):
+            assert normalize(["or", *perm], BOOL) == ref
