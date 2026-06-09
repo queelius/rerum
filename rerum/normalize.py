@@ -49,7 +49,13 @@ class Theory:
 
     @classmethod
     def from_json(cls, text: str) -> "Theory":
-        return cls(_json.loads(text))
+        parsed = _json.loads(text)
+        if not isinstance(parsed, dict):
+            raise ValueError(
+                "theory JSON must be an object mapping operator -> "
+                f"signature, got {type(parsed).__name__}"
+            )
+        return cls(parsed)
 
     def is_ac(self, op) -> bool:
         entry = self._sig.get(op)

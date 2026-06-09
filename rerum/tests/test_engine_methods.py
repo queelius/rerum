@@ -447,3 +447,119 @@ class TestExport:
         assert "@add-zero[100]" in rules[0]
         assert '"Adding zero"' in rules[0]
         assert "when" in rules[0]
+
+
+class TestAtomicInstall:
+    """A mid-batch ExampleValidationError must leave the engine EXACTLY as it
+    was: no half-loaded rules, no stale name index. Regression for the MCP
+    review's critical finding (validate-then-append interleaved per rule)."""
+
+    def _bad_batch_json(self):
+        # good2 valid; bad has a wrong example; good3 valid and after bad.
+        return (
+            '{"rules": ['
+            '{"name": "good2", "pattern": ["g2", ["?", "x"]], "skeleton": [":", "x"],'
+            ' "examples": [{"in": "(g2 1)", "out": "1"}]},'
+            '{"name": "bad", "pattern": ["b", ["?", "x"]], "skeleton": [":", "x"],'
+            ' "examples": [{"in": "(b 1)", "out": "wrong"}]},'
+            '{"name": "good3", "pattern": ["g3", ["?", "x"]], "skeleton": [":", "x"]}'
+            ']}'
+        )
+
+    def test_mid_batch_failure_leaves_engine_unchanged(self):
+        from rerum.engine import RuleEngine, ExampleValidationError
+        engine = RuleEngine.from_dsl("@good1: (g1 ?x) => :x")
+        assert len(engine._rules) == 1
+        with pytest.raises(ExampleValidationError):
+            engine.load_rules_from_json(self._bad_batch_json())
+        # Nothing committed: not even the rules BEFORE the bad one.
+        assert len(engine._rules) == 1
+        assert len(engine._metadata) == 1
+        assert list(engine._rule_names) == ["good1"]
+        # And the engine does not silently fire a half-loaded rule.
+        assert engine.simplify(["g2", "y"]) == ["g2", "y"]
+
+    def test_name_index_consistent_after_failure(self):
+        from rerum.engine import RuleEngine, ExampleValidationError
+        engine = RuleEngine()
+        with pytest.raises(ExampleValidationError):
+            engine.load_rules_from_json(self._bad_batch_json())
+        assert engine._rules == []
+        assert engine._rule_names == {}
+
+    def test_valid_batch_still_loads(self):
+        from rerum.engine import RuleEngine
+        engine = RuleEngine()
+        engine.load_rules_from_json(
+            '{"rules": ['
+            '{"name": "a", "pattern": ["a", ["?", "x"]], "skeleton": [":", "x"]},'
+            '{"name": "b", "pattern": ["b", ["?", "x"]], "skeleton": [":", "x"]}'
+            ']}'
+        )
+        assert sorted(engine._rule_names) == ["a", "b"]
+
+
+class TestPublicStateAPI:
+    """The public read/reset surface added for callers (CLI, MCP) that
+    previously reached into engine privates."""
+
+    def test_iter_rules_yields_aligned_triples(self):
+        from rerum.engine import RuleEngine
+        engine = RuleEngine.from_dsl(
+            "@r1: (a ?x) => :x\n@r2[5]: (b ?x) => :x")
+        triples = list(engine.iter_rules())
+        assert len(triples) == 2
+        for idx, rule, meta in triples:
+            assert engine.get_metadata(idx) is meta
+            assert engine._rules[idx] is rule
+        # Priority order: r2 (priority 5) sorts first.
+        assert triples[0][2].name == "r2"
+
+    def test_hook_counts_covers_all_events(self):
+        from rerum.engine import RuleEngine
+        engine = RuleEngine()
+        counts = a = engine.hook_counts()
+        assert set(counts) == set(RuleEngine._HOOK_EVENTS)
+        assert all(v == 0 for v in counts.values())
+
+        @engine.on_rule_applied
+        def obs(step, ctx):
+            pass
+
+        assert engine.hook_counts()["rule_applied"] == 1
+
+    def test_has_fold_funcs(self):
+        from rerum.engine import RuleEngine
+        from rerum import ARITHMETIC_PRELUDE
+        assert RuleEngine().has_fold_funcs() is False
+        assert RuleEngine(fold_funcs=ARITHMETIC_PRELUDE).has_fold_funcs() is True
+
+    def test_has_theory_and_init_slot(self):
+        from rerum.engine import RuleEngine
+        from rerum.normalize import Theory
+        engine = RuleEngine()
+        assert engine._theory is None  # slot exists from __init__
+        assert engine.has_theory() is False
+        engine._theory = Theory.from_dict({"+": {"ac": True}})
+        assert engine.has_theory() is True
+
+    def test_reset_clears_everything_and_installs_prelude(self):
+        from rerum.engine import RuleEngine
+        from rerum import ARITHMETIC_PRELUDE
+        from rerum.normalize import Theory
+        engine = RuleEngine.from_dsl("[g]\n@r: (a ?x) => :x")
+        engine._theory = Theory.from_dict({"+": {"ac": True}})
+        engine.disable_group("g")
+
+        @engine.on_rule_applied
+        def obs(step, ctx):
+            pass
+
+        out = engine.reset(ARITHMETIC_PRELUDE)
+        assert out is engine  # fluent
+        assert len(engine._rules) == 0
+        assert engine._rule_names == {}
+        assert engine._disabled_groups == set()
+        assert engine.has_theory() is False
+        assert engine.has_fold_funcs() is True
+        assert all(v == 0 for v in engine.hook_counts().values())

@@ -541,3 +541,15 @@ class TestConfluence:
         ref = normalize(["or", *operands], BOOL)
         for perm in itertools.permutations(operands):
             assert normalize(["or", *perm], BOOL) == ref
+
+
+class TestTheoryFromJsonValidation:
+    def test_non_object_json_raises_value_error(self):
+        with pytest.raises(ValueError):
+            Theory.from_json('["not", "an", "object"]')
+        with pytest.raises(ValueError):
+            Theory.from_json('42')
+
+    def test_object_json_still_loads(self):
+        t = Theory.from_json('{"+": {"ac": true, "identity": 0}}')
+        assert t.is_ac("+") and t.identity("+") == 0

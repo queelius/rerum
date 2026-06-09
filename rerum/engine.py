@@ -1575,6 +1575,11 @@ class RuleEngine:
         self._hooks = _HookRegistry()
         self._cancel_requested = False
         self._step_count: int = 0  # successful rule applications in current top-level call
+        # Session theory slot: operator-signature DATA (a normalize.Theory),
+        # set by callers (e.g. the MCP load_theory tool) and consumed where
+        # a theory= argument is threaded (e.g. solve's normalize_between).
+        # Always present, so callers never need a hasattr dance.
+        self._theory = None
 
     def _sort_by_priority(self) -> None:
         """Sort rules by priority (descending). Higher priority fires first.
@@ -1741,17 +1746,23 @@ class RuleEngine:
         return self
 
     def _install(self, parsed, validate_examples: bool = False) -> 'RuleEngine':
-        """Single insertion point for every loader.
+        """Single insertion point for every loader. ATOMIC.
 
-        Append each already-parsed ``(metadata, rule)`` pair (optionally
-        validating its examples first), then re-sort by priority — which also
-        rebuilds the name index from scratch — and invalidate the cached
-        simplifier. Centralising this keeps the four public loaders and
-        ``add_rule`` from drifting apart.
+        When ``validate_examples`` is set, EVERY pair is validated before
+        ANY is committed, so a mid-batch ``ExampleValidationError`` leaves
+        the engine exactly as it was: no half-loaded rules, no stale name
+        index. (Example validation is per-rule-isolated -- it instantiates
+        the rule against its own examples -- so validate-then-commit is
+        sound.) Then append all pairs, re-sort by priority (which rebuilds
+        the name index from scratch), and invalidate the cached simplifier.
+        Centralising this keeps the four public loaders and ``add_rule``
+        from drifting apart.
         """
-        for metadata, rule in parsed:
-            if validate_examples:
+        parsed = list(parsed)
+        if validate_examples:
+            for metadata, rule in parsed:
                 self._validate_rule_examples(rule, metadata)
+        for metadata, rule in parsed:
             self._rules.append(rule)
             self._metadata.append(metadata)
         self._sort_by_priority()  # rebuilds self._rule_names from self._metadata
@@ -1844,6 +1855,54 @@ class RuleEngine:
     def get_metadata(self, index: int) -> RuleMetadata:
         """Get metadata for a rule by index."""
         return self._metadata[index] if index < len(self._metadata) else RuleMetadata()
+
+    def iter_rules(self) -> Iterator[Tuple[int, List, RuleMetadata]]:
+        """Yield ``(index, [pattern, skeleton], metadata)`` for every stored rule.
+
+        Storage (priority) order; includes rules in disabled groups. Use
+        ``rule_set()`` for the active (group-filtered) view. This is the
+        public read surface for callers (CLI, MCP tools) that previously
+        reached into ``_rules``/``_metadata`` directly.
+        """
+        for i, (rule, meta) in enumerate(zip(self._rules, self._metadata)):
+            yield i, rule, meta
+
+    def hook_counts(self) -> Dict[str, int]:
+        """Registered-handler count per hook event.
+
+        Derived from ``_HOOK_EVENTS`` (the canonical event list), so a
+        future event is covered automatically.
+        """
+        return {ev: self._hooks.count(ev) for ev in self._HOOK_EVENTS}
+
+    def has_fold_funcs(self) -> bool:
+        """True when a prelude (fold functions) is installed."""
+        return self._fold_funcs is not None
+
+    def has_theory(self) -> bool:
+        """True when a session Theory (operator-signature data) is set."""
+        return self._theory is not None
+
+    def reset(self, fold_funcs: Optional[FoldFuncsType] = None) -> 'RuleEngine':
+        """Reset to a fresh-engine state, optionally installing a prelude.
+
+        Clears rules, metadata, the name index, the cached simplifier,
+        disabled groups, counters, cancellation, ALL hooks, and the session
+        theory; installs ``fold_funcs`` as the new prelude (None for a pure
+        rewriting engine). The single public counterpart of attribute-level
+        surgery: any future per-session state field must be cleared here.
+        """
+        self._rules = []
+        self._metadata = []
+        self._rule_names = {}
+        self._simplifier = None
+        self._disabled_groups = set()
+        self._step_count = 0
+        self._cancel_requested = False
+        self._hooks.clear()
+        self._theory = None
+        self._fold_funcs = fold_funcs
+        return self
 
     # ============================================================
     # Group Management
