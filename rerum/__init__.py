@@ -138,6 +138,13 @@ from .numeval import (
     NumevalDomainError,
 )
 
+# Trace-to-text / trace-to-record projection layer (Phase 4)
+from .training import (
+    to_training_record,
+    to_prose,
+    generate_corpus,
+)
+
 # Public API
 __all__ = [
     # Version
@@ -225,4 +232,8 @@ __all__ = [
     "canonical_sort",
     "collect_like_terms",
     "ORDER_KEY",
+    # Trace-to-text / trace-to-record (Phase 4)
+    "to_training_record",
+    "to_prose",
+    "generate_corpus",
 ]

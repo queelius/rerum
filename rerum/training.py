@@ -127,3 +127,56 @@ def to_prose(trace) -> str:
         lines.append(_prose_line(entry))
     lines.append(f"Answer: {_render(trace.final)}.")
     return "\n".join(lines)
+
+
+# A problem is an (operator_label, expr) pair. ``operator_label`` is a
+# free-form string the caller chooses (NOT interpreted by this module); it is
+# stamped verbatim into the record's ``operator`` field. ``expr`` is the
+# expression to drive. The ``driver`` receives the whole pair and decides how
+# to run it (simplify for a confluent rule set, solve for a non-confluent
+# one); that decision is the CALLER's, never this module's.
+ProblemType = Tuple[str, ExprType]
+
+DriverType = Callable[[Any, ProblemType], Tuple[Any, Any]]
+CheckerType = Callable[[ProblemType, Any], bool]
+
+
+def generate_corpus(engine, problems: Sequence[ProblemType], *,
+                    driver: DriverType,
+                    checker: Optional[CheckerType] = None,
+                    ) -> Iterator[Dict[str, Any]]:
+    """Stream training records, one per problem, via a caller-supplied driver.
+
+    ``generate_corpus`` is GENERAL: it names no domain operator and makes no
+    ``simplify``-vs-``solve`` choice. For each problem it calls::
+
+        answer, trace = driver(engine, problem)
+
+    where ``driver`` is the caller's domain adapter (it runs ``simplify`` for
+    a confluent rule set, ``solve`` for a non-confluent one, and returns the
+    Phase-1 ``RewriteTrace``). The record is built with
+    ``to_training_record`` (the problem's ``operator_label`` becomes the
+    record's ``operator``, the s-expr rendering of the problem expression
+    becomes ``problem``, and ``answer`` is the driver's result). When
+    ``checker`` is supplied, ``verified = checker(problem, answer)``;
+    otherwise ``verified`` stays ``None``. Yields the record (a generator:
+    records stream out, nothing is accumulated).
+
+    ``problems`` is a sequence of ``(operator_label, expr)`` pairs. The
+    operator label is the caller's free-form tag; this module stores it
+    verbatim and never inspects it.
+    """
+    for problem in problems:
+        operator_label, expr = problem
+        answer, trace = driver(engine, problem)
+        verified: Optional[bool] = None
+        if checker is not None:
+            verified = checker(problem, answer)
+        record = to_training_record(
+            trace,
+            problem=format_sexpr(expr),
+            operator=operator_label,
+            answer=answer,
+            verified=verified,
+        )
+        yield record

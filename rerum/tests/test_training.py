@@ -228,3 +228,113 @@ class TestToProseFoldTemplate:
         # before_root -> after_root for the fold.
         assert "(+ (+ 2 3) x)" in prose
         assert "(+ 5 x)" in prose
+
+
+import types
+
+from rerum.training import generate_corpus
+
+
+# A domain-free TOY rule set: ordinary algebra simplification, NO calculus.
+# This proves training.py is domain-agnostic (no dd/int/lim anywhere).
+TOY_RULES = """
+    @add-zero {category=identity}: (+ ?x 0) => :x
+    @mul-one {category=identity}: (* ?x 1) => :x
+    @mul-zero {category=annihilator}: (* ?x 0) => 0
+"""
+
+
+def _toy_engine():
+    """Engine over the toy algebra rules. No prelude needed (no folds)."""
+    return RuleEngine.from_dsl(TOY_RULES)
+
+
+def _simplify_driver(engine, problem):
+    """Caller-supplied adapter: run the confluent toy rules via simplify.
+
+    A problem is an (label, expr) pair. Returns (answer, trace) where the
+    trace is the Phase-1 RewriteTrace from simplify(trace=True). This adapter
+    is the CALLER's responsibility; training.py never picks simplify vs solve.
+    """
+    _label, expr = problem
+    result, trace = engine.simplify(expr, trace=True)
+    return result, trace
+
+
+def _is_atom_checker(problem, answer):
+    """Caller-supplied validator: the toy answer should reduce to an atom.
+
+    Domain-free: for the toy rules every problem collapses to a single atom.
+    Returns True iff the answer is a non-list (a symbol or number).
+    """
+    return not isinstance(answer, list)
+
+
+class TestGenerateCorpusToy:
+    def test_yields_a_record_per_problem(self):
+        engine = _toy_engine()
+        problems = [("p1", ["+", "x", 0]),
+                    ("p2", ["*", "y", 1])]
+        records = list(generate_corpus(engine, problems,
+                                       driver=_simplify_driver,
+                                       checker=_is_atom_checker))
+        assert len(records) == 2
+
+    def test_is_a_streaming_generator(self):
+        engine = _toy_engine()
+        gen = generate_corpus(engine, [("p", ["+", "x", 0])],
+                              driver=_simplify_driver)
+        assert isinstance(gen, types.GeneratorType)
+
+    def test_answer_is_the_simplified_result(self):
+        engine = _toy_engine()
+        recs = list(generate_corpus(engine, [("p", ["+", "x", 0])],
+                                    driver=_simplify_driver))
+        assert recs[0]["answer"] == "x"
+
+    def test_checker_stamps_verified_true(self):
+        engine = _toy_engine()
+        recs = list(generate_corpus(engine, [("p", ["+", "x", 0])],
+                                    driver=_simplify_driver,
+                                    checker=_is_atom_checker))
+        assert recs[0]["verified"] is True
+
+    def test_checker_can_stamp_false(self):
+        # A checker that rejects everything stamps verified=False.
+        engine = _toy_engine()
+        recs = list(generate_corpus(engine, [("p", ["+", "x", 0])],
+                                    driver=_simplify_driver,
+                                    checker=lambda prob, ans: False))
+        assert recs[0]["verified"] is False
+
+    def test_no_checker_leaves_verified_none(self):
+        engine = _toy_engine()
+        recs = list(generate_corpus(engine, [("p", ["+", "x", 0])],
+                                    driver=_simplify_driver))
+        assert recs[0]["verified"] is None
+
+    def test_operator_label_comes_from_driver_free_problem(self):
+        # The caller controls the operator label via the problem; here the
+        # driver passes the problem label through (see implementation note).
+        engine = _toy_engine()
+        recs = list(generate_corpus(engine, [("simplify", ["*", "z", 1])],
+                                    driver=_simplify_driver))
+        assert recs[0]["operator"] == "simplify"
+
+    def test_record_chain_property_holds_end_to_end(self):
+        # The global-sequence join must chain for a REAL engine trace.
+        engine = _toy_engine()
+        rec = next(generate_corpus(engine, [("p", ["+", ["+", "x", 0], 0])],
+                                   driver=_simplify_driver))
+        steps = rec["steps"]
+        assert steps, "expected a non-empty derivation"
+        for k in range(len(steps) - 1):
+            assert steps[k + 1]["before_root"] == steps[k]["after_root"]
+
+
+class TestGenerateCorpusExport:
+    def test_exports(self):
+        import rerum
+        assert rerum.to_training_record is to_training_record
+        assert rerum.to_prose is to_prose
+        assert rerum.generate_corpus is generate_corpus
