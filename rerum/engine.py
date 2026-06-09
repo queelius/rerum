@@ -57,7 +57,7 @@ from typing import List, Tuple, Optional, Dict, Union, Iterator, Set, Callable, 
 from .rewriter import (
     rewriter, match as _match_internal, instantiate, ExprType,
     FoldFuncsType, ARITHMETIC_PRELUDE, Bindings, NoMatch, _NoMatch, wrap_bindings,
-    skeleton_compute,
+    skeleton_compute, NUMERIC_TYPES,
 )
 from .hooks import (
     _HookRegistry,
@@ -344,7 +344,7 @@ def _condition_truthy(result) -> bool:
     """
     if isinstance(result, bool):
         return result
-    if isinstance(result, (int, float)):
+    if isinstance(result, NUMERIC_TYPES):
         return result != 0
     if isinstance(result, str):
         return len(result) > 0
@@ -3040,7 +3040,7 @@ class RuleEngine:
         if op not in self._fold_funcs:
             return folded
 
-        if all(isinstance(a, (int, float)) for a in args):
+        if all(isinstance(a, NUMERIC_TYPES) for a in args):
             try:
                 handler = self._fold_funcs[op]
                 result = handler(args)

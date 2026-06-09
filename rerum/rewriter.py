@@ -13,9 +13,16 @@ from fractions import Fraction
 import math
 
 # Type aliases
-ExprType = Union[int, float, str, List]
+ExprType = Union[int, float, Fraction, str, List]
 RuleType = List  # [pattern, skeleton]
-NumericType = Union[int, float]
+NumericType = Union[int, float, Fraction]
+
+# Runtime numeric-type tuple for isinstance checks. A Fraction is a first-class
+# numeric atom (the arithmetic prelude's exact division yields Fractions), so
+# every "is this a number" predicate, matcher atom-check, and fold gate must
+# include it. Keeping the set in ONE constant means a future numeric type is
+# added in a single place, never hunted across scattered isinstance literals.
+NUMERIC_TYPES = (int, float, Fraction)
 
 
 def coerce_number(x):
@@ -387,13 +394,13 @@ PREDICATE_PRELUDE: FoldFuncsType = {
     "=": binary_only(lambda a, b: a == b),
     "!=": binary_only(lambda a, b: a != b),
     # Type predicates
-    "const?": unary_only(lambda x: isinstance(x, (int, float))),
+    "const?": unary_only(lambda x: isinstance(x, NUMERIC_TYPES)),
     "var?": unary_only(lambda x: isinstance(x, str)),
     "list?": unary_only(lambda x: isinstance(x, list)),
     "atom?": unary_only(lambda x: not isinstance(x, list)),
     "zero?": unary_only(lambda x: x == 0),
-    "positive?": unary_only(lambda x: isinstance(x, (int, float)) and x > 0),
-    "negative?": unary_only(lambda x: isinstance(x, (int, float)) and x < 0),
+    "positive?": unary_only(lambda x: isinstance(x, NUMERIC_TYPES) and x > 0),
+    "negative?": unary_only(lambda x: isinstance(x, NUMERIC_TYPES) and x < 0),
     # Structural predicates
     "free-of?": binary_only(lambda f, v: isinstance(v, str) and not free_in(v, f)),
     # Logical operators
@@ -524,9 +531,9 @@ def constant(exp: ExprType) -> bool:
         exp: The expression to check
 
     Returns:
-        True if exp is an int or float, False otherwise
+        True if exp is a number (int, float, or Fraction), False otherwise
     """
-    return isinstance(exp, (int, float))
+    return isinstance(exp, NUMERIC_TYPES)
 
 
 def variable(exp: ExprType) -> bool:
@@ -635,7 +642,7 @@ def free_in(var: str, expr: ExprType) -> bool:
     Returns:
         True if var appears in expr, False otherwise
     """
-    if isinstance(expr, (int, float)):
+    if isinstance(expr, NUMERIC_TYPES):
         return False
     if isinstance(expr, str):
         return expr == var
