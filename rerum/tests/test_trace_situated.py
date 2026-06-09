@@ -354,3 +354,36 @@ class TestOncePathRoundTrip:
         assert trace.steps[0].path == [1]
         seq = trace.to_global_sequence()
         assert seq[-1]["after_root"] == result  # reconstructs (* x y), not "x"
+
+
+class TestLabeledSingleRewrites:
+    """_all_single_rewrites(labeled=True) returns (expr, label) edges."""
+
+    def test_default_is_legacy_expr_list(self):
+        eng = RuleEngine.from_dsl("@commute: (+ ?x ?y) <=> (+ :y :x)")
+        outs = eng._all_single_rewrites(["+", "a", "b"])
+        assert ["+", "b", "a"] in outs
+
+    def test_labeled_returns_edges(self):
+        eng = RuleEngine.from_dsl("@commute: (+ ?x ?y) <=> (+ :y :x)")
+        edges = eng._all_single_rewrites(["+", "a", "b"], labeled=True)
+        assert edges, "expected at least one labeled edge"
+        expr, label = edges[0]
+        assert "rule_id" in label
+        assert "direction" in label
+        assert "bindings" in label
+        assert "path" in label
+
+    def test_labeled_edge_records_path_for_child_redex(self):
+        eng = RuleEngine.from_dsl("@commute: (+ ?x ?y) <=> (+ :y :x)")
+        edges = eng._all_single_rewrites(["*", ["+", "a", "b"], "c"], labeled=True)
+        target = ["*", ["+", "b", "a"], "c"]
+        match = [lbl for ex, lbl in edges if ex == target]
+        assert match, f"missing edge to {target}"
+        assert match[0]["path"] == [1]
+
+    def test_labeled_rule_id_is_named(self):
+        eng = RuleEngine.from_dsl("@commute: (+ ?x ?y) <=> (+ :y :x)")
+        edges = eng._all_single_rewrites(["+", "a", "b"], labeled=True)
+        rule_ids = {lbl["rule_id"] for _, lbl in edges}
+        assert any(rid.startswith("commute") for rid in rule_ids)

@@ -3332,7 +3332,9 @@ class RuleEngine:
         bidirectional_only: bool = True,
         groups: Optional[List[str]] = None,
         rules: Optional[RuleSet] = None,
-    ) -> List[ExprType]:
+        labeled: bool = False,
+        _path: Optional[List[int]] = None,
+    ):
         """Find all expressions reachable by applying exactly one rule.
 
         Tries every rule at every position in the expression tree.
@@ -3345,21 +3347,34 @@ class RuleEngine:
                 Ignored when ``rules`` is provided.
             rules: A ``RuleSet`` view that supersedes ``bidirectional_only``
                 and ``groups``. The recommended way to scope rule subsets.
+            labeled: If False (default), returns a list of distinct one-step
+                rewrite expressions (legacy shape). If True, returns a list of
+                ``(new_expr, label)`` edges where ``label`` is a dict with
+                keys ``rule_id``, ``direction``, ``bindings``, and ``path``.
+            _path: Internal accumulator for the redex position; callers should
+                not pass this argument.
 
         Returns:
-            List of all distinct one-step rewrites.
+            When ``labeled`` is False: list of distinct one-step rewrite
+            expressions (legacy shape). When ``labeled`` is True: list of
+            ``(new_expr, label)`` tuples.
         """
         if rules is None:
             rules = self.rule_set(groups=groups, bidirectional_only=bidirectional_only)
+        if _path is None:
+            _path = []
 
         results = []
         seen: Set[tuple] = set()
 
-        def add_if_new(new_expr: ExprType) -> None:
+        def add_if_new(new_expr: ExprType, label) -> None:
             key = _expr_to_tuple(new_expr)
             if key not in seen:
                 seen.add(key)
-                results.append(new_expr)
+                if labeled:
+                    results.append((new_expr, label))
+                else:
+                    results.append(new_expr)
 
         # Try rules at top level
         for rule_idx, rule, metadata in rules:
@@ -3374,15 +3389,32 @@ class RuleEngine:
                                      undefined_op_resolver=self._undefined_op_resolver,
                                      fold_error_resolver=self._fold_error_resolver)
                 if result != expr:
-                    add_if_new(result)
+                    if labeled:
+                        from .trace import rule_identity
+                        label = {
+                            "rule_id": rule_identity(metadata, pattern, skeleton),
+                            "direction": metadata.direction,
+                            "bindings": bindings.to_dict(),
+                            "path": list(_path),
+                        }
+                    else:
+                        label = None
+                    add_if_new(result, label)
 
         # Recursively try rules in subexpressions
         if isinstance(expr, list) and len(expr) > 0:
             for i, child in enumerate(expr):
-                child_rewrites = self._all_single_rewrites(child, rules=rules)
-                for new_child in child_rewrites:
-                    new_expr = expr[:i] + [new_child] + expr[i+1:]
-                    add_if_new(new_expr)
+                child_rewrites = self._all_single_rewrites(
+                    child, rules=rules, labeled=labeled, _path=_path + [i]
+                )
+                if labeled:
+                    for new_child, label in child_rewrites:
+                        new_expr = expr[:i] + [new_child] + expr[i+1:]
+                        add_if_new(new_expr, label)
+                else:
+                    for new_child in child_rewrites:
+                        new_expr = expr[:i] + [new_child] + expr[i+1:]
+                        add_if_new(new_expr, None)
 
         return results
 
