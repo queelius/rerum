@@ -61,6 +61,8 @@ from .rewriter import (
     binary_only,
     special_minus,
     safe_div,
+    free_symbols,
+    gensym,
     combine_preludes,
     # Standard preludes
     ARITHMETIC_PRELUDE,
@@ -153,6 +155,8 @@ __all__ = [
     "binary_only",
     "special_minus",
     "safe_div",
+    "free_symbols",
+    "gensym",
     "combine_preludes",
     # Standard preludes
     "ARITHMETIC_PRELUDE",

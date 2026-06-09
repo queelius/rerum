@@ -574,6 +574,14 @@ def skeleton_compute(s: ExprType) -> bool:
     return compound(s) and len(s) >= 2 and car(s) == "!"
 
 
+def skeleton_fresh(s: ExprType) -> bool:
+    """Check if skeleton element is a fresh-variable form (fresh base).
+
+    Form: ["fresh", "base"] - resolve to a gensym not free in the result.
+    """
+    return compound(s) and len(s) == 2 and car(s) == "fresh"
+
+
 def free_in(var: str, expr: ExprType) -> bool:
     """
     Check if a variable appears free in an expression.
@@ -883,6 +891,7 @@ def instantiate(
     fold_funcs: Optional[FoldFuncsType] = None,
     undefined_op_resolver: Optional[Callable] = None,
     fold_error_resolver: Optional[Callable] = None,
+    _resolve_fresh_markers: bool = True,
 ) -> ExprType:
     """
     Instantiate a skeleton with bindings.
@@ -912,6 +921,11 @@ def instantiate(
             handlers cannot legitimately yield Python None as a result. If
             such a value is needed, return ``Resolution(value=...)`` where
             ``...`` is a sentinel object the caller can interpret.
+        _resolve_fresh_markers: Internal flag. When True (the default,
+            top-level entry), ``["fresh", base]`` forms are resolved to
+            deterministic gensyms after the whole expression is built.
+            Recursive/internal calls pass False so the markers survive to
+            be resolved once, together, by the outermost call.
 
     Returns:
         The instantiated expression
@@ -927,6 +941,10 @@ def instantiate(
             return coerced.lookup(car(cdr(s)))
         if skeleton_splice(s):
             return coerced.lookup(car(cdr(s)))
+        if skeleton_fresh(s):
+            # Defer resolution: emit a unique unresolved marker; the
+            # post-pass picks the smallest gensym not already used.
+            return ["__fresh__", car(cdr(s))]
         if skeleton_compute(s):
             op = s[1]
             raw_args = s[2:]
@@ -965,7 +983,14 @@ def instantiate(
         return instantiate_compound(s, coerced, fold_funcs, undefined_op_resolver,
                                     fold_error_resolver)
 
-    return loop(skeleton)
+    built = loop(skeleton)
+    # Resolve ["fresh", base] forms exactly once, at the top-level call,
+    # so every marker in the fully-built expression is resolved together
+    # against one shared avoid-set (recursive/internal calls pass
+    # ``_resolve_fresh_markers=False`` and leave markers intact).
+    if _resolve_fresh_markers:
+        return _resolve_fresh(built)
+    return built
 
 
 def instantiate_compound(
@@ -997,10 +1022,45 @@ def instantiate_compound(
         return [spliced] + rest_instantiated
 
     first_instantiated = instantiate(first, coerced, fold_funcs, undefined_op_resolver,
-                                     fold_error_resolver)
+                                     fold_error_resolver, _resolve_fresh_markers=False)
     rest_instantiated = instantiate_compound(rest, coerced, fold_funcs, undefined_op_resolver,
                                              fold_error_resolver)
     return [first_instantiated] + rest_instantiated
+
+
+def _resolve_fresh(expr: ExprType) -> ExprType:
+    """Replace ["__fresh__", base] markers with deterministic gensyms.
+
+    Resolution is left-to-right (pre-order). Each resolved name is added
+    to the avoid-set so two fresh forms with the same base get distinct
+    names, and every already-present symbol in the expression is avoided.
+    Pure and deterministic: a fixed input yields a fixed output.
+    """
+    # Names already present (excluding the markers themselves).
+    def present(e: ExprType) -> set:
+        if isinstance(e, str):
+            return {e}
+        if isinstance(e, list):
+            if len(e) == 2 and e[0] == "__fresh__":
+                return set()
+            out: set = set()
+            for sub in e:
+                out |= present(sub)
+            return out
+        return set()
+
+    used = present(expr)
+
+    def walk(e: ExprType) -> ExprType:
+        if isinstance(e, list):
+            if len(e) == 2 and e[0] == "__fresh__":
+                name = gensym(e[1], used)
+                used.add(name)
+                return name
+            return [walk(sub) for sub in e]
+        return e
+
+    return walk(expr)
 
 
 # ============================================================

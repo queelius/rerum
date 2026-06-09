@@ -38,3 +38,61 @@ class TestGensym:
         avoid = {"u", "u1", "u3"}
         assert gensym("u", avoid) == "u2"
         assert gensym("u", avoid) == "u2"  # same inputs -> same output
+
+
+class TestFreshSkeleton:
+    def test_fresh_resolves_to_base_when_free(self):
+        # Skeleton (let (fresh u) (sin u)); but minimal: just the fresh
+        # symbol spliced into a compound that does NOT already use it.
+        skel = ["g", ["fresh", "u"], "y"]
+        out = instantiate(skel, Bindings.empty())
+        assert out == ["g", "u", "y"]
+
+    def test_fresh_avoids_occurring_name(self):
+        # The whole expression being built already contains `u`, so the
+        # fresh form must pick `u1`.
+        skel = ["g", "u", ["fresh", "u"]]
+        out = instantiate(skel, Bindings.empty())
+        assert out == ["g", "u", "u1"]
+
+    def test_fresh_avoids_bound_substituted_name(self):
+        # A bound variable :v resolves to `u`, occupying the name, so the
+        # fresh form picks `u1`.
+        b = Bindings([["v", "u"]])
+        skel = ["g", [":", "v"], ["fresh", "u"]]
+        out = instantiate(skel, b)
+        assert out == ["g", "u", "u1"]
+
+    def test_fresh_is_deterministic(self):
+        skel = ["g", "u", ["fresh", "u"]]
+        out1 = instantiate(skel, Bindings.empty())
+        out2 = instantiate(skel, Bindings.empty())
+        assert out1 == out2 == ["g", "u", "u1"]
+
+    def test_two_fresh_in_same_expr_get_distinct_names(self):
+        # Both ask for base `u`; the first takes `u`, the second must see
+        # it occupied and take `u1`. Determinism requires left-to-right
+        # resolution against the partially-built expression.
+        skel = ["g", ["fresh", "u"], ["fresh", "u"]]
+        out = instantiate(skel, Bindings.empty())
+        assert out == ["g", "u", "u1"]
+
+
+class TestFreshTopLevel:
+    def test_fresh_as_whole_skeleton(self):
+        # A bare ["fresh", "u"] skeleton resolves to "u" (nothing to avoid).
+        out = instantiate(["fresh", "u"], Bindings.empty())
+        assert out == "u"
+
+    def test_non_fresh_compound_unaffected(self):
+        # A normal two-element compound whose head is not "fresh" is
+        # untouched.
+        out = instantiate(["g", "u"], Bindings.empty())
+        assert out == ["g", "u"]
+
+
+class TestFreshExports:
+    def test_exports(self):
+        import rerum
+        assert rerum.gensym is gensym
+        assert rerum.free_symbols is free_symbols
