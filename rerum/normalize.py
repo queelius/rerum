@@ -242,5 +242,80 @@ def collect_like_terms(expr: ExprType, theory: Theory) -> ExprType:
     return [head] + args
 
 
-def normalize(expr: ExprType, theory: "Theory", *, listener=None) -> ExprType:
-    raise NotImplementedError("normalize not yet implemented")
+def _fold_constants(expr: ExprType, theory: Theory) -> ExprType:
+    """Fold numeric operands of AC operators using the theory's units.
+
+    Local fold so Phase 2 needs no prelude. For each AC head, combine numeric
+    operands using the operator's group op (sum for an additive identity 0,
+    product for a multiplicative identity 1) inferred from the identity unit:
+    we accumulate with ``+`` when ``identity == 0`` and with ``*`` when
+    ``identity == 1``. A declared annihilator short-circuits the whole
+    operator. Drop a result equal to the identity; unwrap a single operand.
+    Recurses into children first. Non-AC heads return folded children.
+    """
+    if not compound(expr) or not expr:
+        return expr
+
+    head = expr[0]
+    args = [_fold_constants(a, theory) for a in expr[1:]]
+
+    if theory.is_ac(head):
+        identity = theory.identity(head)
+        annihilator = theory.annihilator(head)
+        numbers = [a for a in args if _is_number(a)]
+        rest = [a for a in args if not _is_number(a)]
+        # Annihilator present among operands: the whole operator collapses.
+        if annihilator is not None and any(a == annihilator for a in args):
+            return annihilator
+        acc = identity
+        for n in numbers:
+            # The accumulation op is derived from the identity unit:
+            # additive identity 0 -> sum; multiplicative identity 1 -> product.
+            if identity == 0:
+                acc = acc + n
+            elif identity == 1:
+                acc = acc * n
+            else:
+                # No numeric folding rule for this identity; keep numbers as-is.
+                rest.append(n)
+                acc = identity
+        new_args: List[ExprType] = []
+        if identity in (0, 1):
+            if acc != identity or not rest:
+                new_args.append(acc)
+            new_args.extend(rest)
+        else:
+            new_args = args
+        if len(new_args) == 1:
+            return new_args[0]
+        if not new_args:
+            return identity
+        return [head] + new_args
+
+    return [head] + args
+
+
+def _normalize_once(expr: ExprType, theory: Theory) -> ExprType:
+    """One full pass: flatten -> sort -> collect -> fold."""
+    e = flatten(expr, theory)
+    e = canonical_sort(e, theory)
+    e = collect_like_terms(e, theory)
+    e = _fold_constants(e, theory)
+    return e
+
+
+def normalize(expr: ExprType, theory: Theory, *,
+              listener: Optional[Callable] = None) -> ExprType:
+    """Canonical normal form under ``theory``: flatten->sort->collect->fold, to fixpoint.
+
+    Idempotent and confluent. With an empty ``Theory`` it is the identity.
+    When ``listener`` is provided, a ``kind="normalize"`` ``RewriteStep`` is
+    emitted per changed sub-transformation (see Task 7).
+    """
+    current = expr
+    for _ in range(1000):  # fixpoint bound; mirrors rewriter's iteration cap
+        nxt = _normalize_once(current, theory)
+        if nxt == current:
+            break
+        current = nxt
+    return current

@@ -250,3 +250,55 @@ class TestCollectLikeTerms:
     def test_collect_empty_theory_no_change(self):
         # No AC op: nothing collected.
         assert collect_like_terms(["+", "x", "x"], EMPTY) == ["+", "x", "x"]
+
+
+class TestNormalize:
+    def test_motivating_example(self):
+        # (* 1 x) -> x and (* x 1) -> x by AC fold, then x + x -> (* 2 x).
+        assert normalize(["+", ["*", 1, "x"], ["*", "x", 1]], ARITH) == \
+            ["*", 2, "x"]
+
+    def test_flatten_sort_collect_pipeline(self):
+        # (+ (+ x 1) x) -> flatten (+ x 1 x) -> sort (+ 1 x x) -> collect (+ 1 (* 2 x))
+        assert normalize(["+", ["+", "x", 1], "x"], ARITH) == \
+            ["+", 1, ["*", 2, "x"]]
+
+    def test_constant_fold_plus(self):
+        assert normalize(["+", 2, 3], ARITH) == 5
+        assert normalize(["+", 1, 2, 3], ARITH) == 6
+
+    def test_constant_fold_times(self):
+        assert normalize(["*", 2, 3, 4], ARITH) == 24
+
+    def test_annihilator_zeroes_product(self):
+        # 0 is the * annihilator (declared in the theory).
+        assert normalize(["*", "x", 0, "y"], ARITH) == 0
+
+    def test_commuted_forms_converge(self):
+        assert normalize(["+", "x", "y"], ARITH) == normalize(["+", "y", "x"], ARITH)
+
+    def test_associated_forms_converge(self):
+        a = normalize(["+", ["+", "a", "b"], "c"], ARITH)
+        b = normalize(["+", "a", ["+", "b", "c"]], ARITH)
+        assert a == b == ["+", "a", "b", "c"]
+
+    def test_power_collection(self):
+        assert normalize(["*", "x", "x", "x"], ARITH) == ["^", "x", 3]
+
+    def test_atom_unchanged(self):
+        assert normalize("x", ARITH) == "x"
+        assert normalize(5, ARITH) == 5
+
+    def test_zero_drops_term(self):
+        # x + 0 -> x (0 is the + identity).
+        assert normalize(["+", "x", 0], ARITH) == "x"
+
+    def test_one_drops_factor(self):
+        # x * 1 -> x (1 is the * identity).
+        assert normalize(["*", "x", 1], ARITH) == "x"
+
+    def test_empty_theory_is_identity(self):
+        # THE empty-theory identity guarantee.
+        for e in ["x", 5, ["+", ["+", "a", "b"], "c"],
+                  ["*", "x", "x"], ["+", "x", "x"]]:
+            assert normalize(e, EMPTY) == e
