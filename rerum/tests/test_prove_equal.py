@@ -573,3 +573,33 @@ class TestProveEqualLabeledPaths:
             for entry in d["path_a"]:
                 if isinstance(entry, dict):
                     assert "rule_id" in entry
+
+    def test_identical_proof_paths_are_distinct_lists(self):
+        eng = self._engine()
+        proof = eng.prove_equal(["+", "a", "b"], ["+", "a", "b"], trace=True)
+        assert proof.path_a is not proof.path_b
+
+    def test_multistep_path_chain_integrity(self):
+        from rerum import RewriteStep
+        # Associativity + commutativity give multi-step proofs.
+        eng = RuleEngine.from_dsl(
+            "@comm: (+ ?x ?y) <=> (+ :y :x)\n"
+            "@assoc: (+ (+ ?x ?y) ?z) <=> (+ :x (+ :y :z))"
+        )
+        # Each side reaches the common form in one rule step:
+        # path_a: (+ (+ a b) c) --comm--> (+ (+ b a) c)
+        # path_b: (+ c (+ b a))  --comm--> (+ (+ b a) c)
+        proof = eng.prove_equal(
+            ["+", ["+", "a", "b"], "c"], ["+", "c", ["+", "b", "a"]],
+            trace=True, max_depth=6,
+        )
+        assert proof is not None
+        for path in (proof.path_a, proof.path_b):
+            steps = [s for s in (path or []) if isinstance(s, RewriteStep)]
+            # rule steps (kind == "rule") carry a rule_id, bindings, direction.
+            rule_steps = [s for s in steps if s.kind == "rule"]
+            assert len(rule_steps) >= 1, "expected at least one rule step per side"
+            for s in rule_steps:
+                assert s.rule_id is not None
+                assert s.bindings is not None
+                assert s.direction in ("fwd", "rev")

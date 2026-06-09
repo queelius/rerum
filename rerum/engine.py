@@ -1225,8 +1225,12 @@ class EqualityProof:
         common: The common equivalent form found
         depth_a: Number of rewrite steps from expr_a to common
         depth_b: Number of rewrite steps from expr_b to common
-        path_a: List of expressions from expr_a to common (if traced)
-        path_b: List of expressions from expr_b to common (if traced)
+        path_a: From expr_a to common. List[RewriteStep] when produced by
+            prove_equal(trace=True) (a synthetic initial step plus one
+            labeled step per edge); may also be a plain expression list when
+            constructed directly. Step __eq__ compares to an expression by
+            its ``after``, so endpoint assertions still hold.
+        path_b: From expr_b to common; same shape as path_a.
     """
 
     def __init__(
@@ -1289,9 +1293,7 @@ class EqualityProof:
             lines.append(f"Common form: {c_str}")
 
             def _fmt_path_item(item) -> str:
-                if hasattr(item, "after"):
-                    return format_sexpr(item.after)
-                return format_sexpr(item)
+                return format_sexpr(item.after) if isinstance(item, RewriteStep) else format_sexpr(item)
 
             if self.path_a:
                 lines.append(f"\nPath from A ({self.depth_a} steps):")
@@ -1319,10 +1321,7 @@ class EqualityProof:
         def _serialize_path(path):
             out = []
             for item in path:
-                if hasattr(item, "to_dict"):
-                    out.append(item.to_dict())
-                else:
-                    out.append(item)
+                out.append(item.to_dict() if isinstance(item, RewriteStep) else item)
             return out
 
         if self.path_a:
@@ -3631,17 +3630,19 @@ class RuleEngine:
                     after=expr_a,
                     kind="initial",
                 )
-                path: Optional[List] = [init_step]
+                path_a: Optional[List] = [init_step]
+                path_b: Optional[List] = [init_step]
             else:
-                path = None
+                path_a = None
+                path_b = None
             return EqualityProof(
                 expr_a=expr_a,
                 expr_b=expr_b,
                 common=expr_a,
                 depth_a=0,
                 depth_b=0,
-                path_a=path,
-                path_b=path
+                path_a=path_a,
+                path_b=path_b
             )
 
         # Track visited expressions from each side
