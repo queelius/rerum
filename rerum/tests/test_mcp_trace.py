@@ -173,3 +173,73 @@ class TestTraceRecorder:
         with trace_recorder(engine) as recorder:
             engine.simplify(["a", "y"])
         assert recorder.trace is not None
+
+
+class TestAssembleTrace:
+    def test_assemble_adds_global_roots_and_prose(self):
+        from rerum import RuleEngine
+        from rerum.mcp.trace import assemble_trace, trace_recorder
+
+        engine = RuleEngine.from_dsl("""
+            @add-zero {category=identity}: (+ ?x 0) => :x
+            @mul-one {category=identity}: (* ?x 1) => :x
+        """)
+        initial = ["+", ["*", "y", 1], 0]
+        with trace_recorder(engine, initial=initial) as recorder:
+            result = engine.simplify(initial)
+
+        d = assemble_trace(
+            initial="(+ (* y 1) 0)",
+            final="y",
+            recorder=recorder,
+        )
+        assert d["initial"] == "(+ (* y 1) 0)"
+        assert d["final"] == "y"
+        # Whole-expression roots present per step.
+        assert "before_root" in d["steps"][0]
+        assert "after_root" in d["steps"][0]
+        # Prose rendering present and a string.
+        assert isinstance(d["prose"], str)
+        assert d["prose"]
+        assert "summary" in d
+
+    def test_assemble_truncates_long_trace(self):
+        from rerum.mcp.trace import assemble_trace
+        from rerum.mcp.trace import _Recorder
+
+        rec = _Recorder()
+        rec.steps = [
+            {"rule_id": f"r{i}", "rule_name": f"r{i}", "before": "x",
+             "after": "x", "kind": "rule", "path": [], "bindings": {},
+             "direction": None, "guard": None, "rationale": None,
+             "category": None, "reasoning": None, "rule_index": 0,
+             "provenance": None, "before_root": "x", "after_root": "x"}
+            for i in range(250)
+        ]
+        d = assemble_trace(initial="x", final="x", recorder=rec, prose="")
+        assert len(d["steps"]) == 201  # 100 + marker + 100
+        assert d["trace_truncated"] == {"original_length": 250}
+        assert d["steps"][100].get("_elided") is True
+        assert d["steps"][100]["count"] == 50
+
+    def test_assemble_no_truncation_under_max(self):
+        from rerum.mcp.trace import assemble_trace, _Recorder
+
+        rec = _Recorder()
+        rec.steps = [
+            {"rule_id": f"r{i}", "before": "x", "after": "x", "kind": "rule",
+             "before_root": "x", "after_root": "x"}
+            for i in range(150)
+        ]
+        d = assemble_trace(initial="x", final="x", recorder=rec, prose="")
+        assert "trace_truncated" not in d
+        assert len(d["steps"]) == 150
+
+    def test_assemble_empty_steps(self):
+        from rerum.mcp.trace import assemble_trace, _Recorder
+
+        rec = _Recorder()
+        rec.steps = []
+        d = assemble_trace(initial="x", final="x", recorder=rec, prose="")
+        assert d["steps"] == []
+        assert d["total_steps"] == 0

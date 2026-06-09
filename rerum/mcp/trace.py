@@ -121,3 +121,103 @@ def trace_recorder(engine, *, initial=None):
     finally:
         recorder.end_time = time.perf_counter()
         engine.off_rule_applied(hook)
+
+
+def _attach_global_roots(recorder) -> None:
+    """Add before_root/after_root to each serialized step from the
+    RewriteTrace's whole-expression reconstruction.
+
+    Uses the Phase 1 ``RewriteTrace.to_global_sequence()`` which replays
+    from ``initial`` splicing each step's after at its path, yielding
+    per-step whole-expression before_root/after_root. Best-effort: if the
+    trace cannot reconstruct (missing initial), the roots are omitted.
+    """
+    if recorder.trace is None:
+        return
+    try:
+        seq = recorder.trace.to_global_sequence()
+    except Exception:
+        return
+    for serialized, entry in zip(recorder.steps, seq):
+        before_root = entry.get("before_root")
+        after_root = entry.get("after_root")
+        serialized["before_root"] = (
+            format_sexpr(before_root) if not isinstance(before_root, str)
+            and before_root is not None else before_root
+        )
+        serialized["after_root"] = (
+            format_sexpr(after_root) if not isinstance(after_root, str)
+            and after_root is not None else after_root
+        )
+
+
+def render_prose(recorder) -> str:
+    """Render the recorded trace to natural-language prose.
+
+    Delegates to the GENERAL, domain-agnostic ``rerum.training.to_prose``
+    (Phase 4). Returns an empty string if there is no trace to render.
+    """
+    if recorder.trace is None:
+        return ""
+    try:
+        from rerum.training import to_prose
+    except Exception:
+        return ""
+    try:
+        return to_prose(recorder.trace)
+    except Exception:
+        return ""
+
+
+def assemble_trace(*, initial: str, final: str, recorder=None,
+                   prose: Optional[str] = None) -> Dict[str, Any]:
+    """Build the full situated-trace dict for an MCP response.
+
+    Attaches whole-expression before_root/after_root per step (from
+    ``to_global_sequence``), a ``prose`` rendering (delta 4), and the
+    truncation policy from the prior plan (first HEAD_STEPS + an _elided
+    marker + last TAIL_STEPS). ``prose`` may be passed explicitly (tests);
+    otherwise it is rendered from the recorder's trace.
+    """
+    if recorder is not None:
+        _attach_global_roots(recorder)
+        steps = recorder.steps
+    else:
+        steps = []
+
+    if prose is None:
+        prose = render_prose(recorder) if recorder is not None else ""
+
+    total = len(steps)
+    out: Dict[str, Any] = {
+        "initial": initial,
+        "final": final,
+        "total_steps": total,
+        "summary": _summarize(steps),
+        "prose": prose,
+    }
+
+    if total > MAX_STEPS:
+        elided_count = total - HEAD_STEPS - TAIL_STEPS
+        marker = {"_elided": True, "count": elided_count}
+        out["steps"] = steps[:HEAD_STEPS] + [marker] + steps[-TAIL_STEPS:]
+        out["trace_truncated"] = {"original_length": total}
+    else:
+        out["steps"] = steps
+
+    return out
+
+
+def _summarize(steps: List[Dict[str, Any]]) -> str:
+    """One-line digest of the steps, by rule_id and kind."""
+    if not steps:
+        return "No rules applied."
+    counts: Dict[str, int] = {}
+    for s in steps:
+        name = s.get("rule_id") or s.get("rule_name") or f"rule[{s.get('rule_index')}]"
+        counts[name] = counts.get(name, 0) + 1
+    most = max(counts.items(), key=lambda kv: kv[1])
+    return (
+        f"{len(steps)} steps using {len(counts)} unique rules. "
+        f"Most used: {most[0]} ({most[1]}x)."
+    )
