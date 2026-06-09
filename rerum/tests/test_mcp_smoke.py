@@ -178,3 +178,47 @@ class TestRunServerWiring:
         finally:
             asyncio.run = orig_run
         assert called["ran"] is True
+
+
+class TestArgCoercion:
+    """An MCP client given a permissive input schema may send numeric/bool
+    arguments as strings. The dispatch coerces them to the handler's annotated
+    types, so a tool does not crash on e.g. max_depth='6'. Regression for a
+    bug found by driving prove_equal over a live MCP connection:
+    "'>=' not supported between instances of 'int' and 'str'"."""
+
+    def test_string_numeric_and_bool_args_are_coerced(self):
+        from rerum.mcp.server import RerumMCPServer
+        srv = RerumMCPServer()
+        srv.call_tool("reset_engine", {"prelude": "full"})
+        srv.call_tool("load_rules", {"format": "dsl", "text":
+            "@distribute: (* ?a (+ ?b ?c)) <=> (+ (* :a :b) (* :a :c))\n"
+            "@mul-one: (* ?x 1) <=> :x"})
+        # Every argument sent as a string, as a bare-schema client would.
+        result = srv.call_tool("prove_equal", {
+            "expr_a": "(* x (+ y 1))", "expr_b": "(+ (* x y) x)",
+            "max_depth": "6", "include_unidirectional": "false",
+            "trace": "true"})
+        assert "error" not in result, result
+        assert result["proven"] is True
+
+    def test_string_max_steps_coerced_for_simplify(self):
+        from rerum.mcp.server import RerumMCPServer
+        srv = RerumMCPServer()
+        srv.call_tool("load_rules", {"format": "dsl",
+                                     "text": "@az: (+ ?x 0) => :x"})
+        result = srv.call_tool("simplify", {"expr": "(+ y 0)",
+                                            "max_steps": "50"})
+        assert "error" not in result
+        assert result["result"] == "y"
+
+    def test_uncoercible_string_left_for_handler_to_validate(self):
+        # A non-numeric string for a numeric param is left untouched (not
+        # silently zeroed); the handler surfaces a clean error, not a crash.
+        from rerum.mcp.server import RerumMCPServer
+        srv = RerumMCPServer()
+        srv.call_tool("load_rules", {"format": "dsl",
+                                     "text": "@az: (+ ?x 0) => :x"})
+        result = srv.call_tool("simplify", {"expr": "(+ y 0)",
+                                            "max_steps": "lots"})
+        assert "error" in result  # mapped error, not an unhandled traceback

@@ -11,12 +11,70 @@ structured error dict (never a raw traceback escaping to the transport,
 and never a Fraction leaking into ``json.dumps``).
 """
 
+import inspect
+import typing
 from typing import Any, Callable, Dict, List, Optional
 
 from rerum import RuleEngine
 from rerum.mcp.errors import MCPToolError, map_exception
 from rerum.mcp.persistence import RuleStore
 from rerum.mcp import tools as T
+
+_COERCE_MISS = object()
+
+
+def _numeric_target(annotation):
+    """Return int/float/bool if the annotation is one (or Optional of one)."""
+    if annotation in (int, float, bool):
+        return annotation
+    for arg in typing.get_args(annotation):  # Optional[int] -> (int, NoneType)
+        if arg in (int, float, bool):
+            return arg
+    return None
+
+
+def _coerce_scalar(value: str, target):
+    """Coerce a string to ``target`` (int/float/bool); _COERCE_MISS if it can't."""
+    if target is bool:
+        low = value.strip().lower()
+        if low in ("true", "1", "yes"):
+            return True
+        if low in ("false", "0", "no", ""):
+            return False
+        return _COERCE_MISS
+    try:
+        return target(value)  # int("6") -> 6, float("1.5") -> 1.5
+    except (TypeError, ValueError):
+        return _COERCE_MISS
+
+
+def _coerce_args(func, args: Dict[str, Any]) -> Dict[str, Any]:
+    """Coerce string args to the handler's annotated numeric/bool types.
+
+    An MCP client given a permissive input schema may send every argument as
+    a string (e.g. ``max_depth="6"``), which then crashes a handler that
+    compares it numerically (``depth >= "6"`` -> TypeError). The tool
+    signatures annotate their numeric/boolean parameters, so a string arg is
+    coerced to ``int``/``float``/``bool`` when the annotation says so. A
+    value that cannot be coerced is left untouched (the handler validates it).
+    """
+    if func is None:
+        return args
+    try:
+        params = inspect.signature(func).parameters
+    except (TypeError, ValueError):
+        return args
+    out = dict(args)
+    for key, value in args.items():
+        if not isinstance(value, str) or key not in params:
+            continue
+        target = _numeric_target(params[key].annotation)
+        if target is None:
+            continue
+        coerced = _coerce_scalar(value, target)
+        if coerced is not _COERCE_MISS:
+            out[key] = coerced
+    return out
 
 
 class RerumMCPServer:
@@ -79,6 +137,10 @@ class RerumMCPServer:
             return MCPToolError(
                 "engine_busy",
                 "another tool call is in progress on this engine").to_dict()
+        # Coerce string args to the handler's annotated numeric/bool types
+        # (an MCP client with a permissive schema may send numbers as strings).
+        # The underlying handler is T.tool_<name>; use it for the annotations.
+        args = _coerce_args(getattr(T, "tool_" + name, None), args)
         self._busy = True
         try:
             return handler(**args)
