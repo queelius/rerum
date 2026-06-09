@@ -97,6 +97,16 @@ from .engine import (
     COST_METRICS,
 )
 
+# Theory-driven normalization (Phase 2)
+from .normalize import (
+    Theory,
+    normalize,
+    flatten,
+    canonical_sort,
+    collect_like_terms,
+    ORDER_KEY,
+)
+
 # Trace helpers
 from .trace import splice_at, rule_identity
 
@@ -178,4 +188,11 @@ __all__ = [
     "Resolution",
     "ResolutionError",
     "ResolverLoopError",
+    # Theory-driven normalization
+    "Theory",
+    "normalize",
+    "flatten",
+    "canonical_sort",
+    "collect_like_terms",
+    "ORDER_KEY",
 ]

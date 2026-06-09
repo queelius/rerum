@@ -1,0 +1,4 @@
+{
+  "+": {"ac": true, "identity": 0, "repeat": {"op": "*", "via": "count"}},
+  "*": {"ac": true, "identity": 1, "annihilator": 0, "repeat": {"op": "^", "via": "exp"}}
+}
