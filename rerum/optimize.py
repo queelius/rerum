@@ -112,7 +112,7 @@ class OptimizationResult:
     (``cost < original_cost``).
     """
 
-    __slots__ = ("expr", "cost", "original", "original_cost", "expressions_checked")
+    __slots__ = ("expr", "cost", "original", "original_cost", "expressions_checked", "derivation")
 
     def __init__(
         self,
@@ -121,12 +121,14 @@ class OptimizationResult:
         original: ExprType,
         original_cost: float,
         expressions_checked: int = 0,
+        derivation: Optional["RewriteTrace"] = None,
     ):
         self.expr = expr
         self.cost = cost
         self.original = original
         self.original_cost = original_cost
         self.expressions_checked = expressions_checked
+        self.derivation = derivation
 
     @property
     def improvement(self) -> float:
@@ -174,4 +176,5 @@ class OptimizationResult:
             "original_cost": self.original_cost,
             "improvement": self.improvement,
             "expressions_checked": self.expressions_checked,
+            "derivation": self.derivation.to_dict() if self.derivation is not None else None,
         }

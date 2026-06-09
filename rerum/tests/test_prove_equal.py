@@ -273,10 +273,15 @@ class TestProveEqualWithTrace:
             ["+", "b", "a"],
             trace=True
         )
-        # One path should end at the common form
+        # One path should end at the common form.
+        # path elements may be RewriteStep (trace=True) or plain exprs.
+        def _path_end_key(item):
+            expr = item.after if hasattr(item, "after") else item
+            return _expr_to_tuple(expr)
+
         common_key = _expr_to_tuple(proof.common)
-        assert _expr_to_tuple(proof.path_a[-1]) == common_key or \
-               _expr_to_tuple(proof.path_b[-1]) == common_key
+        assert _path_end_key(proof.path_a[-1]) == common_key or \
+               _path_end_key(proof.path_b[-1]) == common_key
 
     def test_identical_trace(self):
         """Trace for identical expressions has single-element paths."""
@@ -534,3 +539,67 @@ class TestProveEqualPractical:
         if proof:
             pytest.fail("Should not have found proof")
         # This is correct behavior
+
+
+class TestProveEqualLabeledPaths:
+    """prove_equal(trace=True) returns RewriteStep-labeled paths."""
+
+    def _engine(self):
+        return RuleEngine.from_dsl("@commute: (+ ?x ?y) <=> (+ :y :x)")
+
+    def test_path_elements_are_steps(self):
+        from rerum import RewriteStep
+        eng = self._engine()
+        proof = eng.prove_equal(["+", "a", "b"], ["+", "b", "a"], trace=True)
+        assert proof is not None
+        all_steps = (proof.path_a or []) + (proof.path_b or [])
+        assert any(isinstance(s, RewriteStep) for s in all_steps)
+
+    def test_steps_carry_rule_ids(self):
+        from rerum import RewriteStep
+        eng = self._engine()
+        proof = eng.prove_equal(["+", "a", "b"], ["+", "b", "a"], trace=True)
+        ids = [s.rule_id for s in (proof.path_a or []) if isinstance(s, RewriteStep)]
+        ids += [s.rule_id for s in (proof.path_b or []) if isinstance(s, RewriteStep)]
+        assert any(rid and rid.startswith("commute") for rid in ids)
+
+    def test_to_dict_emits_step_dicts(self):
+        import json
+        eng = self._engine()
+        proof = eng.prove_equal(["+", "a", "b"], ["+", "b", "a"], trace=True)
+        d = proof.to_dict()
+        assert json.dumps(d) is not None
+        if "path_a" in d:
+            for entry in d["path_a"]:
+                if isinstance(entry, dict):
+                    assert "rule_id" in entry
+
+    def test_identical_proof_paths_are_distinct_lists(self):
+        eng = self._engine()
+        proof = eng.prove_equal(["+", "a", "b"], ["+", "a", "b"], trace=True)
+        assert proof.path_a is not proof.path_b
+
+    def test_multistep_path_chain_integrity(self):
+        from rerum import RewriteStep
+        # Associativity + commutativity give multi-step proofs.
+        eng = RuleEngine.from_dsl(
+            "@comm: (+ ?x ?y) <=> (+ :y :x)\n"
+            "@assoc: (+ (+ ?x ?y) ?z) <=> (+ :x (+ :y :z))"
+        )
+        # Each side reaches the common form in one rule step:
+        # path_a: (+ (+ a b) c) --comm--> (+ (+ b a) c)
+        # path_b: (+ c (+ b a))  --comm--> (+ (+ b a) c)
+        proof = eng.prove_equal(
+            ["+", ["+", "a", "b"], "c"], ["+", "c", ["+", "b", "a"]],
+            trace=True, max_depth=6,
+        )
+        assert proof is not None
+        for path in (proof.path_a, proof.path_b):
+            steps = [s for s in (path or []) if isinstance(s, RewriteStep)]
+            # rule steps (kind == "rule") carry a rule_id, bindings, direction.
+            rule_steps = [s for s in steps if s.kind == "rule"]
+            assert len(rule_steps) >= 1, "expected at least one rule step per side"
+            for s in rule_steps:
+                assert s.rule_id is not None
+                assert s.bindings is not None
+                assert s.direction in ("fwd", "rev")

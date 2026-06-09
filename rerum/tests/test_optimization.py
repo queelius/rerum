@@ -564,3 +564,38 @@ class TestOptimizationPractical:
         # Should have at least 2 different forms
         unique_keys = set(_expr_to_tuple(s) for s in samples)
         assert len(unique_keys) >= 2
+
+
+class TestOptimizationDerivation:
+    """minimize records a labeled derivation from original to minimum."""
+
+    def test_derivation_defaults_none_when_no_improvement(self):
+        eng = RuleEngine.from_dsl("@commute: (+ ?x ?y) <=> (+ :y :x)")
+        result = eng.minimize(["z"], metric="size")
+        assert result.derivation is None or len(result.derivation) == 0
+
+    def test_derivation_present_when_improved(self):
+        from rerum import RewriteTrace
+        eng = RuleEngine.from_dsl("@add-zero: (+ ?x 0) <=> :x")
+        result = eng.minimize(["+", "x", 0], metric="size")
+        assert result.expr == "x"
+        assert isinstance(result.derivation, RewriteTrace)
+        assert result.derivation.initial == ["+", "x", 0]
+        assert result.derivation.final == "x"
+        assert len(result.derivation) >= 1
+
+    def test_derivation_steps_are_labeled(self):
+        from rerum import RewriteStep
+        eng = RuleEngine.from_dsl("@add-zero: (+ ?x 0) <=> :x")
+        result = eng.minimize(["+", "x", 0], metric="size")
+        steps = [s for s in result.derivation
+                 if isinstance(s, RewriteStep) and s.kind == "rule"]
+        assert any(s.rule_id and s.rule_id.startswith("add-zero") for s in steps)
+
+    def test_to_dict_includes_derivation_when_present(self):
+        import json
+        eng = RuleEngine.from_dsl("@add-zero: (+ ?x 0) <=> :x")
+        result = eng.minimize(["+", "x", 0], metric="size")
+        d = result.to_dict()
+        assert json.dumps(d) is not None
+        assert "derivation" in d

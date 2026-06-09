@@ -97,6 +97,9 @@ from .engine import (
     COST_METRICS,
 )
 
+# Trace helpers
+from .trace import splice_at, rule_identity
+
 # Hooks
 from .hooks import (
     HooksError,
@@ -147,6 +150,8 @@ __all__ = [
     "RuleMetadata",
     "RewriteStep",
     "RewriteTrace",
+    "splice_at",
+    "rule_identity",
     "EqualityProof",
     "OptimizationResult",
     "ExampleValidationError",
