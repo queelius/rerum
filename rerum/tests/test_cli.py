@@ -366,3 +366,49 @@ class TestTabCompletion:
         assert "on" in matches
         assert "off" in matches
 
+
+class TestCombinedPrelude:
+    """Repeatable -p / multi-name :prelude combine via combine_preludes."""
+
+    def test_set_prelude_combines_two_names(self):
+        """set_prelude('math', 'predicate') merges both (sin + const?)."""
+        repl = RerumREPL()
+        assert repl.set_prelude("math", "predicate") is True
+        assert "sin" in repl.prelude
+        assert "const?" in repl.prelude
+        assert "free-of?" in repl.prelude  # from PREDICATE_PRELUDE (Phase 0)
+
+    def test_set_prelude_single_still_works(self):
+        """A single name is unchanged behaviour (backward compatible)."""
+        repl = RerumREPL()
+        assert repl.set_prelude("full") is True
+        assert "const?" in repl.prelude
+
+    def test_set_prelude_unknown_name_fails_and_no_partial(self):
+        """Any unresolvable name fails the whole call without partial state."""
+        repl = RerumREPL()
+        before = repl.prelude
+        assert repl.set_prelude("math", "no-such-prelude") is False
+        assert repl.prelude is before  # unchanged on failure
+
+    def test_prelude_command_multi(self):
+        """:prelude math predicate combines and reports both names."""
+        repl = RerumREPL()
+        result = repl.handle_command(":prelude math predicate")
+        assert "math + predicate" in result
+        assert "sin" in repl.prelude and "const?" in repl.prelude
+
+    def test_cli_combined_prelude_end_to_end(self):
+        """rerum -p math -p predicate runs calculus+algebra from the shell."""
+        examples = Path(__file__).resolve().parents[2] / "examples"
+        result = subprocess.run(
+            [sys.executable, "-m", "rerum.cli",
+             "-r", str(examples / "calculus.rules"),
+             "-r", str(examples / "algebra.rules"),
+             "-p", "math", "-p", "predicate",
+             "-e", "(dd (^ x 3) x)"],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "(* 3 (^ x 2))" in result.stdout
+

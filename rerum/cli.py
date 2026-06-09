@@ -46,7 +46,7 @@ from .engine import RuleEngine, E, format_sexpr, parse_sexpr, load_rules_from_ds
 from .rewriter import (
     ARITHMETIC_PRELUDE, MATH_PRELUDE, FULL_PRELUDE,
     MINIMAL_PRELUDE, PREDICATE_PRELUDE, NO_PRELUDE,
-    FoldFuncsType,
+    FoldFuncsType, combine_preludes,
 )
 
 # Try to import readline for better REPL experience
@@ -264,23 +264,34 @@ class RerumREPL:
             except Exception:
                 pass
 
-    def set_prelude(self, name: str) -> bool:
-        """Set the prelude by name or path."""
-        name_lower = name.lower()
+    def _resolve_prelude(self, name: str) -> Optional[FoldFuncsType]:
+        """Resolve a single prelude name (or path) to a fold-funcs dict.
 
-        if name_lower in BUILTIN_PRELUDES:
-            self.prelude = BUILTIN_PRELUDES[name_lower]
-            self.engine = self.engine.with_prelude(self.prelude)
-            return True
+        Returns the dict, or None if the name is neither a built-in prelude
+        nor a loadable custom prelude file.
+        """
+        builtin = BUILTIN_PRELUDES.get(name.lower())
+        if builtin is not None:
+            return builtin
+        return load_custom_prelude(name)
 
-        # Try to load custom prelude
-        custom = load_custom_prelude(name)
-        if custom is not None:
-            self.prelude = custom
-            self.engine = self.engine.with_prelude(self.prelude)
-            return True
+    def set_prelude(self, *names: str) -> bool:
+        """Set the active prelude from one or more names/paths.
 
-        return False
+        Multiple preludes are merged left-to-right via ``combine_preludes``
+        (later wins on key conflict), so a rule set needing both math
+        functions and predicates can use ``set_prelude("math", "predicate")``.
+        Returns False (and changes nothing) if any name fails to resolve.
+        """
+        resolved = []
+        for name in names:
+            prelude = self._resolve_prelude(name)
+            if prelude is None:
+                return False
+            resolved.append(prelude)
+        self.prelude = combine_preludes(*resolved) if len(resolved) != 1 else resolved[0]
+        self.engine = self.engine.with_prelude(self.prelude)
+        return True
 
     def handle_command(self, line: str) -> Optional[str]:
         """
@@ -325,11 +336,14 @@ class RerumREPL:
         elif cmd == "prelude":
             if not arg:
                 available = ", ".join(BUILTIN_PRELUDES.keys())
-                return f"Usage: :prelude NAME\nAvailable: {available}\nOr provide a path to a .py file"
-            if self.set_prelude(arg):
-                return f"Prelude set to: {arg}"
+                return (f"Usage: :prelude NAME [NAME ...]\nAvailable: {available}\n"
+                        f"Multiple names are combined (e.g. :prelude math predicate). "
+                        f"Or provide a path to a .py file")
+            names = arg.split()
+            if self.set_prelude(*names):
+                return f"Prelude set to: {' + '.join(names)}"
             else:
-                return f"Unknown prelude: {arg}"
+                return f"Unknown prelude in: {arg}"
 
         elif cmd == "trace":
             if arg.lower() in ("on", "true", "1"):
@@ -647,8 +661,11 @@ def main():
 
     parser.add_argument(
         "-p", "--prelude",
-        default="none",
-        help="Set prelude (arithmetic, math, full, none, or path.py)"
+        action="append",
+        default=None,
+        help="Set prelude (none, minimal, arithmetic, math, predicate, full, "
+             "or path.py). Repeatable; multiple are combined left-to-right "
+             "(e.g. -p math -p predicate for calculus + algebra)."
     )
 
     parser.add_argument(
@@ -681,9 +698,10 @@ def main():
     # Create runner
     runner = ScriptRunner()
 
-    # Set prelude
-    if not runner.repl.set_prelude(args.prelude):
-        print(f"Unknown prelude: {args.prelude}", file=sys.stderr)
+    # Set prelude (repeatable -p flags are combined left-to-right)
+    prelude_names = args.prelude if args.prelude else ["none"]
+    if not runner.repl.set_prelude(*prelude_names):
+        print(f"Unknown prelude in: {' '.join(prelude_names)}", file=sys.stderr)
         sys.exit(1)
 
     # Set trace and strategy
