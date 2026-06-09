@@ -106,8 +106,31 @@ def flatten(expr: ExprType, theory: Theory) -> ExprType:
     return [head] + flat_args
 
 
+# Rank constants: the primary sort key. Strictly increasing so that
+# numbers < symbols < compounds, regardless of payload contents.
+_RANK_NUMBER = 0
+_RANK_SYMBOL = 1
+_RANK_COMPOUND = 2
+
+
 def ORDER_KEY(expr: ExprType) -> tuple:
-    raise NotImplementedError("ORDER_KEY not yet implemented")
+    """Domain-free structural total-order key for canonical sorting.
+
+    Numbers sort before symbols before compounds. Numbers order by value
+    (int/float/Fraction comparable via ``float``), symbols lexicographically,
+    compounds by ``(head, then args recursively)``. The leading integer rank
+    makes keys of different shapes always comparable without ``TypeError``.
+    Takes no theory: this is pure structure, no domain knowledge.
+    """
+    if _is_number(expr):
+        return (_RANK_NUMBER, (float(expr), type(expr).__name__))
+    if variable(expr):
+        return (_RANK_SYMBOL, (expr,))
+    # compound: key by head (recursively, the normal head is a string) then args.
+    head = expr[0] if expr else ""
+    head_key = ORDER_KEY(head)
+    arg_keys = tuple(ORDER_KEY(a) for a in expr[1:])
+    return (_RANK_COMPOUND, (head_key, arg_keys))
 
 
 def canonical_sort(expr: ExprType, theory: "Theory") -> ExprType:

@@ -103,3 +103,47 @@ class TestFlatten:
         # Empty theory: no operator is AC, so no flattening happens.
         expr = ["+", ["+", "a", "b"], "c"]
         assert flatten(expr, EMPTY) == expr
+
+
+class TestOrderKey:
+    def test_numbers_before_symbols(self):
+        assert ORDER_KEY(2) < ORDER_KEY("x")
+        assert ORDER_KEY(0) < ORDER_KEY("a")
+
+    def test_symbols_before_compounds(self):
+        assert ORDER_KEY("z") < ORDER_KEY(["+", "a", "b"])
+        assert ORDER_KEY("x") < ORDER_KEY(["*", 2, "y"])
+
+    def test_numbers_before_compounds(self):
+        assert ORDER_KEY(100) < ORDER_KEY(["+", "a", "b"])
+
+    def test_numbers_sorted_by_value(self):
+        assert ORDER_KEY(1) < ORDER_KEY(2) < ORDER_KEY(10)
+        assert ORDER_KEY(-5) < ORDER_KEY(0)
+
+    def test_symbols_lexicographic(self):
+        assert ORDER_KEY("a") < ORDER_KEY("b") < ORDER_KEY("z")
+        assert ORDER_KEY("x") < ORDER_KEY("xy")
+
+    def test_compounds_by_head_then_args(self):
+        assert ORDER_KEY(["+", "a", "b"]) < ORDER_KEY(["+", "b", "b"])
+        assert ORDER_KEY(["*", "a"]) < ORDER_KEY(["^", "a"]) or \
+            ORDER_KEY(["^", "a"]) < ORDER_KEY(["*", "a"])
+
+    def test_total_order_no_typeerror(self):
+        items = [["+", "a", "b"], "x", 3, 1, "a", ["*", 2, "y"], -1]
+        ordered = sorted(items, key=ORDER_KEY)
+        assert ordered[:3] == [-1, 1, 3]
+        assert ordered[3:5] == ["a", "x"]
+        assert all(isinstance(e, list) for e in ordered[5:])
+
+    def test_no_theory_argument(self):
+        # ORDER_KEY is domain-free: it takes only an expression.
+        import inspect
+        params = list(inspect.signature(ORDER_KEY).parameters)
+        assert params == ["expr"]
+
+    def test_key_is_strict(self):
+        exprs = [1, 2, "a", "b", ["+", "a", "b"], ["*", "a", "b"]]
+        keys = [ORDER_KEY(e) for e in exprs]
+        assert len(set(keys)) == len(exprs)
