@@ -106,6 +106,36 @@ class RewriteStep:
         """Alias of ``after``: the redex-local subtree after the edit."""
         return self.after
 
+    def inverse(self) -> "RewriteStep":
+        """Return the reverse of this step.
+
+        Swaps the redex-local ``before``/``after``, flips ``direction``
+        (``fwd`` <-> ``rev``; ``None`` unchanged), and keeps ``path`` (the
+        same child-index path locates the post-step subtree, because
+        ``splice_at`` preserves indices), ``kind``, and the rule identity.
+        ``bindings`` and ``guard`` are CLEARED: they describe the forward
+        match, and a pure trace transform cannot know the reverse
+        application's match. So ``inverse()`` is a STRUCTURAL involution
+        (before/after/direction/path/kind round-trip), not a field-identical
+        one. See
+        docs/superpowers/specs/2026-06-10-rewritetrace-inverse-design.md.
+        """
+        flipped = {"fwd": "rev", "rev": "fwd"}.get(self.direction,
+                                                   self.direction)
+        return RewriteStep(
+            self.rule_index,
+            self.metadata,
+            self.after,
+            self.before,
+            rule_id=self.rule_id,
+            direction=flipped,
+            bindings=None,
+            path=(list(self.path) if self.path is not None else None),
+            kind=self.kind,
+            guard=None,
+            rationale=self.rationale,
+        )
+
     def __eq__(self, other: Any) -> bool:
         """Identity for step-vs-step; endpoint match for step-vs-expression.
 

@@ -283,3 +283,67 @@ class TestTraceWithComplexRewriting:
         if trace.steps:
             assert trace.steps[0].metadata.name == "neg"
 
+
+
+class TestRewriteStepInverse:
+    """RewriteStep.inverse(): swap before/after, flip direction, keep path,
+    null the forward-match bindings/guard."""
+
+    def _meta(self, name="r"):
+        from rerum.engine import RuleMetadata
+        return RuleMetadata(name=name)
+
+    def test_inverse_swaps_and_flips(self):
+        meta = self._meta()
+        step = RewriteStep(
+            0, meta, ["foo", "a"], ["bar", "a"], rule_id="r",
+            direction="fwd", bindings={"x": "a"}, path=[1], kind="rule",
+            guard={"condition": ["?", "p"], "result": True},
+            rationale="why")
+        inv = step.inverse()
+        assert inv.before == ["bar", "a"]      # was after
+        assert inv.after == ["foo", "a"]       # was before
+        assert inv.direction == "rev"          # flipped
+        assert inv.path == [1]                 # unchanged
+        assert inv.kind == "rule"              # unchanged
+        assert inv.rule_id == "r"              # unchanged
+        assert inv.metadata is meta            # same object
+        assert inv.rationale == "why"          # unchanged
+        assert inv.bindings is None            # cleared
+        assert inv.guard is None               # cleared
+
+    def test_inverse_none_direction_stays_none(self):
+        step = RewriteStep(0, self._meta(), ["a"], ["b"], direction=None)
+        assert step.inverse().direction is None
+
+    def test_inverse_rev_becomes_fwd(self):
+        step = RewriteStep(0, self._meta(), ["a"], ["b"], direction="rev")
+        assert step.inverse().direction == "fwd"
+
+    def test_inverse_is_structural_involution(self):
+        step = RewriteStep(
+            3, self._meta(), ["+", "a", 0], "a", rule_id="add-zero",
+            direction="rev", path=[2], kind="normalize", rationale="why")
+        twice = step.inverse().inverse()
+        assert twice.before == step.before
+        assert twice.after == step.after
+        assert twice.direction == step.direction
+        assert twice.path == step.path
+        assert twice.kind == step.kind
+        assert twice.rule_id == step.rule_id
+        assert twice.rationale == step.rationale
+
+    def test_inverse_path_is_a_copy(self):
+        p = [1, 2]
+        step = RewriteStep(0, self._meta(), ["a"], ["b"], path=p)
+        inv = step.inverse()
+        assert inv.path == [1, 2]
+        assert inv.path is not p  # pure: not the same list object
+
+    def test_inverse_preserves_kind_for_all_kinds(self):
+        for kind in ("rule", "normalize", "fold", "initial"):
+            before, after = ("x", "x") if kind == "initial" else (["a"], ["b"])
+            step = RewriteStep(0, self._meta(), before, after, kind=kind)
+            inv = step.inverse()
+            assert inv.kind == kind
+            assert inv.before == after and inv.after == before
