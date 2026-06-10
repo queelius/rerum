@@ -610,3 +610,27 @@ class TestMinimizeProseTruthful:
         result = tool_minimize(engine, expr="(+ 0 a)")
         assert result["best"] == "a"
         assert result["prose"].splitlines()[-1] == "Answer: a."
+
+
+class TestMinimizeProseNoPhantomSteps:
+    """After the inverse() fix, the MCP minimize prose narrates real moves:
+    no phantom no-op step (before == after) and the answer is the best form.
+    Pins the 0.9.0 review's minimize-prose finding once inverse() lands."""
+
+    def test_prose_has_no_no_op_steps(self):
+        import re
+        from rerum import RuleEngine
+        from rerum.mcp.tools import tool_minimize
+        engine = RuleEngine.from_dsl(
+            "@az: (+ ?x 0) <=> :x\n@comm: (+ ?x ?y) <=> (+ :y :x)")
+        result = tool_minimize(engine, expr="(+ 0 a)")
+        assert result["best"] == "a"
+        assert result["prose"].splitlines()[-1] == "Answer: a."
+        step_line = re.compile(
+            r"^(?:Applying|Simplifying with|Computing with) .*?: "
+            r"(.+) becomes (.+)\.$")
+        for line in result["prose"].splitlines():
+            m = step_line.match(line)
+            if m:
+                assert m.group(1) != m.group(2), (
+                    f"phantom no-op step in prose: {line!r}")

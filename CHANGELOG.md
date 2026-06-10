@@ -69,6 +69,13 @@ MCP surface; the engine API is extended, not broken.
   separately to the common form.
 - Non-finite floats can no longer emit non-spec JSON (``json_safe``
   renders them as strings; the transport dumps with ``allow_nan=False``).
+- ``RewriteTrace.inverse()`` / ``RewriteStep.inverse()``: a pure
+  reverse-trace primitive (swap before/after, flip direction, keep path).
+  ``minimize``'s derivation now inverts its reversed ``path_b`` steps, so
+  the derivation chains correctly under ``to_global_sequence`` (the Phase 1
+  limitation: it previously ended at the common form via a phantom no-op,
+  never reaching best) and the MCP ``minimize`` prose narrates the real
+  original->best moves.
 
 ## [0.8.0]
 
