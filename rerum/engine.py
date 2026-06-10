@@ -3999,7 +3999,13 @@ class RuleEngine:
                 for step in proof.path_a[1:]:        # skip synthetic initial
                     trace(step)
                 for step in reversed(proof.path_b[1:]):  # common -> best
-                    trace(step)
+                    # Reverse the ORDER and INVERT each step: path_b is a
+                    # forward path (best -> common), so each step must be
+                    # turned around (swap before/after, flip direction) to
+                    # read common -> best. Reordering alone leaves the steps
+                    # oriented best -> common, breaking the global-sequence
+                    # chain (the Phase 1 minimize-derivation limitation).
+                    trace(step.inverse())
                 derivation = trace
 
         return OptimizationResult(

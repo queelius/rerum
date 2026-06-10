@@ -599,3 +599,26 @@ class TestOptimizationDerivation:
         d = result.to_dict()
         assert json.dumps(d) is not None
         assert "derivation" in d
+
+
+class TestMinimizeDerivationChains:
+    """minimize's derivation must chain correctly under to_global_sequence:
+    the reversed path_b steps must be INVERTED, not merely reordered (the
+    Phase 1 limitation). Endpoint-correct but not chain-correct was the bug."""
+
+    def test_derivation_global_sequence_chains(self):
+        from rerum import RuleEngine
+        engine = RuleEngine.from_dsl(
+            "@az: (+ ?x 0) <=> :x\n@comm: (+ ?x ?y) <=> (+ :y :x)")
+        opt = engine.minimize(["+", 0, "a"])
+        assert opt.expr == "a"
+        deriv = opt.derivation
+        assert deriv is not None
+
+        seq = deriv.to_global_sequence()
+        assert seq[0]["before_root"] == ["+", 0, "a"]
+        assert seq[-1]["after_root"] == "a"
+        for k in range(len(seq) - 1):
+            assert seq[k]["after_root"] == seq[k + 1]["before_root"], (
+                "minimize derivation does not chain: reversed path_b steps "
+                "were not inverted")
