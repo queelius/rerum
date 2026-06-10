@@ -122,3 +122,16 @@ async def test_solve_assisted_bridges_sampling_to_client():
         steps = res["trace"]["steps"]
         assert any(s.get("provenance") == "llm-inferred" for s in steps)
         assert res["converged"] is True
+
+
+@pytest.mark.asyncio
+async def test_null_for_optional_param_accepted_over_the_wire():
+    # A client passing null for an unspecified optional must NOT be rejected
+    # by the SDK schema validator (it was, before the schema permitted null).
+    sdk_srv, _ = _build_sdk_server()
+    async with create_connected_server_and_client_session(sdk_srv) as client:
+        await client.call_tool("load_rules", {"text": "@az: (+ ?x 0) => :x"})
+        res = await client.call_tool(
+            "minimize", {"expr": "(+ y 0)", "metric": None})
+        assert res.isError is False, res.content[0].text
+        assert _payload(res)["best"] == "y"

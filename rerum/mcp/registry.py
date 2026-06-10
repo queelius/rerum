@@ -45,15 +45,40 @@ _SCALARS = {
 }
 
 
+def _permit_null(schema: Dict[str, Any]) -> Dict[str, Any]:
+    """Widen a schema to also accept JSON ``null`` (for ``Optional[T]``).
+
+    The server's ``validate_and_coerce`` accepts ``None`` for every
+    optional parameter, and the SDK validates calls against the EMITTED
+    schema before the handler runs -- so the schema must permit null too,
+    or a client passing ``{"metric": null}`` (a common LLM habit) is
+    rejected over the wire but accepted in-process. ``oneOf``/``anyOf``
+    gain a null member; an ``enum`` gains ``None``; a ``type`` gains
+    ``"null"``; a typeless schema already accepts anything.
+    """
+    if "oneOf" in schema:
+        return {**schema, "oneOf": schema["oneOf"] + [{"type": "null"}]}
+    if "anyOf" in schema:
+        return {**schema, "anyOf": schema["anyOf"] + [{"type": "null"}]}
+    out = dict(schema)
+    if "enum" in out and None not in out["enum"]:
+        out["enum"] = list(out["enum"]) + [None]
+    t = out.get("type")
+    if isinstance(t, str):
+        out["type"] = [t, "null"]
+    elif isinstance(t, list) and "null" not in t:
+        out["type"] = t + ["null"]
+    return out
+
+
 def _annotation_to_schema(annotation: Any) -> Dict[str, Any]:
     """Translate a Python type annotation into a JSON-schema fragment.
 
     Covers the closed set the tool handlers use: scalars, ``Literal``
-    (enum), ``Optional[T]`` (unwraps; required-ness is decided by the
-    default, not the Optional), ``List[T]``, ``Dict[str, T]``, and
-    ``Union[...]`` (oneOf). An unrecognized annotation yields the
-    permissive ``{}`` with a build-time warning rather than failing
-    registration.
+    (enum), ``Optional[T]`` (unwraps T but PERMITS null, matching
+    validate_and_coerce), ``List[T]``, ``Dict[str, T]``, and ``Union[...]``
+    (oneOf). An unrecognized annotation yields the permissive ``{}`` with a
+    build-time warning rather than failing registration.
     """
     if annotation is inspect.Parameter.empty or annotation is Any:
         return {}
@@ -71,10 +96,15 @@ def _annotation_to_schema(annotation: Any) -> Dict[str, Any]:
         return schema
 
     if origin is typing.Union:
+        has_none = type(None) in args
         members = [a for a in args if a is not type(None)]
         if len(members) == 1:  # Optional[T]
-            return _annotation_to_schema(members[0])
-        return {"oneOf": [_annotation_to_schema(m) for m in members]}
+            base = _annotation_to_schema(members[0])
+            return _permit_null(base) if has_none else base
+        schemas = [_annotation_to_schema(m) for m in members]
+        if has_none:
+            schemas.append({"type": "null"})
+        return {"oneOf": schemas}
 
     if origin in (list, List):
         items = _annotation_to_schema(args[0]) if args else {}

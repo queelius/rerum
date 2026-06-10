@@ -60,7 +60,9 @@ class TestRegistryBuild:
     def test_optional_literal_keeps_enum_not_required(self, registry):
         spec = registry["minimize"]
         metric = spec.input_schema["properties"]["metric"]
-        assert set(metric["enum"]) == {"size", "depth", "ops", "atoms"}
+        # Optional[Literal] -> enum of the literals PLUS None (the param is
+        # optional, so null is permitted), and not required.
+        assert set(metric["enum"]) == {"size", "depth", "ops", "atoms", None}
         assert "metric" not in spec.input_schema.get("required", [])
 
     def test_union_str_or_list_is_oneof(self, registry):
@@ -72,7 +74,8 @@ class TestRegistryBuild:
 
     def test_list_annotation_is_array(self, registry):
         groups = registry["simplify"].input_schema["properties"]["groups"]
-        assert groups["type"] == "array"
+        # Optional[List[str]] -> array OR null; items are strings.
+        assert groups["type"] == ["array", "null"]
         assert groups["items"]["type"] == "string"
 
     def test_dict_annotation_is_object(self, registry):
@@ -164,3 +167,39 @@ class TestValidateAndCoerce:
             registry["prove_equal"],
             {"expr_a": "a", "expr_b": "b", "max_expressions": "500"})
         assert out["max_expressions"] == 500
+
+
+class TestOptionalNullSchema:
+    """Optional[T] params must permit null in the EMITTED schema, matching
+    validate_and_coerce -- the SDK validates calls against the schema before
+    dispatch, so a client sending {param: null} (a common LLM habit) must not
+    be rejected over the wire while the same call succeeds in-process."""
+
+    def test_optional_params_permit_null(self, registry):
+        jsonschema = pytest.importorskip("jsonschema")
+        for tool, param in [("minimize", "metric"),
+                            ("prove_equal", "max_expressions"),
+                            ("simplify", "groups"),
+                            ("add_rule", "name")]:
+            schema = registry[tool].input_schema["properties"][param]
+            jsonschema.validate(None, schema)  # must not raise
+
+    def test_optional_literal_null_keeps_enum_values(self, registry):
+        jsonschema = pytest.importorskip("jsonschema")
+        metric = registry["minimize"].input_schema["properties"]["metric"]
+        jsonschema.validate(None, metric)
+        jsonschema.validate("size", metric)
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate("magic", metric)
+
+    def test_required_scalar_still_rejects_null(self, registry):
+        jsonschema = pytest.importorskip("jsonschema")
+        expr = registry["simplify"].input_schema["properties"]["expr"]
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate(None, expr)
+
+    def test_non_optional_union_has_no_null(self, registry):
+        # reset_engine's prelude is Union[str, List[str]] (NOT Optional);
+        # null is genuinely invalid there and must stay rejected.
+        prelude = registry["reset_engine"].input_schema["properties"]["prelude"]
+        assert not any(m.get("type") == "null" for m in prelude["oneOf"])

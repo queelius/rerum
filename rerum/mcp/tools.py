@@ -102,14 +102,20 @@ def _find_rule(engine, name: str):
     return None
 
 
-def _path_prose(initial, steps) -> str:
+def _path_prose(initial, steps, final=None) -> str:
     """Render prose for a hand-assembled situated path.
 
     ``prove_equal`` and ``minimize`` build their step lists from proof
     paths / a derivation trace rather than via the live ``trace_recorder``
     hook. Synthetic anchor steps (kind="initial") and no-op junctions
     (before == after) are dropped so the prose narrates real moves only.
-    Best-effort: a reconstruction failure yields an empty string.
+
+    ``final`` overrides the closing answer line. ``minimize``'s derivation
+    is a path through the equivalence graph that is NOT oriented
+    original->best, so its last step's ``after`` is the wrong endpoint;
+    callers that know the true endpoint pass it explicitly. When omitted,
+    the last real step's ``after`` is used. Best-effort: a reconstruction
+    failure yields an empty string.
     """
     from rerum.trace import RewriteTrace
 
@@ -120,7 +126,9 @@ def _path_prose(initial, steps) -> str:
                 if s.kind != "initial" and s.before != s.after]
         for s in real:
             trace.add_step(s)
-        if real:
+        if final is not None:
+            trace.final = final
+        elif real:
             trace.final = real[-1].after
         elif steps:
             trace.final = steps[-1].after
@@ -571,7 +579,7 @@ def tool_minimize(engine, *, expr: str,
     if derivation is not None:
         steps = list(derivation)
         out["derivation"] = [step_to_dict(s) for s in steps]
-        out["prose"] = _path_prose(opt.original, steps)
+        out["prose"] = _path_prose(opt.original, steps, final=opt.expr)
     else:
         out["prose"] = ""
     return out
@@ -598,7 +606,19 @@ def _compile_goal(goal: Dict[str, Any]) -> Callable[[Any], bool]:
             details={"goal": json_safe(goal)},
         )
     if "op_free" in goal:
-        ops = set(goal["op_free"])
+        spec = goal["op_free"]
+        # A string would silently iterate to a set of single CHARACTERS
+        # (op_free="neg" -> {'n','e','g'}) -> contains_op finds none -> a
+        # false found=True at the start node. Reject it.
+        if not isinstance(spec, list) or not all(isinstance(o, str)
+                                                 for o in spec):
+            raise MCPToolError(
+                "parse_error",
+                'op_free must be a list of operator-name strings, e.g. '
+                '{"op_free": ["opname"]}',
+                details={"goal": json_safe(goal)},
+            )
+        ops = set(spec)
         return lambda e: not contains_op(e, ops)
 
     raise MCPToolError(

@@ -127,11 +127,16 @@ def _build_sdk_server(rerum_srv=None):
         # Worker thread keeps the event loop free for the bridge round-trip.
         result = await asyncio.to_thread(rerum_srv.call_tool, name, arguments)
         try:
+            # allow_nan=False turns a non-finite float into a loud ValueError
+            # instead of non-spec JSON; TypeError catches any other
+            # non-serializable value that slipped past json_safe (a set, an
+            # exotic numeric). Either way the client gets a mapped error, not
+            # a transport crash.
             text = json.dumps(result, indent=2, allow_nan=False)
-        except ValueError as exc:  # a non-finite float escaped a sanitizer
+        except (ValueError, TypeError) as exc:
             text = json.dumps(MCPToolError(
                 "internal_error",
-                f"non-finite number leaked into the response: {exc}",
+                f"response was not JSON-serializable: {exc}",
             ).to_dict(), indent=2)
         return [types.TextContent(type="text", text=text)]
 

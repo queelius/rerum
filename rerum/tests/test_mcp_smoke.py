@@ -247,3 +247,47 @@ class TestOptionalSdkBoundary:
                              capture_output=True, text=True)
         assert "import-ok" in out.stdout, out.stderr
         assert "run-server-raises" in out.stdout, out.stdout + out.stderr
+
+
+class TestConcurrencyReal:
+    """The busy guard's only genuine proof: two real threads, one holding the
+    engine mid-handler while the other arrives. (The other TestConcurrency
+    cases set _busy by hand; this exercises the lock under contention.)"""
+
+    def test_busy_guard_under_thread_contention(self):
+        import threading
+        from rerum.mcp.server import RerumMCPServer
+
+        srv = RerumMCPServer()
+        srv.engine.load_dsl("@s: (foo ?x) => :x")  # does NOT match (stuck x)
+
+        entered = threading.Event()
+        proceed = threading.Event()
+
+        def blocking_sampler(prompt):
+            entered.set()
+            proceed.wait(timeout=5)
+            return "NONE"  # propose nothing; solve_assisted then converges
+
+        srv.set_sampler(blocking_sampler)
+        results = {}
+
+        def call_a():
+            # Gets stuck on (stuck x), fires the (blocking) resolver -> holds
+            # the engine until proceed is set.
+            results["a"] = srv.call_tool("solve_assisted", {"expr": "(stuck x)"})
+
+        ta = threading.Thread(target=call_a)
+        ta.start()
+        assert entered.wait(timeout=5)  # A is now inside, holding the engine
+
+        # B arrives while A holds the engine.
+        results["b"] = srv.call_tool("simplify", {"expr": "(foo bar)"})
+
+        proceed.set()
+        ta.join(timeout=5)
+
+        assert results["b"]["error"]["code"] == "engine_busy"
+        assert srv._busy is False  # released after A finished
+        # The engine is usable again (not wedged).
+        assert srv.call_tool("simplify", {"expr": "(foo bar)"})["result"] == "bar"

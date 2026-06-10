@@ -151,3 +151,23 @@ class TestTheoryThreading:
         themed = tool_solve_goal(engine, expr="(w)", goal=goal)
         assert themed["found"] is True
         assert themed["result"] == "(+ a b)"
+
+
+class TestOpFreeShape:
+    def test_op_free_string_is_parse_error(self):
+        from rerum import RuleEngine
+        from rerum.mcp.errors import MCPToolError
+        from rerum.mcp.tools import tool_solve_goal
+        engine = RuleEngine.from_dsl("@d: (neg (neg ?x)) => :x")
+        with pytest.raises(MCPToolError) as exc_info:
+            tool_solve_goal(engine, expr="(neg (neg x))",
+                            goal={"op_free": "neg"})
+        assert exc_info.value.code == "parse_error"
+
+    def test_op_free_list_still_works(self):
+        from rerum import RuleEngine
+        from rerum.mcp.tools import tool_solve_goal
+        engine = RuleEngine.from_dsl("@d: (neg (neg ?x)) => :x")
+        ok = tool_solve_goal(engine, expr="(neg (neg x))",
+                             goal={"op_free": ["neg"]})
+        assert ok["found"] is True and ok["result"] == "x"

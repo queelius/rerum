@@ -597,3 +597,16 @@ class TestAtomicLoadViaTool:
         assert exc_info.value.code == "validation_error"
         assert len(engine) == 1  # nothing committed, not even good2
         assert engine.simplify(["g2", "y"]) == ["g2", "y"]
+
+
+class TestMinimizeProseTruthful:
+    def test_minimize_prose_answer_equals_best(self):
+        # The derivation path is not oriented original->best, so the prose
+        # answer line must come from opt.expr, not the last step's after.
+        from rerum import RuleEngine
+        from rerum.mcp.tools import tool_minimize
+        engine = RuleEngine.from_dsl(
+            "@az: (+ ?x 0) <=> :x\n@comm: (+ ?x ?y) <=> (+ :y :x)")
+        result = tool_minimize(engine, expr="(+ 0 a)")
+        assert result["best"] == "a"
+        assert result["prose"].splitlines()[-1] == "Answer: a."

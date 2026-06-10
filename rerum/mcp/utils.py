@@ -23,8 +23,9 @@ def json_safe(value: Any) -> Any:
     - ``Fraction`` renders to its exact s-expr string (``"(/ 1 2)"``).
     - A non-finite ``float`` (inf/-inf/nan) renders to its ``str`` form;
       raw it would emit non-spec JSON tokens.
-    - dicts and lists are recursed; every other value passes through
-      unchanged (json.dumps validates the rest).
+    - dicts, lists, and tuples are recursed (a tuple becomes a list, the
+      JSON-native shape); every other value passes through unchanged
+      (json.dumps validates the rest).
     """
     if isinstance(value, bool):
         return value
@@ -34,6 +35,6 @@ def json_safe(value: Any) -> Any:
         return str(value)
     if isinstance(value, dict):
         return {k: json_safe(v) for k, v in value.items()}
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple)):
         return [json_safe(v) for v in value]
     return value
