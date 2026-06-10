@@ -218,6 +218,19 @@ class RewriteTrace:
     def add_step(self, step: RewriteStep) -> None:
         self.steps.append(step)
 
+    def inverse(self) -> "RewriteTrace":
+        """Return the reverse trace: from ``final`` back to ``initial``.
+
+        Steps are reversed in order and each is ``RewriteStep.inverse()``-d,
+        so ``self.inverse().to_global_sequence()`` replays ``final ->
+        initial`` with the chain intact. Pure: a new trace is returned.
+        """
+        out = RewriteTrace()
+        out.initial = self.final
+        out.final = self.initial
+        out.steps = [s.inverse() for s in reversed(self.steps)]
+        return out
+
     def format(self, style: str = "verbose") -> str:
         """Format the trace.
 

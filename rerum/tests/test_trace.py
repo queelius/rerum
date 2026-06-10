@@ -347,3 +347,58 @@ class TestRewriteStepInverse:
             inv = step.inverse()
             assert inv.kind == kind
             assert inv.before == after and inv.after == before
+
+
+class TestRewriteTraceInverse:
+    """RewriteTrace.inverse(): swap initial/final, steps reversed + inverted.
+    The load-bearing property is replay correctness on a NESTED redex."""
+
+    def test_inverse_replays_final_to_initial_nested(self):
+        eng = RuleEngine.from_dsl("@r: (foo ?x) => (bar :x)")
+        result, trace = eng.simplify(["top", ["foo", "a"]], trace=True)
+        assert result == ["top", ["bar", "a"]]
+
+        inv = trace.inverse()
+        assert inv.initial == ["top", ["bar", "a"]]  # was final
+        assert inv.final == ["top", ["foo", "a"]]     # was initial
+
+        seq = inv.to_global_sequence()
+        assert seq[0]["before_root"] == ["top", ["bar", "a"]]
+        assert seq[-1]["after_root"] == ["top", ["foo", "a"]]
+        for k in range(len(seq) - 1):
+            assert seq[k]["after_root"] == seq[k + 1]["before_root"]
+
+    def test_inverse_multistep_chains(self):
+        eng = RuleEngine.from_dsl(
+            "@r: (foo ?x) => (bar :x)\n@s: (bar ?x) => (baz :x)")
+        result, trace = eng.simplify(["wrap", ["foo", "a"]], trace=True)
+        assert len(trace.steps) == 2
+
+        inv = trace.inverse()
+        seq = inv.to_global_sequence()
+        assert seq[0]["before_root"] == result
+        assert seq[-1]["after_root"] == ["wrap", ["foo", "a"]]
+        for k in range(len(seq) - 1):
+            assert seq[k]["after_root"] == seq[k + 1]["before_root"]
+
+    def test_inverse_inverse_is_structural_identity(self):
+        eng = RuleEngine.from_dsl("@r: (foo ?x) => (bar :x)")
+        _result, trace = eng.simplify(["top", ["foo", "a"]], trace=True)
+        twice = trace.inverse().inverse()
+        assert twice.initial == trace.initial
+        assert twice.final == trace.final
+        assert len(twice.steps) == len(trace.steps)
+        for a, b in zip(twice.steps, trace.steps):
+            assert a.before == b.before
+            assert a.after == b.after
+            assert a.direction == b.direction
+            assert a.path == b.path
+            assert a.kind == b.kind
+
+    def test_inverse_empty_trace(self):
+        t = RewriteTrace()
+        t.initial = "x"
+        t.final = "x"
+        inv = t.inverse()
+        assert inv.initial == "x" and inv.final == "x"
+        assert inv.steps == []
