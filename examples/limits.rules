@@ -1,0 +1,14 @@
+# Limit Rules - evaluate (lim f v a) = limit of f as v -> a. DEMONSTRATION.
+# Requires math + predicate folds + subst + defined-at? + indeterminate?
+# (supplied by examples/limits_fold_ops.py, example content).
+# Reduced by goal-directed search (rerum.solve.solve) with the D1
+# differentiation rules loaded in the SAME engine, so L'Hopital's (dd ...)
+# sub-terms reduce here. The caller's goal is "a numeric atom remains".
+# examples metadata lives in limits.metadata.json.
+
+[substitution]
+# Direct substitution when f is continuous at a (denominator nonzero, in
+# domain). Guard gates out indeterminate forms so L'Hopital / algebra handle
+# those. The (! subst :f :v :a) skeleton substitutes v:=a; ordinary constant
+# folding (algebra.rules) then reduces the literal arithmetic in the same search.
+@lim-subst {category=limit-substitution}: (lim ?f ?v:var ?a) => (! subst :f :v :a) when (! defined-at? :f :v :a)

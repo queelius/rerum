@@ -1,0 +1,8 @@
+{
+  "lim-subst": {
+    "reasoning": "If f is continuous at a, the limit is f(a). Substituting v:=a and evaluating gives the answer directly. The defined-at? guard ensures we never apply this to an indeterminate or undefined form.",
+    "examples": [
+      {"in": "(lim (+ x 1) x 2)", "out": "(+ 2 1)"}
+    ]
+  }
+}
