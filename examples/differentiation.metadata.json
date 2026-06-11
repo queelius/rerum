@@ -42,5 +42,25 @@
   "dd-power": {
     "category": "power",
     "examples": [{"in": "(dd (^ x 3) x)", "out": "(* 3 (* (^ x 2) (dd x x)))"}]
+  },
+  "dd-exp": {
+    "category": "exp-log",
+    "examples": [{"in": "(dd (exp x) x)", "out": "(* (exp x) (dd x x))"}]
+  },
+  "dd-ln": {
+    "category": "exp-log",
+    "examples": [{"in": "(dd (ln x) x)", "out": "(/ (dd x x) x)"}]
+  },
+  "dd-logb": {
+    "category": "exp-log",
+    "examples": [{"in": "(dd (log 2 x) x)", "out": "(/ (dd x x) (* x (ln 2)))"}]
+  },
+  "dd-sqrt": {
+    "category": "exp-log",
+    "examples": [{"in": "(dd (sqrt x) x)", "out": "(/ (dd x x) (* 2 (sqrt x)))"}]
+  },
+  "dd-aexp": {
+    "category": "exp-log",
+    "examples": [{"in": "(dd (^ 2 x) x)", "out": "(* (* (^ 2 x) (ln 2)) (dd x x))"}]
   }
 }

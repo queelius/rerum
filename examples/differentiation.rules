@@ -36,3 +36,16 @@
 # beats the general f^g log-diff rule (priority 50) when the exponent is a
 # number. The (! - :n 1) fold computes the decremented exponent at rewrite time.
 @dd-power[60] "Power rule (constant exponent)": (dd (^ ?f ?n:const) ?v:var) => (* :n (* (^ :f (! - :n 1)) (dd :f :v)))
+
+[exp-log]
+# Exponential: d/dx(e^f) = e^f f'.
+@dd-exp "Exponential rule": (dd (exp ?f) ?v:var) => (* (exp :f) (dd :f :v))
+# Natural log: d/dx(ln f) = f'/f.
+@dd-ln "Natural log rule": (dd (ln ?f) ?v:var) => (/ (dd :f :v) :f)
+# Log base b (constant base): d/dx(log_b f) = f'/(f ln b).
+@dd-logb "Log base-b rule": (dd (log ?b:const ?f) ?v:var) => (/ (dd :f :v) (* :f (ln :b)))
+# sqrt: d/dx(sqrt f) = f'/(2 sqrt f).
+@dd-sqrt "Square-root rule": (dd (sqrt ?f) ?v:var) => (/ (dd :f :v) (* 2 (sqrt :f)))
+# a^x, constant base a: d/dx(a^f) = a^f (ln a) f'. Priority 60 so it beats the
+# general f^g log-diff rule; const base + general exponent.
+@dd-aexp[60] "Constant-base exponential": (dd (^ ?a:const ?f) ?v:var) => (* (* (^ :a :f) (ln :a)) (dd :f :v))

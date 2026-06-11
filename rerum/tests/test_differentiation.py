@@ -247,3 +247,37 @@ class TestProductsQuotientPower:
         out = differentiate(engine, "(dd (^ x 2) x)")
         assert out == ["*", 2, "x"]
         assert checker.is_derivative("(^ x 2)", "x", format_sexpr(out)) is True
+
+
+class TestExpLogSqrt:
+    def test_exp(self):
+        engine = make_diff_engine()
+        checker = _load_checker()
+        out = differentiate(engine, "(dd (exp x) x)")
+        assert checker.is_derivative("(exp x)", "x", format_sexpr(out)) is True
+
+    def test_ln(self):
+        engine = make_diff_engine()
+        checker = _load_checker()
+        out = differentiate(engine, "(dd (ln x) x)")
+        assert checker.is_derivative("(ln x)", "x", format_sexpr(out)) is True
+
+    def test_sqrt(self):
+        engine = make_diff_engine()
+        checker = _load_checker()
+        out = differentiate(engine, "(dd (sqrt x) x)")
+        assert checker.is_derivative("(sqrt x)", "x", format_sexpr(out)) is True
+
+    def test_log_base(self):
+        engine = make_diff_engine()
+        checker = _load_checker()
+        out = differentiate(engine, "(dd (log 2 x) x)")
+        assert checker.is_derivative("(log 2 x)", "x",
+                                     format_sexpr(out)) is True
+
+    def test_a_to_the_x(self):
+        engine = make_diff_engine()
+        checker = _load_checker()
+        # d/dx(2^x) = 2^x ln 2 (constant base, variable exponent)
+        out = differentiate(engine, "(dd (^ 2 x) x)")
+        assert checker.is_derivative("(^ 2 x)", "x", format_sexpr(out)) is True
