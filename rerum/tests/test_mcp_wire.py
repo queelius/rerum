@@ -29,7 +29,7 @@ async def test_list_tools_advertises_typed_schemas():
     async with create_connected_server_and_client_session(sdk_srv) as client:
         tools = (await client.list_tools()).tools
         by_name = {t.name: t for t in tools}
-        assert len(by_name) == 18
+        assert len(by_name) == 19
         simplify = by_name["simplify"]
         assert simplify.description  # real docstring summary, not a stub
         schema = simplify.inputSchema

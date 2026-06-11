@@ -563,3 +563,16 @@ class TestPublicStateAPI:
         assert engine.has_theory() is False
         assert engine.has_fold_funcs() is True
         assert all(v == 0 for v in engine.hook_counts().values())
+
+
+class TestFoldOpNames:
+    def test_empty_without_prelude(self):
+        from rerum.engine import RuleEngine
+        assert RuleEngine().fold_op_names() == []
+
+    def test_sorted_names_with_prelude(self):
+        from rerum.engine import RuleEngine
+        from rerum.rewriter import MATH_PRELUDE
+        names = RuleEngine(fold_funcs=MATH_PRELUDE).fold_op_names()
+        assert names == sorted(MATH_PRELUDE)
+        assert "sin" in names

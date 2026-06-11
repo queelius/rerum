@@ -44,8 +44,7 @@ from typing import Optional, Dict, Any
 
 from .engine import RuleEngine, E, format_sexpr, parse_sexpr, load_rules_from_dsl
 from .rewriter import (
-    ARITHMETIC_PRELUDE, MATH_PRELUDE, FULL_PRELUDE,
-    MINIMAL_PRELUDE, PREDICATE_PRELUDE, NO_PRELUDE,
+    PRELUDE_BUNDLES,
     FoldFuncsType, combine_preludes,
 )
 
@@ -56,15 +55,10 @@ try:
 except ImportError:
     HAS_READLINE = False
 
-# Built-in preludes
-BUILTIN_PRELUDES: Dict[str, FoldFuncsType] = {
-    "none": NO_PRELUDE,
-    "minimal": MINIMAL_PRELUDE,
-    "arithmetic": ARITHMETIC_PRELUDE,
-    "math": MATH_PRELUDE,
-    "predicate": PREDICATE_PRELUDE,
-    "full": FULL_PRELUDE,
-}
+# Built-in preludes: THE shared registry from the core (rewriter.py).
+# Never re-list bundles here -- the CLI and MCP copies drifted apart
+# ('minimal' was CLI-only) when each surface kept its own table.
+BUILTIN_PRELUDES: Dict[str, FoldFuncsType] = PRELUDE_BUNDLES
 
 # Standard prelude search paths
 PRELUDE_SEARCH_PATHS = [

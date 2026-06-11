@@ -634,3 +634,72 @@ class TestMinimizeProseNoPhantomSteps:
             if m:
                 assert m.group(1) != m.group(2), (
                     f"phantom no-op step in prose: {line!r}")
+
+
+class TestStatusDiscoverability:
+    def test_status_lists_bundles_and_fold_ops(self):
+        from rerum import RuleEngine
+        from rerum.mcp.tools import tool_get_status, tool_reset_engine
+        from rerum.rewriter import PRELUDE_BUNDLES
+
+        engine = RuleEngine()
+        status = tool_get_status(engine)
+        assert status["available_preludes"] == sorted(PRELUDE_BUNDLES)
+        assert status["fold_ops"] == []
+        # 'minimal' (previously CLI-only) is now resolvable over MCP.
+        tool_reset_engine(engine, prelude="minimal")
+        assert tool_get_status(engine)["fold_ops"]
+
+
+class TestCheckNumericEquiv:
+    """The general verification surface: expression-vs-expression numeric
+    equivalence over caller-supplied ranges (DATA in, bool out -- same
+    security posture as goal kinds). An agent that simplified or solved
+    can now confirm its answer over the wire."""
+
+    def test_equivalent_forms_verify(self):
+        from rerum import RuleEngine
+        from rerum.mcp.tools import tool_check_numeric_equiv
+        engine = RuleEngine()
+        out = tool_check_numeric_equiv(
+            engine, expr_a="(* (+ x 1) (+ x 1))",
+            expr_b="(+ (* x x) (+ (* 2 x) 1))",
+            ranges={"x": [-2.0, 2.0]})
+        assert out["equivalent"] is True
+
+    def test_inequivalent_forms_refute(self):
+        from rerum import RuleEngine
+        from rerum.mcp.tools import tool_check_numeric_equiv
+        out = tool_check_numeric_equiv(
+            RuleEngine(), expr_a="(* x 2)", expr_b="(* x 3)",
+            ranges={"x": [0.5, 2.0]})
+        assert out["equivalent"] is False
+
+    def test_domain_errors_skip_not_refute(self):
+        from rerum import RuleEngine
+        from rerum.mcp.tools import tool_check_numeric_equiv
+        # sqrt undefined on the negative part of the range: those points
+        # skip; the defined points agree.
+        out = tool_check_numeric_equiv(
+            RuleEngine(), expr_a="(sqrt (* x x))", expr_b="(abs x)",
+            ranges={"x": [-1.0, 1.0]}, prelude="math")
+        assert out["equivalent"] is True
+
+    def test_unbound_symbol_is_an_error_not_false(self):
+        from rerum import RuleEngine
+        from rerum.mcp.errors import MCPToolError
+        from rerum.mcp.tools import tool_check_numeric_equiv
+        with pytest.raises(MCPToolError):
+            tool_check_numeric_equiv(
+                RuleEngine(), expr_a="(+ x y)", expr_b="(+ x 1)",
+                ranges={"x": [0.0, 1.0]})  # y never sampled
+
+    def test_bad_ranges_shape_is_parse_error(self):
+        from rerum import RuleEngine
+        from rerum.mcp.errors import MCPToolError
+        from rerum.mcp.tools import tool_check_numeric_equiv
+        with pytest.raises(MCPToolError) as exc:
+            tool_check_numeric_equiv(
+                RuleEngine(), expr_a="x", expr_b="x",
+                ranges={"x": [1.0]})  # not a [lo, hi] pair
+        assert exc.value.code == "parse_error"

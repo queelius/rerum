@@ -418,6 +418,21 @@ FULL_PRELUDE: FoldFuncsType = {
 # Empty prelude (no constant folding at all)
 NO_PRELUDE: FoldFuncsType = {}
 
+# THE registry of named prelude bundles: the single source of truth for
+# every surface that resolves a bundle by name (the CLI's -p flag, the
+# MCP reset_engine tool, future rule-set manifests). Consumers must
+# reference this dict, never maintain a parallel table -- the CLI and MCP
+# tables had already drifted apart ('minimal' was CLI-only) before this
+# registry existed.
+PRELUDE_BUNDLES: Dict[str, FoldFuncsType] = {
+    "none": NO_PRELUDE,
+    "minimal": MINIMAL_PRELUDE,
+    "arithmetic": ARITHMETIC_PRELUDE,
+    "math": MATH_PRELUDE,
+    "predicate": PREDICATE_PRELUDE,
+    "full": FULL_PRELUDE,
+}
+
 
 def combine_preludes(*preludes: FoldFuncsType) -> FoldFuncsType:
     """Merge fold-function dicts left-to-right into a fresh dict.

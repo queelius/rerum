@@ -26,7 +26,7 @@ class TestRegistryBuild:
         expected = {n[len("tool_"):] for n in vars(T)
                     if n.startswith("tool_") and callable(getattr(T, n))}
         assert set(registry) == expected
-        assert len(registry) == 18
+        assert len(registry) == 19
 
     def test_deps_extracted_from_positional_params(self, registry):
         assert registry["simplify"].deps == ("engine",)

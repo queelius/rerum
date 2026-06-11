@@ -605,6 +605,19 @@ def _compile_goal(goal: Dict[str, Any]) -> Callable[[Any], bool]:
             'goal must be an object, e.g. {"op_free": ["opname"]}',
             details={"goal": json_safe(goal)},
         )
+    known = {"op_free", "is_numeric", "matches"}
+    unknown = sorted(set(goal) - known)
+    if unknown or not goal:
+        raise MCPToolError(
+            "parse_error",
+            f"unknown goal kind(s) {unknown}; supported: "
+            f"{sorted(known)} (multiple kinds AND together). "
+            f"Got keys: {sorted(goal)}",
+            details={"goal": json_safe(goal)},
+        )
+
+    predicates = []
+
     if "op_free" in goal:
         spec = goal["op_free"]
         # A string would silently iterate to a set of single CHARACTERS
@@ -619,41 +632,84 @@ def _compile_goal(goal: Dict[str, Any]) -> Callable[[Any], bool]:
                 details={"goal": json_safe(goal)},
             )
         ops = set(spec)
-        return lambda e: not contains_op(e, ops)
+        predicates.append(lambda e: not contains_op(e, ops))
 
-    raise MCPToolError(
-        "parse_error",
-        f"unknown goal kind; supported: 'op_free'. Got keys: {sorted(goal)}",
-        details={"goal": json_safe(goal)},
-    )
+    if "is_numeric" in goal:
+        # True when the WHOLE expression has reduced to a numeric atom --
+        # the goal for evaluation-style domains ("a number remains").
+        # bool is excluded: True == 1 is the classic footgun.
+        from rerum.rewriter import NUMERIC_TYPES
+        if goal["is_numeric"] is not True:
+            raise MCPToolError(
+                "parse_error",
+                'is_numeric takes only true, e.g. {"is_numeric": true}',
+                details={"goal": json_safe(goal)},
+            )
+        predicates.append(
+            lambda e: isinstance(e, NUMERIC_TYPES)
+            and not isinstance(e, bool))
+
+    if "matches" in goal:
+        # True when the expression matches the caller's PATTERN (data:
+        # the same ?x / ?x:const syntax rules use).
+        from rerum.rewriter import match, wrap_bindings
+        spec = goal["matches"]
+        pattern = _parse(spec) if isinstance(spec, str) else None
+        if pattern is None:
+            raise MCPToolError(
+                "parse_error",
+                'matches must be a non-empty pattern string, e.g. '
+                '{"matches": "(f ?x)"}',
+                details={"goal": json_safe(goal)},
+            )
+        predicates.append(
+            lambda e: bool(match(pattern, e, wrap_bindings({}))))
+
+    if len(predicates) == 1:
+        return predicates[0]
+    return lambda e: all(p(e) for p in predicates)
 
 
 def tool_solve_goal(engine, *, expr: str, goal: Dict[str, Any],
                     max_nodes: int = 10000,
-                    normalize_between: bool = True) -> Dict[str, Any]:
+                    normalize_between: bool = True,
+                    op_costs: Optional[Dict[str, float]] = None,
+                    ) -> Dict[str, Any]:
     """Goal-directed best-first search via ``engine.solve``.
 
-    The goal is DATA (e.g. eliminate the caller's named operators); the
-    tool holds no domain logic. A session theory loaded via ``load_theory``
-    is threaded into the search, so ``normalize_between`` canonicalizes
-    nodes under the caller's operator signature. On budget exhaustion
-    returns ``found=False`` -- never a partial or a hang.
+    The goal is DATA; the tool holds no domain logic. Goal kinds (multiple
+    kinds AND together): {"op_free": [ops...]} -- none of the named
+    operators remain; {"is_numeric": true} -- the expression reduced to a
+    numeric atom (evaluation-style domains); {"matches": "(f ?x)"} -- the
+    expression matches the caller's pattern. A session theory loaded via
+    ``load_theory`` is threaded into the search, so ``normalize_between``
+    canonicalizes nodes under the caller's operator signature. On budget
+    exhaustion returns ``found=False`` -- never a partial or a hang.
 
     Args:
         expr: The starting expression, as an s-expr string.
-        goal: The goal description, e.g. {"op_free": ["opname", ...]}.
+        goal: The goal description, e.g. {"op_free": ["opname", ...]},
+            {"is_numeric": true}, {"matches": "(pattern ?x)"}.
         max_nodes: Search budget on expanded nodes (default 10000).
         normalize_between: Canonicalize nodes between steps when a session
             theory is loaded (default True).
+        op_costs: Optional per-operator cost weights steering best-first
+            order (unlisted operators cost 1); lets a caller price an
+            operator high so the search prefers eliminating it.
     """
     parsed = _parse(expr)
     initial_str = format_sexpr(parsed)
     predicate = _compile_goal(goal)
 
+    solve_kwargs: Dict[str, Any] = {}
+    if op_costs is not None:
+        from rerum.optimize import make_op_cost_fn
+        solve_kwargs["cost_fn"] = make_op_cost_fn(op_costs)
+
     sr = engine.solve(
         parsed, predicate, max_nodes=max_nodes,
         normalize_between=normalize_between,
-        theory=engine._theory)
+        theory=engine._theory, **solve_kwargs)
 
     final_str = (format_sexpr(sr.solution)
                  if sr.solution is not None else initial_str)
@@ -783,15 +839,10 @@ def tool_solve_assisted(engine, sampler, *, expr: str,
 # =====================================================================
 
 # Computation bundles ONLY -- no domain bundle (the general-engine
-# principle). Names map DIRECTLY to the prelude dicts (data, not attribute
-# indirection).
-_PRELUDE_BUNDLES: Dict[str, Optional[Dict[str, Any]]] = {
-    "arithmetic": ARITHMETIC_PRELUDE,
-    "math": MATH_PRELUDE,
-    "predicate": PREDICATE_PRELUDE,
-    "full": FULL_PRELUDE,
-    "none": None,
-}
+# principle). THE shared registry from the core (rewriter.py): never
+# re-list bundles here -- this table and the CLI's drifted apart
+# ('minimal' was CLI-only) when each surface kept its own copy.
+from rerum.rewriter import PRELUDE_BUNDLES as _PRELUDE_BUNDLES
 
 
 def _resolve_prelude(prelude):
@@ -811,7 +862,7 @@ def _resolve_prelude(prelude):
                 f"{sorted(_PRELUDE_BUNDLES)} (there is no domain bundle)",
                 details={"prelude": nm})
         bundle = _PRELUDE_BUNDLES[nm]
-        if bundle is not None:
+        if bundle:  # an empty bundle ('none') contributes nothing
             resolved.append(bundle)
     if not resolved:
         return None
@@ -837,6 +888,83 @@ def tool_reset_engine(engine, *,
     return {"ok": True}
 
 
+def tool_check_numeric_equiv(engine, *, expr_a: str, expr_b: str,
+                             ranges: Dict[str, List[float]],
+                             samples: int = 8, tol: float = 1e-6,
+                             prelude: str = "math") -> Dict[str, Any]:
+    """Numerically check two expressions are equivalent over sampled points.
+
+    The GENERAL verification surface (same security posture as goal kinds:
+    pure data in, bool out): evaluates both expressions via the general
+    ``numeval`` at points sampled from the caller's ranges and reports
+    whether they agree within tolerance at every point where both are
+    defined. Domain errors at a point (e.g. sqrt of a negative) SKIP that
+    point; if every point is skipped the verdict is False, never a vacuous
+    True. Structural failures (an unbound symbol the ranges never supply,
+    an operator the prelude lacks) are an eval_error, not False. Lets an
+    agent that simplified or solved confirm its answer over the wire.
+
+    Args:
+        expr_a: First expression, as an s-expr string.
+        expr_b: Second expression, as an s-expr string.
+        ranges: Sampling ranges per variable, e.g. {"x": [0.5, 2.0]};
+            every free variable of both expressions must appear.
+        samples: Number of sample points (default 8).
+        tol: Agreement tolerance, relative-or-absolute (default 1e-6).
+        prelude: Computation bundle to evaluate with (default "math"), or
+            "session" to use the fold ops currently installed on the
+            session engine.
+    """
+    from rerum.numeval import NumevalError, numeric_equiv
+
+    a = _parse(expr_a)
+    b = _parse(expr_b)
+
+    if not isinstance(ranges, dict) or not ranges:
+        raise MCPToolError(
+            "parse_error",
+            'ranges must be a non-empty object of [lo, hi] pairs, e.g. '
+            '{"x": [0.5, 2.0]}',
+            details={"ranges": json_safe(ranges)})
+    sampler = {}
+    for var, pair in ranges.items():
+        ok = (isinstance(pair, list) and len(pair) == 2
+              and all(isinstance(v, (int, float))
+                      and not isinstance(v, bool) for v in pair))
+        if not ok:
+            raise MCPToolError(
+                "parse_error",
+                f"range for {var!r} must be a [lo, hi] number pair",
+                details={"ranges": json_safe(ranges)})
+        sampler[var] = (float(pair[0]), float(pair[1]))
+
+    if prelude == "session":
+        fold = engine._fold_funcs or {}
+    else:
+        fold = _resolve_prelude(prelude) or {}
+
+    try:
+        equivalent = numeric_equiv(a, b, sampler, fold,
+                                   samples=samples, tol=tol)
+    except NumevalError as exc:
+        raise MCPToolError(
+            "eval_error",
+            f"verification could not evaluate: {exc}",
+            details={"expr_a": format_sexpr(a), "expr_b": format_sexpr(b)},
+        ) from exc
+
+    verdict = "equivalent" if equivalent else "NOT equivalent"
+    return {
+        "equivalent": bool(equivalent),
+        "expr_a": format_sexpr(a),
+        "expr_b": format_sexpr(b),
+        "samples": samples,
+        "tol": tol,
+        "prose": (f"{format_sexpr(a)} and {format_sexpr(b)} are {verdict} "
+                  f"over {samples} sampled points."),
+    }
+
+
 def tool_get_status(engine) -> Dict[str, Any]:
     """Inspection: how is the session engine currently configured?"""
     from rerum import __version__ as engine_version
@@ -852,6 +980,11 @@ def tool_get_status(engine) -> Dict[str, Any]:
         "hooks": engine.hook_counts(),
         "categories": categories,
         "groups": groups,
+        # Discoverability: the bundle names reset_engine accepts (from THE
+        # shared registry) and the fold ops currently installed, so an
+        # agent can see what computations its rules may invoke.
+        "available_preludes": sorted(_PRELUDE_BUNDLES),
+        "fold_ops": engine.fold_op_names(),
         "engine_version": engine_version,
         "protocol_version": PROTOCOL_VERSION,
     }

@@ -171,3 +171,87 @@ class TestOpFreeShape:
         ok = tool_solve_goal(engine, expr="(neg (neg x))",
                              goal={"op_free": ["neg"]})
         assert ok["found"] is True and ok["result"] == "x"
+
+
+class TestGoalKinds:
+    """Goal kinds are DATA the caller supplies; multiple present kinds AND
+    together. is_numeric makes numeric-evaluation domains (the limits
+    pattern: 'a number remains') drivable over MCP; matches generalizes
+    to any caller pattern."""
+
+    def _eng(self):
+        from rerum import RuleEngine
+        from rerum.rewriter import ARITHMETIC_PRELUDE
+        return RuleEngine.from_dsl(
+            "@wrap-out: (wrap ?x) => :x\n"
+            "@ev: (ev ?a ?b) => (! + :a :b)",
+            fold_funcs=ARITHMETIC_PRELUDE)
+
+    def test_is_numeric_goal(self):
+        from rerum.mcp.tools import tool_solve_goal
+        out = tool_solve_goal(self._eng(), expr="(wrap (ev 2 3))",
+                              goal={"is_numeric": True})
+        assert out["found"] is True
+        assert out["result"] == "5"
+
+    def test_is_numeric_rejects_non_bool(self):
+        from rerum.mcp.errors import MCPToolError
+        from rerum.mcp.tools import tool_solve_goal
+        with pytest.raises(MCPToolError) as exc:
+            tool_solve_goal(self._eng(), expr="(wrap a)",
+                            goal={"is_numeric": "yes"})
+        assert exc.value.code == "parse_error"
+
+    def test_matches_goal(self):
+        from rerum.mcp.tools import tool_solve_goal
+        # Goal: the expression matches the caller's PATTERN (data).
+        out = tool_solve_goal(self._eng(), expr="(wrap (wrap (f a)))",
+                              goal={"matches": "(f ?x)"})
+        assert out["found"] is True
+        assert out["result"] == "(f a)"
+
+    def test_matches_goal_invalid_pattern_is_parse_error(self):
+        from rerum.mcp.errors import MCPToolError
+        from rerum.mcp.tools import tool_solve_goal
+        with pytest.raises(MCPToolError) as exc:
+            tool_solve_goal(self._eng(), expr="(wrap a)",
+                            goal={"matches": ""})
+        assert exc.value.code == "parse_error"
+
+    def test_kinds_and_together(self):
+        from rerum.mcp.tools import tool_solve_goal
+        # op_free AND is_numeric: the solved form must satisfy both.
+        out = tool_solve_goal(self._eng(), expr="(wrap (ev 2 3))",
+                              goal={"op_free": ["wrap", "ev"],
+                                    "is_numeric": True})
+        assert out["found"] is True
+        assert out["result"] == "5"
+
+    def test_unknown_kind_is_parse_error(self):
+        from rerum.mcp.errors import MCPToolError
+        from rerum.mcp.tools import tool_solve_goal
+        with pytest.raises(MCPToolError) as exc:
+            tool_solve_goal(self._eng(), expr="(wrap a)",
+                            goal={"frobnicate": 1})
+        assert exc.value.code == "parse_error"
+
+
+class TestSolveGoalOpCosts:
+    def test_op_costs_steer_the_search(self):
+        from rerum import RuleEngine
+        from rerum.mcp.tools import tool_solve_goal
+        # Two routes out of (start): via (cheap x) or via (pricey x); both
+        # then collapse to goal-satisfying atoms. Pricing 'pricey' high
+        # makes best-first pop the cheap route's nodes first, so the
+        # solution comes from the cheap branch.
+        eng = RuleEngine.from_dsl(
+            "@to-cheap: (start) => (cheap done-cheap)\n"
+            "@to-pricey: (start) => (pricey done-pricey)\n"
+            "@open-cheap: (cheap ?x) => :x\n"
+            "@open-pricey: (pricey ?x) => :x")
+        out = tool_solve_goal(
+            eng, expr="(start)",
+            goal={"op_free": ["start", "cheap", "pricey"]},
+            op_costs={"pricey": 1000.0})
+        assert out["found"] is True
+        assert out["result"] == "done-cheap"

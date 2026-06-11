@@ -74,6 +74,7 @@ class TestServerLifecycle:
             "save_ruleset", "load_ruleset", "list_rulesets", "load_theory",
             "simplify", "apply_once", "equivalents", "prove_equal", "minimize",
             "solve_goal", "solve_assisted",
+            "check_numeric_equiv",
             "reset_engine", "get_status",
         }
         assert set(srv.list_tool_names()) == expected

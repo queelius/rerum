@@ -327,3 +327,34 @@ class TestPreludeOperations:
 
         result = instantiate(["!", "=", 5, 5], [], FULL_PRELUDE)
         assert result == True
+
+
+class TestPreludeBundleRegistry:
+    """ONE registry of named prelude bundles in the core, consumed by both
+    the CLI and the MCP layer -- the two hand-maintained tables had already
+    drifted ('minimal' existed in the CLI but not over MCP)."""
+
+    def test_registry_exists_with_all_bundles(self):
+        from rerum.rewriter import (ARITHMETIC_PRELUDE, FULL_PRELUDE,
+                                    MATH_PRELUDE, MINIMAL_PRELUDE,
+                                    NO_PRELUDE, PRELUDE_BUNDLES,
+                                    PREDICATE_PRELUDE)
+        assert PRELUDE_BUNDLES == {
+            "none": NO_PRELUDE,
+            "minimal": MINIMAL_PRELUDE,
+            "arithmetic": ARITHMETIC_PRELUDE,
+            "math": MATH_PRELUDE,
+            "predicate": PREDICATE_PRELUDE,
+            "full": FULL_PRELUDE,
+        }
+
+    def test_cli_table_derives_from_registry(self):
+        from rerum.cli import BUILTIN_PRELUDES
+        from rerum.rewriter import PRELUDE_BUNDLES
+        assert BUILTIN_PRELUDES is PRELUDE_BUNDLES
+
+    def test_mcp_resolve_accepts_every_registry_name(self):
+        from rerum.mcp.tools import _resolve_prelude
+        from rerum.rewriter import PRELUDE_BUNDLES
+        for name in PRELUDE_BUNDLES:
+            _resolve_prelude(name)  # must not raise

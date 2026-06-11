@@ -1879,6 +1879,17 @@ class RuleEngine:
         """True when a prelude (fold functions) is installed."""
         return self._fold_funcs is not None
 
+    def fold_op_names(self) -> List[str]:
+        """The names of the installed fold operations, sorted.
+
+        Public state API (with ``iter_rules``/``hook_counts``/...): lets a
+        caller -- the MCP ``get_status`` tool in particular -- discover
+        which ``(! op ...)`` computations the loaded rules may invoke,
+        without reaching into ``_fold_funcs``. Empty when no prelude is
+        installed.
+        """
+        return sorted(self._fold_funcs) if self._fold_funcs else []
+
     def has_theory(self) -> bool:
         """True when a session Theory (operator-signature data) is set."""
         return self._theory is not None
