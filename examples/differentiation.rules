@@ -79,3 +79,11 @@
 @dd-cosh "Hyperbolic cosine rule": (dd (cosh ?f) ?v:var) => (* (sinh :f) (dd :f :v))
 # d/dx(tanh f) = (1 - tanh^2 f) f' (avoids introducing a sech function).
 @dd-tanh "Hyperbolic tangent rule": (dd (tanh ?f) ?v:var) => (* (- 1 (^ (tanh :f) 2)) (dd :f :v))
+
+[general-power]
+# General power f^g (variable in the exponent) via logarithmic
+# differentiation: d/dx f^g = f^g (g' ln f + g f'/f). Priority 50 so the
+# constant-exponent power rule (60) and constant-base a^x rule (60) win for
+# their specialized shapes; this fires only when both base and exponent are
+# non-constant.
+@dd-genpow[50] "General power (log-diff)": (dd (^ ?f ?g) ?v:var) => (* (^ :f :g) (+ (* (dd :g :v) (ln :f)) (* :g (/ (dd :f :v) :f))))

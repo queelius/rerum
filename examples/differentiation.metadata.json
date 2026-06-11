@@ -110,5 +110,9 @@
   "dd-tanh": {
     "category": "hyperbolic",
     "examples": [{"in": "(dd (tanh x) x)", "out": "(* (- 1 (^ (tanh x) 2)) (dd x x))"}]
+  },
+  "dd-genpow": {
+    "category": "general-power",
+    "examples": [{"in": "(dd (^ x x) x)", "out": "(* (^ x x) (+ (* (dd x x) (ln x)) (* x (/ (dd x x) x))))"}]
   }
 }

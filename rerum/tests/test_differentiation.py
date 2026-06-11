@@ -384,3 +384,34 @@ class TestHyperbolic:
         checker = _load_checker()
         out = differentiate(engine, "(dd (tanh x) x)")
         assert checker.is_derivative("(tanh x)", "x", format_sexpr(out)) is True
+
+
+class TestGeneralPower:
+    def test_x_to_the_x(self):
+        engine = make_diff_engine()
+        checker = _load_checker()
+        # d/dx(x^x) = x^x (ln x + 1) ; verify numerically (domain x>0 by sampling).
+        out = differentiate(engine, "(dd (^ x x) x)")
+        assert checker.is_derivative("(^ x x)", "x", format_sexpr(out)) is True
+
+    def test_x_to_the_sin_x(self):
+        engine = make_diff_engine()
+        checker = _load_checker()
+        # d/dx(x^(sin x)) via log-diff ; verify numerically.
+        out = differentiate(engine, "(dd (^ x (sin x)) x)")
+        assert checker.is_derivative("(^ x (sin x))", "x",
+                                     format_sexpr(out)) is True
+
+    def test_constant_exponent_still_uses_power_rule(self):
+        engine = make_diff_engine()
+        # Regression: a numeric exponent must STILL take the clean power rule,
+        # not log-diff. d/dx(x^3) = 3 x^2 exactly.
+        out = differentiate(engine, "(dd (^ x 3) x)")
+        assert out == ["*", 3, ["^", "x", 2]]
+
+    def test_constant_base_still_uses_aexp(self):
+        engine = make_diff_engine()
+        checker = _load_checker()
+        # Regression: a numeric base must STILL take the a^x rule.
+        out = differentiate(engine, "(dd (^ 2 x) x)")
+        assert checker.is_derivative("(^ 2 x)", "x", format_sexpr(out)) is True
