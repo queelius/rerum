@@ -344,3 +344,43 @@ class TestTrig:
         out = differentiate(engine, "(dd (/ x (sin x)) x)")
         assert checker.is_derivative("(/ x (sin x))", "x",
                                      format_sexpr(out)) is True
+
+
+class TestInverseTrig:
+    def test_asin(self):
+        engine = make_diff_engine()
+        checker = _load_checker()
+        out = differentiate(engine, "(dd (asin x) x)")
+        assert checker.is_derivative("(asin x)", "x", format_sexpr(out)) is True
+
+    def test_acos(self):
+        engine = make_diff_engine()
+        checker = _load_checker()
+        out = differentiate(engine, "(dd (acos x) x)")
+        assert checker.is_derivative("(acos x)", "x", format_sexpr(out)) is True
+
+    def test_atan(self):
+        engine = make_diff_engine()
+        checker = _load_checker()
+        out = differentiate(engine, "(dd (atan x) x)")
+        assert checker.is_derivative("(atan x)", "x", format_sexpr(out)) is True
+
+
+class TestHyperbolic:
+    def test_sinh(self):
+        engine = make_diff_engine()
+        checker = _load_checker()
+        out = differentiate(engine, "(dd (sinh x) x)")
+        assert checker.is_derivative("(sinh x)", "x", format_sexpr(out)) is True
+
+    def test_cosh(self):
+        engine = make_diff_engine()
+        checker = _load_checker()
+        out = differentiate(engine, "(dd (cosh x) x)")
+        assert checker.is_derivative("(cosh x)", "x", format_sexpr(out)) is True
+
+    def test_tanh(self):
+        engine = make_diff_engine()
+        checker = _load_checker()
+        out = differentiate(engine, "(dd (tanh x) x)")
+        assert checker.is_derivative("(tanh x)", "x", format_sexpr(out)) is True

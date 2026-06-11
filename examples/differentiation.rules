@@ -63,3 +63,19 @@
 @dd-csc "Cosecant rule": (dd (csc ?f) ?v:var) => (* (- (* (csc :f) (cot :f))) (dd :f :v))
 # d/dx(cot f) = -csc^2 f f'.
 @dd-cot "Cotangent rule": (dd (cot ?f) ?v:var) => (* (- (^ (csc :f) 2)) (dd :f :v))
+
+[inverse-trig]
+# d/dx(asin f) = f' / sqrt(1 - f^2).
+@dd-asin "Arcsine rule": (dd (asin ?f) ?v:var) => (* (/ 1 (sqrt (- 1 (^ :f 2)))) (dd :f :v))
+# d/dx(acos f) = -f' / sqrt(1 - f^2).
+@dd-acos "Arccosine rule": (dd (acos ?f) ?v:var) => (* (- (/ 1 (sqrt (- 1 (^ :f 2))))) (dd :f :v))
+# d/dx(atan f) = f' / (1 + f^2).
+@dd-atan "Arctangent rule": (dd (atan ?f) ?v:var) => (* (/ 1 (+ 1 (^ :f 2))) (dd :f :v))
+
+[hyperbolic]
+# d/dx(sinh f) = cosh f f'.
+@dd-sinh "Hyperbolic sine rule": (dd (sinh ?f) ?v:var) => (* (cosh :f) (dd :f :v))
+# d/dx(cosh f) = sinh f f'.
+@dd-cosh "Hyperbolic cosine rule": (dd (cosh ?f) ?v:var) => (* (sinh :f) (dd :f :v))
+# d/dx(tanh f) = (1 - tanh^2 f) f' (avoids introducing a sech function).
+@dd-tanh "Hyperbolic tangent rule": (dd (tanh ?f) ?v:var) => (* (- 1 (^ (tanh :f) 2)) (dd :f :v))

@@ -86,5 +86,29 @@
   "dd-cot": {
     "category": "trig",
     "examples": [{"in": "(dd (cot x) x)", "out": "(* (- (^ (csc x) 2)) (dd x x))"}]
+  },
+  "dd-asin": {
+    "category": "inverse-trig",
+    "examples": [{"in": "(dd (asin x) x)", "out": "(* (/ 1 (sqrt (- 1 (^ x 2)))) (dd x x))"}]
+  },
+  "dd-acos": {
+    "category": "inverse-trig",
+    "examples": [{"in": "(dd (acos x) x)", "out": "(* (- (/ 1 (sqrt (- 1 (^ x 2))))) (dd x x))"}]
+  },
+  "dd-atan": {
+    "category": "inverse-trig",
+    "examples": [{"in": "(dd (atan x) x)", "out": "(* (/ 1 (+ 1 (^ x 2))) (dd x x))"}]
+  },
+  "dd-sinh": {
+    "category": "hyperbolic",
+    "examples": [{"in": "(dd (sinh x) x)", "out": "(* (cosh x) (dd x x))"}]
+  },
+  "dd-cosh": {
+    "category": "hyperbolic",
+    "examples": [{"in": "(dd (cosh x) x)", "out": "(* (sinh x) (dd x x))"}]
+  },
+  "dd-tanh": {
+    "category": "hyperbolic",
+    "examples": [{"in": "(dd (tanh x) x)", "out": "(* (- 1 (^ (tanh x) 2)) (dd x x))"}]
   }
 }
