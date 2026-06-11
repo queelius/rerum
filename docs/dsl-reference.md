@@ -90,6 +90,19 @@ Evaluates `op` with arguments using the prelude:
 
 Rules after `[groupname]` belong to that group until another group starts.
 
+## Atoms and Literals
+
+- Integers (`3`, `-7`) and floats (`2.5`) parse as Python numbers.
+- Rational literals `p/q` (integer numerator and denominator) parse to an
+  exact `Fraction` atom, Scheme-style: `1/3` is `Fraction(1, 3)`, and
+  `format_sexpr(Fraction(1, 3))` renders `1/3`, so the round-trip is
+  exact. An int-valued literal (`4/2`) narrows to the int `2`. A zero
+  denominator (`1/0`) or non-integer parts (`x/y`, `1/x`) stay plain
+  symbols. Note `(/ 1 3)` is something different: a division EXPRESSION.
+- Everything else is a symbol (including `true`/`false` -- there is no
+  boolean literal; rule sets use symbol constants, see
+  `examples/boolean.rules`).
+
 ## Comments
 
 ```

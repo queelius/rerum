@@ -47,6 +47,27 @@ MCP surface; the engine API is extended, not broken.
   ``"(/ 1 3)"``.
 
 ### Added
+- Example DOMAIN LIBRARY: calculus (differentiation D1; integration,
+  limits D2 -- solve-driven, numerically certified via
+  ``examples/calculus_checker.py``), boolean algebra and set algebra
+  (truth-table / Venn property tests certify every rule; theory JSON
+  drives the general normalize), Peano arithmetic and SKI combinators
+  (NO prelude: computation from pure rewriting; SKI demonstrates honest
+  non-termination budgets). All content under ``examples/``; the engine
+  names no domain operator.
+- ``PRELUDE_BUNDLES``: ONE registry of named prelude bundles in the core,
+  consumed by both the CLI and MCP (the two tables had drifted;
+  ``minimal`` was CLI-only). ``engine.fold_op_names()`` joins the public
+  state API; MCP ``get_status`` lists ``available_preludes`` + installed
+  ``fold_ops``.
+- ``solve_goal`` goal kinds (DATA, AND-composed): ``op_free``,
+  ``is_numeric`` (evaluation-style domains), ``matches`` (any caller
+  pattern); plus ``op_costs`` per-operator weights steering best-first
+  search.
+- ``check_numeric_equiv`` MCP tool: general numeric verification over
+  caller-supplied sampling ranges (domain errors skip; all-skipped is
+  False, never vacuous-True; ``prelude="session"`` verifies under the
+  session's fold ops).
 - ``rerum/mcp/registry.py``: the single source of truth -- discovery,
   dependency injection, JSON schemas, and dispatch validation all derive
   from the ``tool_*`` signatures. Adding a tool is writing one annotated,
@@ -80,6 +101,10 @@ MCP surface; the engine API is extended, not broken.
   separately to the common form.
 - Non-finite floats can no longer emit non-spec JSON (``json_safe``
   renders them as strings; the transport dumps with ``allow_nan=False``).
+- ``solve``-built steps now carry ``rationale`` (metadata.reasoning or
+  category), matching the engine's own emit sites -- solve-driven
+  training corpora previously lost the sidecar ``reasoning`` field
+  written precisely for them.
 - ``RewriteTrace.inverse()`` / ``RewriteStep.inverse()``: a pure
   reverse-trace primitive (swap before/after, flip direction, keep path).
   ``minimize``'s derivation now inverts its reversed ``path_b`` steps, so
