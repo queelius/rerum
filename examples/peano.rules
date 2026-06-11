@@ -1,0 +1,38 @@
+# Peano arithmetic over z (zero) and (s n) (successor). DEMONSTRATION.
+#
+# THE POINT: this set computes arithmetic from PURE STRUCTURAL REWRITING.
+# No prelude, no fold functions, no theory -- five core rules and the
+# general fixpoint driver ARE the computation. (add (s (s z)) (s z))
+# reduces to (s (s (s z))) the way a Turing machine would: by structure.
+#
+# The set is confluent and terminating; engine.simplify drives any ground
+# term to its normal form. Comparison and parity rules rewrite to the
+# SYMBOLS true / false (consistent with examples/boolean.rules), so the
+# two rule sets compose in one engine if desired.
+# examples metadata lives in peano.metadata.json.
+
+[addition]
+@add-zero "0 + n = n": (add z ?n) => :n
+@add-succ "(1+m) + n = 1 + (m+n)": (add (s ?m) ?n) => (s (add :m :n))
+
+[multiplication]
+@mul-zero "0 * n = 0": (mul z ?n) => z
+@mul-succ "(1+m) * n = n + m*n": (mul (s ?m) ?n) => (add :n (mul :m :n))
+
+[predecessor]
+# Truncated predecessor and subtraction (monus): pred 0 = 0.
+@pred-zero "pred 0 = 0": (pred z) => z
+@pred-succ "pred (1+n) = n": (pred (s ?n)) => :n
+@sub-zero "m - 0 = m (monus)": (sub ?m z) => :m
+@sub-succ "m - (1+n) = pred(m - n)": (sub ?m (s ?n)) => (pred (sub :m :n))
+
+[parity]
+@even-zero "0 is even": (even? z) => true
+@even-succ "even?(1+n) = odd? n": (even? (s ?n)) => (odd? :n)
+@odd-zero "0 is not odd": (odd? z) => false
+@odd-succ "odd?(1+n) = even? n": (odd? (s ?n)) => (even? :n)
+
+[comparison]
+@le-zero "0 <= n": (le z ?n) => true
+@le-succ-zero "1+m <= 0 is false": (le (s ?m) z) => false
+@le-succ-succ "1+m <= 1+n iff m <= n": (le (s ?m) (s ?n)) => (le :m :n)

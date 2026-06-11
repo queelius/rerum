@@ -1,0 +1,69 @@
+{
+  "add-zero": {
+    "category": "addition",
+    "reasoning": "Base case of structural recursion on the first argument.",
+    "examples": [{"in": "(add z (s z))", "out": "(s z)"}]
+  },
+  "add-succ": {
+    "category": "addition",
+    "reasoning": "Peel one successor off the first argument per step; termination by structural descent.",
+    "examples": [{"in": "(add (s z) (s z))", "out": "(s (add z (s z)))"}]
+  },
+  "mul-zero": {
+    "category": "multiplication",
+    "examples": [{"in": "(mul z (s z))", "out": "z"}]
+  },
+  "mul-succ": {
+    "category": "multiplication",
+    "reasoning": "Multiplication as iterated addition: (1+m)*n = n + m*n.",
+    "examples": [{"in": "(mul (s z) (s z))", "out": "(add (s z) (mul z (s z)))"}]
+  },
+  "pred-zero": {
+    "category": "predecessor",
+    "reasoning": "Truncated: natural numbers have no negatives.",
+    "examples": [{"in": "(pred z)", "out": "z"}]
+  },
+  "pred-succ": {
+    "category": "predecessor",
+    "examples": [{"in": "(pred (s z))", "out": "z"}]
+  },
+  "sub-zero": {
+    "category": "predecessor",
+    "examples": [{"in": "(sub (s z) z)", "out": "(s z)"}]
+  },
+  "sub-succ": {
+    "category": "predecessor",
+    "reasoning": "Monus: m - (1+n) = pred(m - n); bottoms out at z instead of going negative.",
+    "examples": [{"in": "(sub (s z) (s z))", "out": "(pred (sub (s z) z))"}]
+  },
+  "even-zero": {
+    "category": "parity",
+    "examples": [{"in": "(even? z)", "out": "true"}]
+  },
+  "even-succ": {
+    "category": "parity",
+    "reasoning": "Mutual recursion with odd?: parity flips per successor.",
+    "examples": [{"in": "(even? (s z))", "out": "(odd? z)"}]
+  },
+  "odd-zero": {
+    "category": "parity",
+    "examples": [{"in": "(odd? z)", "out": "false"}]
+  },
+  "odd-succ": {
+    "category": "parity",
+    "examples": [{"in": "(odd? (s z))", "out": "(even? z)"}]
+  },
+  "le-zero": {
+    "category": "comparison",
+    "examples": [{"in": "(le z (s z))", "out": "true"}]
+  },
+  "le-succ-zero": {
+    "category": "comparison",
+    "examples": [{"in": "(le (s z) z)", "out": "false"}]
+  },
+  "le-succ-succ": {
+    "category": "comparison",
+    "reasoning": "Strip one successor from each side; structural descent on both arguments.",
+    "examples": [{"in": "(le (s z) (s z))", "out": "(le z z)"}]
+  }
+}
