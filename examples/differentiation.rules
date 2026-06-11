@@ -26,3 +26,13 @@
 # Constant multiple (constant on either side).
 @dd-const-mult "Constant multiple (left)": (dd (* ?c:const ?f) ?v:var) => (* :c (dd :f :v))
 @dd-mult-const "Constant multiple (right)": (dd (* ?f ?c:const) ?v:var) => (* :c (dd :f :v))
+
+[products]
+# Product rule: d/dx(f g) = f' g + f g'.
+@dd-product "Product rule": (dd (* ?f ?g) ?v:var) => (+ (* (dd :f :v) :g) (* :f (dd :g :v)))
+# Quotient rule: d/dx(f/g) = (f' g - f g') / g^2.
+@dd-quotient "Quotient rule": (dd (/ ?f ?g) ?v:var) => (/ (- (* (dd :f :v) :g) (* :f (dd :g :v))) (^ :g 2))
+# Power rule, constant exponent: d/dx(f^n) = n f^(n-1) f'. Priority 60 so it
+# beats the general f^g log-diff rule (priority 50) when the exponent is a
+# number. The (! - :n 1) fold computes the decremented exponent at rewrite time.
+@dd-power[60] "Power rule (constant exponent)": (dd (^ ?f ?n:const) ?v:var) => (* :n (* (^ :f (! - :n 1)) (dd :f :v)))

@@ -204,3 +204,46 @@ class TestBasicsAndLinearity:
         # d/dx(x + y + x) = 2 (y free of x -> 0); rest-pattern linearity.
         out = differentiate(engine, "(dd (+ x y x) x)")
         assert out == 2
+
+
+class TestProductsQuotientPower:
+    def test_product_x_times_x(self):
+        engine = make_diff_engine()
+        checker = _load_checker()
+        # THE motivating example: d/dx(x*x) = 2x
+        out = differentiate(engine, "(dd (* x x) x)")
+        assert out == ["*", 2, "x"]
+        assert checker.is_derivative("(* x x)", "x", format_sexpr(out)) is True
+
+    def test_product_general(self):
+        engine = make_diff_engine()
+        checker = _load_checker()
+        # d/dx(x^2 * x^3) via the product rule; verify numerically (shape may
+        # vary). Transcendental-composed products are tested with the trig
+        # family (the sin rule does not exist yet at this point in the file).
+        out = differentiate(engine, "(dd (* (^ x 2) (^ x 3)) x)")
+        assert checker.is_derivative("(* (^ x 2) (^ x 3))", "x",
+                                     format_sexpr(out)) is True
+
+    def test_quotient(self):
+        engine = make_diff_engine()
+        checker = _load_checker()
+        # d/dx(x / (1 + x^2)); quotient rule with a polynomial denominator.
+        out = differentiate(engine, "(dd (/ x (+ 1 (^ x 2))) x)")
+        assert checker.is_derivative("(/ x (+ 1 (^ x 2)))", "x",
+                                     format_sexpr(out)) is True
+
+    def test_power_constant_exponent(self):
+        engine = make_diff_engine()
+        checker = _load_checker()
+        # THE motivating example: d/dx(x^3) = 3 x^2
+        out = differentiate(engine, "(dd (^ x 3) x)")
+        assert out == ["*", 3, ["^", "x", 2]]
+        assert checker.is_derivative("(^ x 3)", "x", format_sexpr(out)) is True
+
+    def test_power_quadratic(self):
+        engine = make_diff_engine()
+        checker = _load_checker()
+        out = differentiate(engine, "(dd (^ x 2) x)")
+        assert out == ["*", 2, "x"]
+        assert checker.is_derivative("(^ x 2)", "x", format_sexpr(out)) is True

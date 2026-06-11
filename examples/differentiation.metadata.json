@@ -30,5 +30,17 @@
   "dd-mult-const": {
     "category": "linearity",
     "examples": [{"in": "(dd (* x 3) x)", "out": "(* 3 (dd x x))"}]
+  },
+  "dd-product": {
+    "category": "product",
+    "examples": [{"in": "(dd (* x x) x)", "out": "(+ (* (dd x x) x) (* x (dd x x)))"}]
+  },
+  "dd-quotient": {
+    "category": "quotient",
+    "examples": [{"in": "(dd (/ x y) x)", "out": "(/ (- (* (dd x x) y) (* x (dd y x))) (^ y 2))"}]
+  },
+  "dd-power": {
+    "category": "power",
+    "examples": [{"in": "(dd (^ x 3) x)", "out": "(* 3 (* (^ x 2) (dd x x)))"}]
   }
 }
