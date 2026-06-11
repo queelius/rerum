@@ -49,3 +49,17 @@
 # a^x, constant base a: d/dx(a^f) = a^f (ln a) f'. Priority 60 so it beats the
 # general f^g log-diff rule; const base + general exponent.
 @dd-aexp[60] "Constant-base exponential": (dd (^ ?a:const ?f) ?v:var) => (* (* (^ :a :f) (ln :a)) (dd :f :v))
+
+[trig]
+# d/dx(sin f) = cos f f'.
+@dd-sin "Sine rule": (dd (sin ?f) ?v:var) => (* (cos :f) (dd :f :v))
+# d/dx(cos f) = -sin f f'.
+@dd-cos "Cosine rule": (dd (cos ?f) ?v:var) => (* (- (sin :f)) (dd :f :v))
+# d/dx(tan f) = sec^2 f f' (emits sec, consumed by @dd-sec).
+@dd-tan "Tangent rule": (dd (tan ?f) ?v:var) => (* (^ (sec :f) 2) (dd :f :v))
+# d/dx(sec f) = sec f tan f f'.
+@dd-sec "Secant rule": (dd (sec ?f) ?v:var) => (* (* (sec :f) (tan :f)) (dd :f :v))
+# d/dx(csc f) = -csc f cot f f'.
+@dd-csc "Cosecant rule": (dd (csc ?f) ?v:var) => (* (- (* (csc :f) (cot :f))) (dd :f :v))
+# d/dx(cot f) = -csc^2 f f'.
+@dd-cot "Cotangent rule": (dd (cot ?f) ?v:var) => (* (- (^ (csc :f) 2)) (dd :f :v))

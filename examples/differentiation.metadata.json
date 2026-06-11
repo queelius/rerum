@@ -62,5 +62,29 @@
   "dd-aexp": {
     "category": "exp-log",
     "examples": [{"in": "(dd (^ 2 x) x)", "out": "(* (* (^ 2 x) (ln 2)) (dd x x))"}]
+  },
+  "dd-sin": {
+    "category": "trig",
+    "examples": [{"in": "(dd (sin x) x)", "out": "(* (cos x) (dd x x))"}]
+  },
+  "dd-cos": {
+    "category": "trig",
+    "examples": [{"in": "(dd (cos x) x)", "out": "(* (- (sin x)) (dd x x))"}]
+  },
+  "dd-tan": {
+    "category": "trig",
+    "examples": [{"in": "(dd (tan x) x)", "out": "(* (^ (sec x) 2) (dd x x))"}]
+  },
+  "dd-sec": {
+    "category": "trig",
+    "examples": [{"in": "(dd (sec x) x)", "out": "(* (* (sec x) (tan x)) (dd x x))"}]
+  },
+  "dd-csc": {
+    "category": "trig",
+    "examples": [{"in": "(dd (csc x) x)", "out": "(* (- (* (csc x) (cot x))) (dd x x))"}]
+  },
+  "dd-cot": {
+    "category": "trig",
+    "examples": [{"in": "(dd (cot x) x)", "out": "(* (- (^ (csc x) 2)) (dd x x))"}]
   }
 }

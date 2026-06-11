@@ -281,3 +281,66 @@ class TestExpLogSqrt:
         # d/dx(2^x) = 2^x ln 2 (constant base, variable exponent)
         out = differentiate(engine, "(dd (^ 2 x) x)")
         assert checker.is_derivative("(^ 2 x)", "x", format_sexpr(out)) is True
+
+
+class TestTrig:
+    def test_sin(self):
+        engine = make_diff_engine()
+        checker = _load_checker()
+        out = differentiate(engine, "(dd (sin x) x)")
+        assert checker.is_derivative("(sin x)", "x", format_sexpr(out)) is True
+
+    def test_cos(self):
+        engine = make_diff_engine()
+        checker = _load_checker()
+        out = differentiate(engine, "(dd (cos x) x)")
+        assert checker.is_derivative("(cos x)", "x", format_sexpr(out)) is True
+
+    def test_tan(self):
+        engine = make_diff_engine()
+        checker = _load_checker()
+        out = differentiate(engine, "(dd (tan x) x)")
+        assert checker.is_derivative("(tan x)", "x", format_sexpr(out)) is True
+
+    def test_sec(self):
+        engine = make_diff_engine()
+        checker = _load_checker()
+        out = differentiate(engine, "(dd (sec x) x)")
+        assert checker.is_derivative("(sec x)", "x", format_sexpr(out)) is True
+
+    def test_csc(self):
+        engine = make_diff_engine()
+        checker = _load_checker()
+        out = differentiate(engine, "(dd (csc x) x)")
+        assert checker.is_derivative("(csc x)", "x", format_sexpr(out)) is True
+
+    def test_cot(self):
+        engine = make_diff_engine()
+        checker = _load_checker()
+        out = differentiate(engine, "(dd (cot x) x)")
+        assert checker.is_derivative("(cot x)", "x", format_sexpr(out)) is True
+
+    def test_chain_sin_of_square(self):
+        engine = make_diff_engine()
+        checker = _load_checker()
+        # d/dx(sin(x^2)) = cos(x^2) * 2x ; verify numerically.
+        out = differentiate(engine, "(dd (sin (^ x 2)) x)")
+        assert checker.is_derivative("(sin (^ x 2))", "x",
+                                     format_sexpr(out)) is True
+
+    def test_product_with_sin(self):
+        engine = make_diff_engine()
+        checker = _load_checker()
+        # Deferred from the products task (plan sequencing: needed the sin
+        # rule): d/dx(x * sin x) = sin x + x cos x.
+        out = differentiate(engine, "(dd (* x (sin x)) x)")
+        assert checker.is_derivative("(* x (sin x))", "x",
+                                     format_sexpr(out)) is True
+
+    def test_quotient_with_sin(self):
+        engine = make_diff_engine()
+        checker = _load_checker()
+        # Deferred from the products task: d/dx(x / sin x).
+        out = differentiate(engine, "(dd (/ x (sin x)) x)")
+        assert checker.is_derivative("(/ x (sin x))", "x",
+                                     format_sexpr(out)) is True
