@@ -1,0 +1,113 @@
+{
+  "not-true": {
+    "category": "constant",
+    "examples": [{"in": "(not true)", "out": "false"}]
+  },
+  "not-false": {
+    "category": "constant",
+    "examples": [{"in": "(not false)", "out": "true"}]
+  },
+  "and-true": {
+    "category": "identity",
+    "examples": [{"in": "(and a true)", "out": "a"}]
+  },
+  "and-true-left": {
+    "category": "identity",
+    "examples": [{"in": "(and true a)", "out": "a"}]
+  },
+  "or-false": {
+    "category": "identity",
+    "examples": [{"in": "(or a false)", "out": "a"}]
+  },
+  "or-false-left": {
+    "category": "identity",
+    "examples": [{"in": "(or false a)", "out": "a"}]
+  },
+  "and-false": {
+    "category": "annihilator",
+    "examples": [{"in": "(and a false)", "out": "false"}]
+  },
+  "and-false-left": {
+    "category": "annihilator",
+    "examples": [{"in": "(and false a)", "out": "false"}]
+  },
+  "or-true": {
+    "category": "annihilator",
+    "examples": [{"in": "(or a true)", "out": "true"}]
+  },
+  "or-true-left": {
+    "category": "annihilator",
+    "examples": [{"in": "(or true a)", "out": "true"}]
+  },
+  "and-same": {
+    "category": "idempotence",
+    "examples": [{"in": "(and a a)", "out": "a"}]
+  },
+  "or-same": {
+    "category": "idempotence",
+    "examples": [{"in": "(or a a)", "out": "a"}]
+  },
+  "and-comp": {
+    "category": "complement",
+    "examples": [{"in": "(and a (not a))", "out": "false"}]
+  },
+  "and-comp-left": {
+    "category": "complement",
+    "examples": [{"in": "(and (not a) a)", "out": "false"}]
+  },
+  "or-comp": {
+    "category": "complement",
+    "examples": [{"in": "(or a (not a))", "out": "true"}]
+  },
+  "or-comp-left": {
+    "category": "complement",
+    "examples": [{"in": "(or (not a) a)", "out": "true"}]
+  },
+  "double-neg": {
+    "category": "negation",
+    "examples": [{"in": "(not (not a))", "out": "a"}]
+  },
+  "and-absorb": {
+    "category": "absorption",
+    "examples": [{"in": "(and a (or a b))", "out": "a"}]
+  },
+  "and-absorb-left": {
+    "category": "absorption",
+    "examples": [{"in": "(and (or a b) a)", "out": "a"}]
+  },
+  "or-absorb": {
+    "category": "absorption",
+    "examples": [{"in": "(or a (and a b))", "out": "a"}]
+  },
+  "or-absorb-left": {
+    "category": "absorption",
+    "examples": [{"in": "(or (and a b) a)", "out": "a"}]
+  },
+  "de-morgan-and-fwd": {
+    "category": "equivalence",
+    "reasoning": "De Morgan: a negated conjunction is the disjunction of the negations.",
+    "examples": [{"in": "(not (and a b))", "out": "(or (not a) (not b))"}]
+  },
+  "de-morgan-and-rev": {
+    "category": "equivalence",
+    "examples": [{"in": "(or (not a) (not b))", "out": "(not (and a b))"}]
+  },
+  "de-morgan-or-fwd": {
+    "category": "equivalence",
+    "reasoning": "De Morgan dual: a negated disjunction is the conjunction of the negations.",
+    "examples": [{"in": "(not (or a b))", "out": "(and (not a) (not b))"}]
+  },
+  "de-morgan-or-rev": {
+    "category": "equivalence",
+    "examples": [{"in": "(and (not a) (not b))", "out": "(not (or a b))"}]
+  },
+  "distrib-and-fwd": {
+    "category": "equivalence",
+    "reasoning": "Conjunction distributes over disjunction.",
+    "examples": [{"in": "(and a (or b c))", "out": "(or (and a b) (and a c))"}]
+  },
+  "distrib-and-rev": {
+    "category": "equivalence",
+    "examples": [{"in": "(or (and a b) (and a c))", "out": "(and a (or b c))"}]
+  }
+}

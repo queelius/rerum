@@ -1,0 +1,4 @@
+{
+  "and": {"ac": true, "identity": "true", "annihilator": "false"},
+  "or": {"ac": true, "identity": "false", "annihilator": "true"}
+}

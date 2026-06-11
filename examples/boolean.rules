@@ -1,0 +1,65 @@
+# Boolean algebra over (and ...), (or ...), (not x). DEMONSTRATION content.
+# Constants are the SYMBOLS true / false (the text layer has no boolean
+# literal: Python True/False atoms are a valid in-Python data choice -- see
+# the boolean theory inside rerum/tests/test_normalize.py -- but they are
+# not expressible in DSL text, so rule FILES use the symbol convention).
+# This set needs NO prelude: no rule computes, every rewrite is structural.
+#
+# Two layers:
+# - The directed groups form a TERMINATING simplification core: drive any
+#   expression to a fixpoint with engine.simplify.
+# - The [equivalences] group holds BIDIRECTIONAL (<=>) laws for
+#   equivalence-class reasoning (prove_equal / equivalents / minimize).
+#   Disable it for fixpoint simplification (a reversed De Morgan or
+#   distribution re-grows what the directed core shrinks):
+#   engine.disable_group("equivalences").
+#
+# Theory data: examples/boolean.theory.json declares and/or AC with
+# identities/annihilators so the GENERAL normalize canonicalizes n-ary
+# forms -- the same machinery that serves arithmetic, on different data.
+# examples metadata lives in boolean.metadata.json (DSL examples are
+# JSON-only). Bidirectional sidecar entries key the POST-desugar names
+# (name-fwd / name-rev).
+
+[constants]
+@not-true[100] "not true = false": (not true) => false
+@not-false[100] "not false = true": (not false) => true
+
+[identity]
+@and-true[100] "x and true = x": (and ?x true) => :x
+@and-true-left[100]: (and true ?x) => :x
+@or-false[100] "x or false = x": (or ?x false) => :x
+@or-false-left[100]: (or false ?x) => :x
+
+[annihilator]
+@and-false[100] "x and false = false": (and ?x false) => false
+@and-false-left[100]: (and false ?x) => false
+@or-true[100] "x or true = true": (or ?x true) => true
+@or-true-left[100]: (or true ?x) => true
+
+[idempotence]
+@and-same[90] "x and x = x": (and ?x ?x) => :x
+@or-same[90] "x or x = x": (or ?x ?x) => :x
+
+[complement]
+@and-comp[90] "x and (not x) = false": (and ?x (not ?x)) => false
+@and-comp-left[90]: (and (not ?x) ?x) => false
+@or-comp[90] "x or (not x) = true": (or ?x (not ?x)) => true
+@or-comp-left[90]: (or (not ?x) ?x) => true
+
+[negation]
+@double-neg[80] "not (not x) = x": (not (not ?x)) => :x
+
+[absorption]
+@and-absorb[70] "x and (x or y) = x": (and ?x (or ?x ?y)) => :x
+@and-absorb-left[70]: (and (or ?x ?y) ?x) => :x
+@or-absorb[70] "x or (x and y) = x": (or ?x (and ?x ?y)) => :x
+@or-absorb-left[70]: (or (and ?x ?y) ?x) => :x
+
+[equivalences]
+# Bidirectional laws for equivalence-class reasoning. Not part of the
+# directed core: the reverse directions re-grow expressions, so disable
+# this group when driving simplify to a fixpoint.
+@de-morgan-and "not(x and y) <=> (not x) or (not y)": (not (and ?x ?y)) <=> (or (not :x) (not :y))
+@de-morgan-or "not(x or y) <=> (not x) and (not y)": (not (or ?x ?y)) <=> (and (not :x) (not :y))
+@distrib-and "x and (y or z) <=> (x and y) or (x and z)": (and ?x (or ?y ?z)) <=> (or (and :x :y) (and :x :z))
