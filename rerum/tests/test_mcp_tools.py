@@ -172,13 +172,15 @@ class TestAuthoringJsonSafety:
         # A Fraction atom in both pattern and skeleton: this is the value
         # that breaks raw json.dumps and must be rendered via format_sexpr.
         # The example uses s-expr STRINGS (the validator parses them), and
-        # rewriting (half (/ 1 2)) -> (/ 1 1) holds, so it validates clean.
+        # rewriting (half 1/2) -> 1/1 holds, so it validates clean.
+        # (Rational literals: 1/2 parses to the Fraction atom, the exact
+        # round-trip form.)
         engine.add_rule(
             pattern=["half", Fraction(1, 2)],
             skeleton=Fraction(1, 1),
             name="frac",
             category="arith",
-            examples=[{"in": "(half (/ 1 2))", "out": "(/ 1 1)"}],
+            examples=[{"in": "(half 1/2)", "out": "(half 1/2)"}],
             validate_examples=False,
         )
         return engine
@@ -191,8 +193,8 @@ class TestAuthoringJsonSafety:
         result = tool_get_rule(engine, name="frac")
         # Must not raise. The expr fields are strings; examples are sanitized.
         json.dumps(result)
-        assert result["pattern"] == "(half (/ 1 2))"
-        assert result["skeleton"] == "(/ 1 1)"
+        assert result["pattern"] == "(half 1/2)"
+        assert result["skeleton"] == "1/1"
 
     def test_list_rules_json_dumps_clean_with_rational(self):
         import json
@@ -211,12 +213,12 @@ class TestAuthoringJsonSafety:
         engine = self._rational_engine()
         # A second rule that carries a Fraction atom AND a wrong example, so
         # the failure-as-data path reports an example referencing a rational.
-        # (half (/ 1 3)) rewrites to (/ 1 1), not (/ 1 3), so this fails.
+        # (half 1/2) rewrites to 1/1, not 1/3, so this fails.
         engine.add_rule(
             pattern=["half", Fraction(1, 2)],
             skeleton=Fraction(1, 1),
             name="frac-bad",
-            examples=[{"in": "(half (/ 1 3))", "out": "(/ 1 3)"}],
+            examples=[{"in": "(half 1/2)", "out": "1/3"}],
             validate_examples=False,
         )
         result = tool_validate_examples(engine)
@@ -331,11 +333,9 @@ class TestApplyingJsonSafety:
         # prove_equal's bidirectional BFS then intersects at the Fraction
         # atom (the proof's common form), so the proof path carries a step
         # whose after IS a Fraction -- the rational-bearing derivation we
-        # need to prove json-safe. Both endpoints are plain string-spellable
-        # expressions; a Fraction atom is not itself spellable as a parsed
-        # endpoint (it renders to "(/ 1 3)", a list on reparse), so the
-        # rational must be reached via a compute step rather than supplied
-        # directly.
+        # need to prove json-safe. (Fraction atoms are now spellable as
+        # rational literals -- "1/3" round-trips exactly -- but reaching the
+        # rational via a compute step also exercises the fold path.)
         from rerum import RuleEngine
         from rerum.rewriter import ARITHMETIC_PRELUDE
         return RuleEngine.from_dsl(
@@ -350,8 +350,8 @@ class TestApplyingJsonSafety:
         engine = self._compute_engine()
         result = tool_simplify(engine, expr="(third a)")
         # The result and the step's computed value are Fraction(1, 3);
-        # both must have rendered to the s-expr string "(/ 1 3)".
-        assert result["result"] == "(/ 1 3)"
+        # both must have rendered to the rational literal "1/3".
+        assert result["result"] == "1/3"
         json.dumps(result)
 
     def test_equivalents_json_dumps_clean_with_rational(self):
@@ -362,7 +362,7 @@ class TestApplyingJsonSafety:
         result = tool_equivalents(
             engine, expr="(third a)", max_depth=3,
             include_unidirectional=True)
-        assert "(/ 1 3)" in result["forms"]
+        assert "1/3" in result["forms"]
         json.dumps(result)
 
     def test_prove_equal_json_dumps_clean_with_rational(self):
@@ -375,8 +375,8 @@ class TestApplyingJsonSafety:
             include_unidirectional=True)
         assert result["proven"] is True
         # The common form and both path steps' after are Fraction(1, 3),
-        # rendered to "(/ 1 3)".
-        assert result["common_form"] == "(/ 1 3)"
+        # rendered to "1/3".
+        assert result["common_form"] == "1/3"
         json.dumps(result)
 
     def test_minimize_json_dumps_clean_with_rational(self):
@@ -389,7 +389,7 @@ class TestApplyingJsonSafety:
         result = tool_minimize(
             engine, expr="(third a)", op_costs={"third": 100},
             include_unidirectional=True)
-        assert result["best"] == "(/ 1 3)"
+        assert result["best"] == "1/3"
         json.dumps(result)
 
     def test_apply_once_json_dumps_clean_with_rational(self):
@@ -400,7 +400,7 @@ class TestApplyingJsonSafety:
         from rerum.mcp.tools import tool_apply_once
         engine = self._compute_engine()
         result = tool_apply_once(engine, expr="(third a)")
-        assert result["result"] == "(/ 1 3)"
+        assert result["result"] == "1/3"
         assert result["changed"] is True
         json.dumps(result)  # must not raise
 
@@ -484,7 +484,7 @@ class TestErrorMappingRedesign:
         err = MCPToolError("validation_error", "bad example",
                            details={"example": {"out": Fraction(1, 3)}})
         json.dumps(err.to_dict())  # must not raise
-        assert err.to_dict()["error"]["details"]["example"]["out"] == "(/ 1 3)"
+        assert err.to_dict()["error"]["details"]["example"]["out"] == "1/3"
 
 
 class TestStrictInputs:

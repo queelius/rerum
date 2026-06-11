@@ -20,7 +20,7 @@ def json_safe(value: Any) -> Any:
 
     - ``bool`` is preserved (checked before any numeric branch, since bool
       subclasses int).
-    - ``Fraction`` renders to its exact s-expr string (``"(/ 1 2)"``).
+    - ``Fraction`` renders to its exact rational literal (``"1/2"``).
     - A non-finite ``float`` (inf/-inf/nan) renders to its ``str`` form;
       raw it would emit non-spec JSON tokens.
     - dicts, lists, and tuples are recursed (a tuple becomes a list, the

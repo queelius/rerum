@@ -34,6 +34,17 @@ MCP surface; the engine API is extended, not broken.
 - Unknown tool names map to ``unknown_tool`` (was ``parse_error``).
 - ``rerum.mcp`` imports WITHOUT the optional ``mcp`` SDK; only
   ``run_server`` requires it.
+- RATIONAL LITERALS (Scheme-style): ``parse_sexpr("1/3")`` now yields the
+  exact ``Fraction(1, 3)`` atom (was: the symbol ``"1/3"``), and
+  ``format_sexpr(Fraction(1, 3))`` renders ``"1/3"`` (was: the division
+  EXPRESSION ``"(/ 1 3)"``, which re-parsed to a different structure --
+  the round-trip was lossy). ``parse(format(x)) == x`` is now exact for
+  Fraction atoms; an int-valued literal (``4/2``) narrows to the int; a
+  zero denominator or non-integer parts stay plain symbols. Forced by the
+  first real consumer: load-validated examples of rational-producing rules
+  could not express their expected output. Matches the corpus encoder's
+  existing rendering. MCP responses now carry ``"1/3"`` where they carried
+  ``"(/ 1 3)"``.
 
 ### Added
 - ``rerum/mcp/registry.py``: the single source of truth -- discovery,

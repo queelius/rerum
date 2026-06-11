@@ -96,7 +96,7 @@ class TestSolveAssisted:
         result = tool_solve_assisted(engine, expr="(third q)", sampler=sampler)
         # Must not raise; a Fraction would break json.dumps if it leaked.
         json.dumps(result)
-        assert result["result"] == "(/ 1 3)"
+        assert result["result"] == "1/3"
 
     def test_inferred_rule_cannot_execute_op_outside_prelude(self):
         # THE security boundary for pattern #2 (rules from an untrusted LLM):

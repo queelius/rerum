@@ -104,7 +104,7 @@ class TestSolveGoalJsonSafety:
             max_nodes=100,
         )
         assert result["found"] is True
-        assert result["result"] == "(/ 1 3)"
+        assert result["result"] == "1/3"
         json.dumps(result)
 
 

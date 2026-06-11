@@ -272,10 +272,10 @@ class TestJsonSafety:
         d = assemble_trace(initial="(mk)", final="(/ 1 2)", recorder=rec)
         text = json.dumps(d)  # must not raise
         back = json.loads(text)
-        # The Fraction binding was rendered to its exact s-expr string.
+        # The Fraction binding was rendered to its exact rational literal.
         unwrap = [s for s in back["steps"]
                   if isinstance(s, dict) and "unwrap" in str(s.get("rule_id"))]
-        assert unwrap and unwrap[0]["bindings"]["x"] == "(/ 1 2)"
+        assert unwrap and unwrap[0]["bindings"]["x"] == "1/2"
 
     def test_guard_result_fraction_serializes(self):
         import json
@@ -290,7 +290,7 @@ class TestJsonSafety:
         )
         d = step_to_dict(step)
         text = json.dumps(d)  # must not raise
-        assert json.loads(text)["guard"]["result"] == "(/ 3 4)"
+        assert json.loads(text)["guard"]["result"] == "3/4"
 
     def test_prose_answer_line_reflects_final_not_none(self):
         from rerum.mcp.trace import assemble_trace

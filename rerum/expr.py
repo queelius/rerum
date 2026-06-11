@@ -10,7 +10,7 @@ without importing the engine and without lazy-import workarounds.
 from fractions import Fraction
 from typing import List, Tuple, Union
 
-from .rewriter import ExprType
+from .rewriter import ExprType, coerce_number
 
 
 # ============================================================
@@ -123,6 +123,19 @@ def parse_sexpr(s: str) -> ExprType:
         except ValueError:
             pass
 
+    # Rational literal: p/q with integer numerator and denominator parses to
+    # an exact Fraction ATOM (Scheme-style), the round-trip form of
+    # ``format_sexpr(Fraction(1, 3)) == "1/3"``. Narrowed through
+    # ``coerce_number`` so an int-valued literal like 4/2 becomes the int 2
+    # (the engine invariant: no int-valued Fraction atoms). A zero
+    # denominator is not a number and falls through to a plain symbol, as
+    # does anything non-integer around the slash (x/y, 1/x, 1/2/3).
+    if "/" in s:
+        num_s, _, den_s = s.partition("/")
+        digits = num_s[1:] if num_s.startswith("-") else num_s
+        if digits.isdigit() and den_s.isdigit() and int(den_s) != 0:
+            return coerce_number(Fraction(int(num_s), int(den_s)))
+
     # Pattern variable syntax conversion
     if s.startswith('?'):
         rest = s[1:]
@@ -224,7 +237,11 @@ def format_sexpr(expr: ExprType, dsl_syntax: bool = True) -> str:
         parts = [format_sexpr(e, dsl_syntax) for e in expr]
         return "(" + " ".join(parts) + ")"
     elif isinstance(expr, Fraction):
-        return f"(/ {expr.numerator} {expr.denominator})"
+        # Rational literal, the exact round-trip form: parse_sexpr("1/3")
+        # gives back this same Fraction atom (a division EXPRESSION would
+        # parse to the different structure ["/", 1, 3]). Matches the corpus
+        # encoder's rendering (training.corpus_json_default).
+        return f"{expr.numerator}/{expr.denominator}"
     elif isinstance(expr, (int, float)):
         return str(expr)
     else:

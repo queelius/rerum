@@ -107,26 +107,6 @@ class TestNaryFoldFraction:
         assert isinstance(out, int)
 
 
-class TestFractionFormat:
-    def test_format_fraction_as_div(self):
-        assert format_sexpr(Fraction(1, 3)) == "(/ 1 3)"
-
-    def test_format_negative_fraction(self):
-        assert format_sexpr(Fraction(-1, 3)) == "(/ -1 3)"
-
-    def test_format_roundtrip_parses_back_to_div_form(self):
-        s = format_sexpr(Fraction(2, 5))
-        assert s == "(/ 2 5)"
-        assert parse_sexpr(s) == ["/", 2, 5]
-
-    def test_format_inside_compound(self):
-        assert format_sexpr(["+", "x", Fraction(1, 2)]) == "(+ x (/ 1 2))"
-
-    def test_format_whole_fraction_after_coercion_is_int(self):
-        # coerce_number(Fraction(4,2)) -> 2; format is the int, not a div.
-        assert format_sexpr(coerce_number(Fraction(4, 2))) == "2"
-
-
 class TestInstantiateRationals:
     def test_compute_keeps_fraction_exact(self):
         # (! / 1 3) must stay Fraction(1, 3), not collapse to float.
@@ -230,3 +210,61 @@ class TestRationalExports:
     def test_export(self):
         import rerum
         assert rerum.coerce_number is coerce_number
+
+
+class TestRationalLiterals:
+    """Rational literals: p/q parses to a Fraction ATOM and a Fraction
+    formats as p/q, making parse(format(x)) == x exact. (Scheme-style;
+    replaces the lossy 0.9 contract where Fraction rendered to the division
+    EXPRESSION (/ p q) that parsed back to a different structure.) Forced by
+    the first real consumer: load-validated examples of rational-producing
+    rules could not express their expected output."""
+
+    def test_parse_rational_literal(self):
+        assert parse_sexpr("1/3") == Fraction(1, 3)
+        assert isinstance(parse_sexpr("1/3"), Fraction)
+
+    def test_parse_negative_rational(self):
+        assert parse_sexpr("-1/3") == Fraction(-1, 3)
+
+    def test_parse_int_valued_rational_narrows(self):
+        # 4/2 narrows through coerce_number to the int 2 (engine invariant:
+        # no int-valued Fraction atoms).
+        out = parse_sexpr("4/2")
+        assert out == 2 and isinstance(out, int)
+
+    def test_parse_rational_inside_compound(self):
+        assert parse_sexpr("(* x 1/3)") == ["*", "x", Fraction(1, 3)]
+
+    def test_zero_denominator_stays_symbol(self):
+        # 1/0 is not a number; it falls through to a plain symbol.
+        assert parse_sexpr("1/0") == "1/0"
+
+    def test_non_numeric_slash_tokens_stay_symbols(self):
+        for tok in ("x/y", "1/x", "x/2", "/", "1/", "/3", "1/2/3"):
+            assert parse_sexpr(tok) == tok
+
+    def test_format_fraction_as_rational_literal(self):
+        assert format_sexpr(Fraction(1, 3)) == "1/3"
+        assert format_sexpr(Fraction(-1, 3)) == "-1/3"
+
+    def test_roundtrip_is_exact(self):
+        f = Fraction(2, 5)
+        assert parse_sexpr(format_sexpr(f)) == f
+        assert isinstance(parse_sexpr(format_sexpr(f)), Fraction)
+
+    def test_format_inside_compound_literal(self):
+        assert format_sexpr(["+", "x", Fraction(1, 2)]) == "(+ x 1/2)"
+
+    def test_sidecar_example_can_express_rational_output(self):
+        # THE motivating case: a rational-producing rule's example validates.
+        import json
+        from rerum.engine import RuleEngine
+        eng = RuleEngine().with_prelude(ARITHMETIC_PRELUDE)
+        eng.load_dsl(
+            "@p: (intp (^ ?v ?n:const) ?v) =>"
+            " (* (^ :v (! + :n 1)) (! / 1 (! + :n 1)))",
+            validate_examples=False)
+        sidecar = json.dumps({"p": {"examples": [
+            {"in": "(intp (^ x 2) x)", "out": "(* (^ x 3) 1/3)"}]}})
+        eng.load_metadata_json(sidecar, validate_examples=True)  # must not raise
