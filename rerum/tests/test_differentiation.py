@@ -415,3 +415,55 @@ class TestGeneralPower:
         # Regression: a numeric base must STILL take the a^x rule.
         out = differentiate(engine, "(dd (^ 2 x) x)")
         assert checker.is_derivative("(^ 2 x)", "x", format_sexpr(out)) is True
+
+
+class TestPartialDerivatives:
+    def test_partial_treats_other_var_as_constant(self):
+        engine = make_diff_engine()
+        checker = _load_checker()
+        # d/dx(x * y) = y (y free of x; product rule + free-of? -> y*1 + x*0)
+        out = differentiate(engine, "(dd (* x y) x)")
+        assert out == "y"
+        assert checker.is_derivative("(* x y)", "x", format_sexpr(out)) is True
+
+    def test_partial_wrt_y(self):
+        engine = make_diff_engine()
+        checker = _load_checker()
+        out = differentiate(engine, "(dd (* x y) y)")
+        assert out == "x"
+        assert checker.is_derivative("(* x y)", "y", format_sexpr(out)) is True
+
+    def test_partial_sum_of_two_vars(self):
+        engine = make_diff_engine()
+        checker = _load_checker()
+        # d/dx(x^2 + y^2) = 2x
+        out = differentiate(engine, "(dd (+ (^ x 2) (^ y 2)) x)")
+        assert out == ["*", 2, "x"]
+        assert checker.is_derivative("(+ (^ x 2) (^ y 2))", "x",
+                                     format_sexpr(out)) is True
+
+    def test_free_subexpression_is_zero(self):
+        engine = make_diff_engine()
+        # d/dx(sin y) = 0 directly (free-of? guard at top priority).
+        assert differentiate(engine, "(dd (sin y) x)") == 0
+
+
+class TestMotivatingCleanOutput:
+    def test_motivating_examples_are_clean(self):
+        engine = make_diff_engine()
+        # The two spec/contract motivating cases, exact forms.
+        assert differentiate(engine, "(dd (* x x) x)") == ["*", 2, "x"]
+        assert differentiate(engine, "(dd (^ x 3) x)") == ["*", 3, ["^", "x", 2]]
+
+
+class TestEveryRuleHasExample:
+    def test_every_named_rule_carries_an_example(self):
+        engine = make_diff_engine()
+        # After the sidecar merge, every dd-* rule carries at least one
+        # validated example (iter_rules is the public state API).
+        seen = 0
+        for _idx, _rule, meta in engine.iter_rules():
+            if meta.name and meta.name.startswith("dd-"):
+                assert meta.examples, f"{meta.name} has no example"
+                seen += 1
+        assert seen >= 25  # every family is present
