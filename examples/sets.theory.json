@@ -1,0 +1,4 @@
+{
+  "union": {"ac": true, "identity": "empty", "annihilator": "universe"},
+  "inter": {"ac": true, "identity": "universe", "annihilator": "empty"}
+}

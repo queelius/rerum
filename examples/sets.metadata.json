@@ -1,0 +1,113 @@
+{
+  "comp-empty": {
+    "category": "constant",
+    "examples": [{"in": "(comp empty)", "out": "universe"}]
+  },
+  "comp-universe": {
+    "category": "constant",
+    "examples": [{"in": "(comp universe)", "out": "empty"}]
+  },
+  "inter-universe": {
+    "category": "identity",
+    "examples": [{"in": "(inter a universe)", "out": "a"}]
+  },
+  "inter-universe-left": {
+    "category": "identity",
+    "examples": [{"in": "(inter universe a)", "out": "a"}]
+  },
+  "union-empty": {
+    "category": "identity",
+    "examples": [{"in": "(union a empty)", "out": "a"}]
+  },
+  "union-empty-left": {
+    "category": "identity",
+    "examples": [{"in": "(union empty a)", "out": "a"}]
+  },
+  "inter-empty": {
+    "category": "annihilator",
+    "examples": [{"in": "(inter a empty)", "out": "empty"}]
+  },
+  "inter-empty-left": {
+    "category": "annihilator",
+    "examples": [{"in": "(inter empty a)", "out": "empty"}]
+  },
+  "union-universe": {
+    "category": "annihilator",
+    "examples": [{"in": "(union a universe)", "out": "universe"}]
+  },
+  "union-universe-left": {
+    "category": "annihilator",
+    "examples": [{"in": "(union universe a)", "out": "universe"}]
+  },
+  "inter-same": {
+    "category": "idempotence",
+    "examples": [{"in": "(inter a a)", "out": "a"}]
+  },
+  "union-same": {
+    "category": "idempotence",
+    "examples": [{"in": "(union a a)", "out": "a"}]
+  },
+  "inter-comp": {
+    "category": "complement",
+    "examples": [{"in": "(inter a (comp a))", "out": "empty"}]
+  },
+  "inter-comp-left": {
+    "category": "complement",
+    "examples": [{"in": "(inter (comp a) a)", "out": "empty"}]
+  },
+  "union-comp": {
+    "category": "complement",
+    "examples": [{"in": "(union a (comp a))", "out": "universe"}]
+  },
+  "union-comp-left": {
+    "category": "complement",
+    "examples": [{"in": "(union (comp a) a)", "out": "universe"}]
+  },
+  "double-comp": {
+    "category": "involution",
+    "examples": [{"in": "(comp (comp a))", "out": "a"}]
+  },
+  "inter-absorb": {
+    "category": "absorption",
+    "examples": [{"in": "(inter a (union a b))", "out": "a"}]
+  },
+  "inter-absorb-left": {
+    "category": "absorption",
+    "examples": [{"in": "(inter (union a b) a)", "out": "a"}]
+  },
+  "union-absorb": {
+    "category": "absorption",
+    "examples": [{"in": "(union a (inter a b))", "out": "a"}]
+  },
+  "union-absorb-left": {
+    "category": "absorption",
+    "examples": [{"in": "(union (inter a b) a)", "out": "a"}]
+  },
+  "de-morgan-inter-fwd": {
+    "category": "equivalence",
+    "reasoning": "De Morgan for sets: the complement of an intersection is the union of the complements.",
+    "examples": [{"in": "(comp (inter a b))", "out": "(union (comp a) (comp b))"}]
+  },
+  "de-morgan-inter-rev": {
+    "category": "equivalence",
+    "examples": [{"in": "(union (comp a) (comp b))", "out": "(comp (inter a b))"}]
+  },
+  "de-morgan-union-fwd": {
+    "category": "equivalence",
+    "reasoning": "De Morgan dual: the complement of a union is the intersection of the complements.",
+    "examples": [{"in": "(comp (union a b))", "out": "(inter (comp a) (comp b))"}]
+  },
+  "de-morgan-union-rev": {
+    "category": "equivalence",
+    "examples": [{"in": "(inter (comp a) (comp b))", "out": "(comp (union a b))"}]
+  },
+  "distrib-inter-fwd": {
+    "category": "equivalence",
+    "reasoning": "Intersection distributes over union.",
+    "examples": [{"in": "(inter a (union b c))", "out": "(union (inter a b) (inter a c))"}]
+  },
+  "distrib-inter-rev": {
+    "category": "equivalence",
+    "examples": [{"in": "(union (inter a b) (inter a c))", "out": "(inter a (union b c))"}]
+  }
+}

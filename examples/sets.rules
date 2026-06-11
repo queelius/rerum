@@ -1,0 +1,56 @@
+# Set algebra over (union ...), (inter ...), (comp x). DEMONSTRATION content.
+# Constants are the SYMBOLS empty / universe.
+#
+# This file is deliberately ISOMORPHIC to examples/boolean.rules
+# (union ~ or, inter ~ and, comp ~ not, empty ~ false, universe ~ true):
+# a THIRD theory (after arithmetic and boolean) flowing through the same
+# general machinery. The engine has no idea what a set is -- compare the
+# two files and observe that only the operator NAMES differ; that is the
+# swap test as a diff.
+#
+# NO prelude (every rewrite is structural). The [equivalences] group holds
+# bidirectional laws for equivalence reasoning; disable it for fixpoint
+# simplification: engine.disable_group("equivalences").
+# Theory data: examples/sets.theory.json. Sidecar: sets.metadata.json
+# (bidirectional entries key the post-desugar -fwd/-rev names).
+
+[constants]
+@comp-empty[100] "comp empty = universe": (comp empty) => universe
+@comp-universe[100] "comp universe = empty": (comp universe) => empty
+
+[identity]
+@inter-universe[100] "x inter universe = x": (inter ?x universe) => :x
+@inter-universe-left[100]: (inter universe ?x) => :x
+@union-empty[100] "x union empty = x": (union ?x empty) => :x
+@union-empty-left[100]: (union empty ?x) => :x
+
+[annihilator]
+@inter-empty[100] "x inter empty = empty": (inter ?x empty) => empty
+@inter-empty-left[100]: (inter empty ?x) => empty
+@union-universe[100] "x union universe = universe": (union ?x universe) => universe
+@union-universe-left[100]: (union universe ?x) => universe
+
+[idempotence]
+@inter-same[90] "x inter x = x": (inter ?x ?x) => :x
+@union-same[90] "x union x = x": (union ?x ?x) => :x
+
+[complement]
+@inter-comp[90] "x inter (comp x) = empty": (inter ?x (comp ?x)) => empty
+@inter-comp-left[90]: (inter (comp ?x) ?x) => empty
+@union-comp[90] "x union (comp x) = universe": (union ?x (comp ?x)) => universe
+@union-comp-left[90]: (union (comp ?x) ?x) => universe
+
+[involution]
+@double-comp[80] "comp (comp x) = x": (comp (comp ?x)) => :x
+
+[absorption]
+@inter-absorb[70] "x inter (x union y) = x": (inter ?x (union ?x ?y)) => :x
+@inter-absorb-left[70]: (inter (union ?x ?y) ?x) => :x
+@union-absorb[70] "x union (x inter y) = x": (union ?x (inter ?x ?y)) => :x
+@union-absorb-left[70]: (union (inter ?x ?y) ?x) => :x
+
+[equivalences]
+# Bidirectional laws for equivalence-class reasoning; disable for fixpoint.
+@de-morgan-inter "comp(x inter y) <=> (comp x) union (comp y)": (comp (inter ?x ?y)) <=> (union (comp :x) (comp :y))
+@de-morgan-union "comp(x union y) <=> (comp x) inter (comp y)": (comp (union ?x ?y)) <=> (inter (comp :x) (comp :y))
+@distrib-inter "x inter (y union z) <=> (x inter y) union (x inter z)": (inter ?x (union ?y ?z)) <=> (union (inter :x :y) (inter :x :z))
