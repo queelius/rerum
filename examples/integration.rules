@@ -1,0 +1,41 @@
+# Integration rules over the (int f v) operator. DEMONSTRATION content.
+# Reduced by goal-directed search (rerum.solve.solve): integration is
+# NON-CONFLUENT (table, linearity, u-sub, and by-parts compete), so the
+# driver is solve with the caller-supplied goal "no int operator remains".
+# examples metadata lives in integration.metadata.json (DSL examples are
+# JSON-only); this file carries {category=...} annotations only.
+
+[linearity]
+# Sum rule (variadic via rest-pattern): split an integral of a sum.
+@int-sum {category=structural}: (int (+ ?f ?rest...) ?v) => (+ (int :f :v) (int (+ :rest...) :v))
+# Difference rule.
+@int-diff {category=structural}: (int (- ?f ?g) ?v) => (- (int :f :v) (int :g :v))
+# Constant multiple: pull a literal constant factor out (left and right).
+@int-const-mult-left {category=structural}: (int (* ?c:const ?f) ?v) => (* :c (int :f :v))
+@int-const-mult-right {category=structural}: (int (* ?f ?c:const) ?v) => (* :c (int :f :v))
+
+[table-power]
+# Power rule: int x^n dx = x^(n+1)/(n+1), n != -1. Exact-rational coefficient
+# via the exact folds (safe_div keeps 1/(n+1) a Fraction, never a float).
+@int-power {category=power}: (int (^ ?v ?n:const) ?v) => (* (^ :v (! + :n 1)) (! / 1 (! + :n 1))) when (! != :n -1)
+# int x dx = x^2/2 (the n=1 power case, given explicitly so x need not be x^1).
+# 1/2 is a rational LITERAL (an exact Fraction atom), not a division expr.
+@int-var {category=power}: (int ?v:var ?v) => (* (^ :v 2) 1/2)
+# int 1 dx = x: integral of the constant 1.
+@int-one {category=constant}: (int 1 ?v) => :v
+# int c dx = c*x for a literal constant c (c != the variable).
+@int-const {category=constant}: (int ?c:const ?v:var) => (* :c :v)
+
+[table-reciprocal]
+# int 1/x dx = ln|x|.
+@int-recip {category=log}: (int (/ 1 ?v) ?v) => (ln (abs :v))
+# int x^-1 dx = ln|x| (the n=-1 case excluded from the power rule).
+@int-power-neg1 {category=log}: (int (^ ?v -1) ?v) => (ln (abs :v))
+
+[table-exp-trig]
+# int e^x dx = e^x.
+@int-exp {category=exp}: (int (exp ?v) ?v) => (exp :v)
+# int sin x dx = -cos x.
+@int-sin {category=trig}: (int (sin ?v) ?v) => (- (cos :v))
+# int cos x dx = sin x.
+@int-cos {category=trig}: (int (cos ?v) ?v) => (sin :v)
