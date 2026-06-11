@@ -120,3 +120,46 @@ class TestCheckerTranscendental:
     def test_wrong_transcendental_rejected(self):
         checker = _load_checker()
         assert checker.is_derivative("(sin x)", "x", "(sin x)") is False
+
+
+def make_diff_engine():
+    """Load differentiation + algebra under combine_preludes(MATH_PRELUDE,
+    PREDICATE_PRELUDE), examples validated via the metadata sidecar. This is
+    the motivating pipeline, exercised end to end through example content.
+    (The engine has no with_theory builder; the theory drives the EXPLICIT
+    normalize finishing pass in differentiate() below, which is what produces
+    clean output.)"""
+    engine = (
+        RuleEngine()
+        .with_prelude(combine_preludes(MATH_PRELUDE, PREDICATE_PRELUDE))
+        .load_file(ALGEBRA_RULES)
+        .load_file(DIFF_RULES)
+    )
+    engine.load_metadata_json(DIFF_SIDECAR.read_text(), validate_examples=True)
+    return engine
+
+
+def differentiate(engine, src):
+    """Run the existing simplify driver (engine call) then a normalize
+    finishing pass under the arithmetic theory."""
+    theory = Theory.from_json(ARITH_THEORY.read_text())
+    simplified = engine(parse_sexpr(src))
+    return normalize(simplified, theory)
+
+
+class TestTheoryAndLoad:
+    def test_theory_declares_plus_times_ac(self):
+        # Reuses the Phase 2 examples/arithmetic.theory.json (its repeat
+        # declarations are what collect (+ x x) into (* 2 x)).
+        theory = Theory.from_json(ARITH_THEORY.read_text())
+        assert theory.is_ac("+") is True
+        assert theory.is_ac("*") is True
+        assert theory.identity("+") == 0
+        assert theory.identity("*") == 1
+        assert theory.annihilator("*") == 0
+
+    def test_rules_load_and_examples_validate(self):
+        # Loading the sidecar with validate_examples=True must not raise:
+        # every rule's example is a correct single-step rewrite.
+        engine = make_diff_engine()
+        assert len(engine) > 0
