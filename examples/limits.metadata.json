@@ -30,5 +30,17 @@
     "examples": [
       {"in": "(ln 1)", "out": "0"}
     ]
+  },
+  "lim-sinc": {
+    "reasoning": "The squeeze theorem gives the standard limit sin(x)/x -> 1 as x -> 0. A named identity used directly.",
+    "examples": [
+      {"in": "(lim (/ (sin x) x) x 0)", "out": "1"}
+    ]
+  },
+  "lim-vers": {
+    "reasoning": "lim (1 - cos x)/x = 0 as x -> 0 (the versine limit), a named result.",
+    "examples": [
+      {"in": "(lim (/ (- 1 (cos x)) x) x 0)", "out": "0"}
+    ]
   }
 }

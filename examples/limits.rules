@@ -28,3 +28,14 @@
 @fold-exp {category=fold-constant}: (exp ?x) => (! exp :x) when (! const? :x)
 # (ln folds via MATH_PRELUDE's natural-log op, which is named log.)
 @fold-ln {category=fold-constant}: (ln ?x) => (! log :x) when (! and (! const? :x) (! positive? :x))
+
+[known-limits]
+# Standard limits, named for paraphrasable training steps. Higher priority so
+# the search prefers the one-step identity. The patterns pin the exact form
+# (variable, point 0) the identity requires; repeated ?v must bind consistently.
+@lim-sinc[200] {category=limit-known}: (lim (/ (sin ?v:var) ?v) ?v 0) => 1
+@lim-vers[200] {category=limit-known}: (lim (/ (- 1 (cos ?v:var)) ?v) ?v 0) => 0
+
+# Algebraic 0/0 note: lim_{x->1}(x^2-1)/(x-1) = 2 closes via the L'Hopital +
+# differentiation + algebra pipeline already loaded in this engine (verified
+# by TestAlgebraicLimits); no dedicated factor/cancel rule is needed.

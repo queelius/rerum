@@ -97,9 +97,14 @@ class TestLHopital:
         assert res.solution == 1
         assert not contains_op(res.solution, {"lim"})
 
-    def test_sin_x_over_x_derivation_uses_dd(self):
+    def test_lhopital_derivation_uses_dd(self):
+        # A 0/0 form with NO named identity, so the search must take the
+        # L'Hopital path: lim_{x->0} (e^x - 1)/x = 1. (sin x / x closes via
+        # the one-step lim-sinc identity by design once known-limits load.)
         eng = _limits_engine()
-        res = _solve_limit(eng, "(lim (/ (sin x) x) x 0)")
+        res = _solve_limit(eng, "(lim (/ (- (exp x) 1) x) x 0)")
+        assert res.found is True
+        assert res.solution == 1
         rule_names = [s.metadata.name for s in res.derivation.steps]
         assert "lim-lhopital" in rule_names
         assert any(n and n.startswith("dd-") for n in rule_names)
@@ -110,3 +115,32 @@ class TestLHopital:
         res = _solve_limit(eng, "(lim (/ (- 1 (cos x)) x) x 0)")
         assert res.found is True
         assert res.solution == 0
+
+
+class TestKnownLimits:
+    def test_sin_x_over_x_known_limit_fires(self):
+        eng = _limits_engine()
+        res = _solve_limit(eng, "(lim (/ (sin x) x) x 0)")
+        assert res.found is True
+        assert res.solution == 1
+        names = [s.metadata.name for s in res.derivation.steps]
+        assert "lim-sinc" in names
+
+    def test_one_minus_cos_over_x_known_limit(self):
+        eng = _limits_engine()
+        res = _solve_limit(eng, "(lim (/ (- 1 (cos x)) x) x 0)")
+        assert res.found is True
+        assert res.solution == 0
+        names = [s.metadata.name for s in res.derivation.steps]
+        assert "lim-vers" in names
+
+
+class TestAlgebraicLimits:
+    def test_difference_of_squares_over_linear(self):
+        # lim_{x->1} (x^2 - 1)/(x - 1) = 2.
+        eng = _limits_engine()
+        res = _solve_limit(eng, "(lim (/ (- (^ x 2) 1) (- x 1)) x 1)",
+                           max_nodes=8000)
+        assert res.found is True
+        assert res.solution == 2
+        assert not contains_op(res.solution, {"lim"})
