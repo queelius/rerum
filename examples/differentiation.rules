@@ -1,0 +1,28 @@
+# Differentiation rules over the dd operator: ["dd", f, v] = d f / d v.
+# Load with combine_preludes(MATH_PRELUDE, PREDICATE_PRELUDE); compose with
+# algebra.rules and finish with the general normalize under
+# arithmetic.theory.json for clean output. Examples live in
+# differentiation.metadata.json (validated at load via
+# engine.load_metadata_json), because the DSL supports only {category=...}.
+# Priorities: partial-free guard [110] > base cases [100] > constant-power
+# and constant-base [60] > general power/log-diff [50].
+
+[partials]
+# A subexpression free of the differentiation variable differentiates to 0.
+# Highest priority so a v-free product/quotient/compound short-circuits to 0
+# before the structural rules below decompose it.
+@dd-free[110] "Free-of-v subexpression": (dd ?f ?v:var) => 0 when (! free-of? :f :v)
+
+[basics]
+# Constants and variables.
+@dd-const[100] "d/dv(c) = 0": (dd ?c:const ?v:var) => 0
+@dd-var-same[100] "d/dx(x) = 1": (dd ?x:var ?x) => 1
+@dd-var-diff[90] "d/dx(y) = 0 when y != x": (dd ?y:var ?x:var) => 0
+
+[linearity]
+# Sum, n-ary via rest-pattern.
+@dd-sum "Sum rule (n-ary)": (dd (+ ?f ?rest...) ?v:var) => (+ (dd :f :v) (dd (+ :rest...) :v))
+@dd-diff "Difference rule": (dd (- ?f ?g) ?v:var) => (- (dd :f :v) (dd :g :v))
+# Constant multiple (constant on either side).
+@dd-const-mult "Constant multiple (left)": (dd (* ?c:const ?f) ?v:var) => (* :c (dd :f :v))
+@dd-mult-const "Constant multiple (right)": (dd (* ?f ?c:const) ?v:var) => (* :c (dd :f :v))

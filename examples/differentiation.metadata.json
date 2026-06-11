@@ -1,0 +1,34 @@
+{
+  "dd-free": {
+    "category": "partial",
+    "examples": [{"in": "(dd (sin y) x)", "out": "0"}]
+  },
+  "dd-const": {
+    "category": "basic",
+    "examples": [{"in": "(dd 5 x)", "out": "0"}]
+  },
+  "dd-var-same": {
+    "category": "basic",
+    "examples": [{"in": "(dd x x)", "out": "1"}]
+  },
+  "dd-var-diff": {
+    "category": "basic",
+    "examples": [{"in": "(dd y x)", "out": "0"}]
+  },
+  "dd-sum": {
+    "category": "linearity",
+    "examples": [{"in": "(dd (+ x y) x)", "out": "(+ (dd x x) (dd (+ y) x))"}]
+  },
+  "dd-diff": {
+    "category": "linearity",
+    "examples": [{"in": "(dd (- x 5) x)", "out": "(- (dd x x) (dd 5 x))"}]
+  },
+  "dd-const-mult": {
+    "category": "linearity",
+    "examples": [{"in": "(dd (* 3 x) x)", "out": "(* 3 (dd x x))"}]
+  },
+  "dd-mult-const": {
+    "category": "linearity",
+    "examples": [{"in": "(dd (* x 3) x)", "out": "(* 3 (dd x x))"}]
+  }
+}

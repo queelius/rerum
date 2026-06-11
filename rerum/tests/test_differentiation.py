@@ -163,3 +163,44 @@ class TestTheoryAndLoad:
         # every rule's example is a correct single-step rewrite.
         engine = make_diff_engine()
         assert len(engine) > 0
+
+
+class TestBasicsAndLinearity:
+    def test_constant(self):
+        engine = make_diff_engine()
+        assert differentiate(engine, "(dd 5 x)") == 0
+
+    def test_variable_same(self):
+        engine = make_diff_engine()
+        assert differentiate(engine, "(dd x x)") == 1
+
+    def test_variable_other(self):
+        engine = make_diff_engine()
+        assert differentiate(engine, "(dd y x)") == 0
+
+    def test_sum(self):
+        engine = make_diff_engine()
+        checker = _load_checker()
+        out = differentiate(engine, "(dd (+ x x) x)")
+        assert out == 2
+        assert checker.is_derivative("(+ x x)", "x", format_sexpr(out)) is True
+
+    def test_difference(self):
+        engine = make_diff_engine()
+        checker = _load_checker()
+        out = differentiate(engine, "(dd (- x 5) x)")
+        assert out == 1
+        assert checker.is_derivative("(- x 5)", "x", format_sexpr(out)) is True
+
+    def test_constant_multiple(self):
+        engine = make_diff_engine()
+        checker = _load_checker()
+        out = differentiate(engine, "(dd (* 3 x) x)")
+        assert out == 3
+        assert checker.is_derivative("(* 3 x)", "x", format_sexpr(out)) is True
+
+    def test_nary_sum(self):
+        engine = make_diff_engine()
+        # d/dx(x + y + x) = 2 (y free of x -> 0); rest-pattern linearity.
+        out = differentiate(engine, "(dd (+ x y x) x)")
+        assert out == 2
