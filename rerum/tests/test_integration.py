@@ -57,3 +57,32 @@ class TestIntegrationRulesLoad:
             if meta.category in ("structural", "by-parts"):
                 continue
             assert meta.examples, f"rule {meta.name!r} has no examples"
+
+
+from fractions import Fraction
+
+
+class TestPowerRuleRational:
+    def test_power_rule_single_step_exact_coefficient(self):
+        eng = _integration_engine()
+        # apply_once applies one matching rule and returns (expr, metadata).
+        out, meta = eng.apply_once(["int", ["^", "x", 2], "x"])
+        assert meta is not None
+        assert meta.name == "int-power"
+        # x^3 * (1/3), with 1/3 an exact Fraction (Phase 3 rationals).
+        assert out == ["*", ["^", "x", 3], Fraction(1, 3)]
+
+    def test_power_rule_guarded_off_for_n_eq_neg1(self):
+        eng = _integration_engine()
+        # n = -1 must NOT match int-power (guard (! != :n -1)); it should
+        # match int-power-neg1 instead, giving ln|x|.
+        out, meta = eng.apply_once(["int", ["^", "x", -1], "x"])
+        assert meta is not None
+        assert meta.name == "int-power-neg1"
+        assert out == ["ln", ["abs", "x"]]
+
+    def test_power_rule_n5_coefficient(self):
+        eng = _integration_engine()
+        out, meta = eng.apply_once(["int", ["^", "x", 5], "x"])
+        assert meta.name == "int-power"
+        assert out == ["*", ["^", "x", 6], Fraction(1, 6)]
