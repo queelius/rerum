@@ -1,0 +1,19 @@
+# SKI combinator calculus over binary application (app f x). DEMONSTRATION.
+#
+# Three rules over the symbols S, K, I -- a TURING-COMPLETE rewrite system.
+# That is the point of this example: the set is NON-TERMINATING in general
+# (omega = (S I I)(S I I) reduces to itself forever), so it demonstrates
+# the engine's honest budget behavior: simplify(expr, max_steps=N) returns
+# the partially-reduced form instead of hanging, and the caller can see
+# the term is not in normal form.
+#
+# NO prelude, NO theory. examples metadata lives in ski.metadata.json.
+# Encoding: left-nested application, ((f x) y) == (app (app f x) y).
+
+[combinators]
+# I x = x: the identity combinator.
+@ski-i "I x = x": (app I ?x) => :x
+# K x y = x: the constant combinator (discards y).
+@ski-k "K x y = x": (app (app K ?x) ?y) => :x
+# S f g x = (f x) (g x): the substitution combinator.
+@ski-s "S f g x = (f x)(g x)": (app (app (app S ?f) ?g) ?x) => (app (app :f :x) (app :g :x))

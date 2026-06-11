@@ -1,0 +1,17 @@
+{
+  "ski-i": {
+    "category": "combinator",
+    "reasoning": "The identity combinator: I x reduces to x.",
+    "examples": [{"in": "(app I a)", "out": "a"}]
+  },
+  "ski-k": {
+    "category": "combinator",
+    "reasoning": "The constant combinator: K x y discards y and yields x.",
+    "examples": [{"in": "(app (app K a) b)", "out": "a"}]
+  },
+  "ski-s": {
+    "category": "combinator",
+    "reasoning": "The substitution combinator: S f g x duplicates the argument x into both function positions, (f x)(g x). Duplication is what makes the calculus Turing-complete and non-terminating in general.",
+    "examples": [{"in": "(app (app (app S f) g) a)", "out": "(app (app f a) (app g a))"}]
+  }
+}
