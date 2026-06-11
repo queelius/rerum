@@ -86,3 +86,27 @@ class TestLimitsRulesLoadAndValidate:
         eng = _limits_engine()
         names = [meta.name for _i, _r, meta in eng.iter_rules()]
         assert "lim-subst" in names
+
+
+class TestLHopital:
+    def test_sin_x_over_x(self):
+        # lim_{x->0} sin(x)/x is 0/0; L'Hopital -> lim cos(x)/1 = 1.
+        eng = _limits_engine()
+        res = _solve_limit(eng, "(lim (/ (sin x) x) x 0)")
+        assert res.found is True
+        assert res.solution == 1
+        assert not contains_op(res.solution, {"lim"})
+
+    def test_sin_x_over_x_derivation_uses_dd(self):
+        eng = _limits_engine()
+        res = _solve_limit(eng, "(lim (/ (sin x) x) x 0)")
+        rule_names = [s.metadata.name for s in res.derivation.steps]
+        assert "lim-lhopital" in rule_names
+        assert any(n and n.startswith("dd-") for n in rule_names)
+
+    def test_one_minus_cos_over_x(self):
+        # lim_{x->0} (1 - cos x)/x is 0/0; L'Hopital -> lim sin(x)/1 = 0.
+        eng = _limits_engine()
+        res = _solve_limit(eng, "(lim (/ (- 1 (cos x)) x) x 0)")
+        assert res.found is True
+        assert res.solution == 0

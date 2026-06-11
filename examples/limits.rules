@@ -12,3 +12,19 @@
 # those. The (! subst :f :v :a) skeleton substitutes v:=a; ordinary constant
 # folding (algebra.rules) then reduces the literal arithmetic in the same search.
 @lim-subst {category=limit-substitution}: (lim ?f ?v:var ?a) => (! subst :f :v :a) when (! defined-at? :f :v :a)
+
+[lhopital]
+# L'Hopital: for a 0/0 indeterminate quotient, differentiate top and bottom.
+# Reuses the differentiation rules (dd) loaded in the same engine: the (dd ...)
+# sub-terms are reduced by the search. Guarded to fire only on the 0/0 form.
+@lim-lhopital {category=limit-lhopital}: (lim (/ ?f ?g) ?v:var ?a) => (lim (/ (dd :f :v) (dd :g :v)) :v :a) when (! indeterminate? :f :g :v :a)
+
+[fold-transcendental]
+# After substitution a bare compound like (cos 0) must reduce to a literal.
+# Reduce a supported unary function of a constant to its value, guarded on a
+# constant argument, so a substituted limit closes. Data-driven, one rule per op.
+@fold-cos {category=fold-constant}: (cos ?x) => (! cos :x) when (! const? :x)
+@fold-sin {category=fold-constant}: (sin ?x) => (! sin :x) when (! const? :x)
+@fold-exp {category=fold-constant}: (exp ?x) => (! exp :x) when (! const? :x)
+# (ln folds via MATH_PRELUDE's natural-log op, which is named log.)
+@fold-ln {category=fold-constant}: (ln ?x) => (! log :x) when (! and (! const? :x) (! positive? :x))

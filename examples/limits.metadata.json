@@ -4,5 +4,31 @@
     "examples": [
       {"in": "(lim (+ x 1) x 2)", "out": "(+ 2 1)"}
     ]
+  },
+  "lim-lhopital": {
+    "reasoning": "For a 0/0 indeterminate quotient, L'Hopital's rule replaces lim f/g with lim f'/g'. We differentiate numerator and denominator using the same differentiation rules, then re-evaluate the limit. The indeterminate? guard ensures we only apply this to the 0/0 form.",
+    "examples": [
+      {"in": "(lim (/ (sin x) x) x 0)", "out": "(lim (/ (dd (sin x) x) (dd x x)) x 0)"}
+    ]
+  },
+  "fold-cos": {
+    "examples": [
+      {"in": "(cos 0)", "out": "1"}
+    ]
+  },
+  "fold-sin": {
+    "examples": [
+      {"in": "(sin 0)", "out": "0"}
+    ]
+  },
+  "fold-exp": {
+    "examples": [
+      {"in": "(exp 0)", "out": "1"}
+    ]
+  },
+  "fold-ln": {
+    "examples": [
+      {"in": "(ln 1)", "out": "0"}
+    ]
   }
 }
