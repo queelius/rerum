@@ -216,3 +216,54 @@ class TestSolveSemantics:
         res = solve(eng, "start", goal, theory=arith, max_nodes=50)
         assert res.found is True
         assert res.solution == ["+", "a", "b"]
+
+
+class TestSolveStepMetadataParity:
+    """Solve-built steps must carry the same situated fields the engine's
+    own emit sites stamp -- the corpus layer renders rationale into the
+    chain-of-thought, and sidecar 'reasoning' exists precisely for that."""
+
+    def test_solve_steps_carry_rationale_from_reasoning(self):
+        import json
+        from rerum.engine import RuleEngine
+        from rerum.solve import contains_op, solve
+
+        eng = RuleEngine.from_dsl("@collapse: (foo ?x) => :x")
+        eng.load_metadata_json(json.dumps({
+            "collapse": {"reasoning": "unwrap the foo shell",
+                         "examples": [{"in": "(foo a)", "out": "a"}]}}))
+        res = solve(eng, ["foo", "a"],
+                    lambda e: not contains_op(e, {"foo"}))
+        assert res.found is True
+        steps = res.derivation.steps
+        assert steps, "expected at least one step"
+        assert steps[-1].rationale == "unwrap the foo shell"
+
+    def test_solve_steps_fall_back_to_category(self):
+        from rerum.engine import RuleEngine
+        from rerum.solve import contains_op, solve
+
+        eng = RuleEngine.from_dsl(
+            "@collapse {category=structural}: (foo ?x) => :x")
+        res = solve(eng, ["foo", "a"],
+                    lambda e: not contains_op(e, {"foo"}))
+        assert res.found is True
+        assert res.derivation.steps[-1].rationale == "structural"
+
+    def test_training_record_carries_solve_rationale(self):
+        # The downstream payoff: a solve-driven corpus record names WHY.
+        import json
+        from rerum.engine import RuleEngine
+        from rerum.solve import contains_op, solve
+        from rerum.training import to_training_record
+
+        eng = RuleEngine.from_dsl("@collapse: (foo ?x) => :x")
+        eng.load_metadata_json(json.dumps({
+            "collapse": {"reasoning": "unwrap the foo shell",
+                         "examples": [{"in": "(foo a)", "out": "a"}]}}))
+        res = solve(eng, ["foo", "a"],
+                    lambda e: not contains_op(e, {"foo"}))
+        record = to_training_record(
+            res.derivation, problem="(foo a)", operator="foo", answer="a")
+        rationales = [step.get("rationale") for step in record["steps"]]
+        assert "unwrap the foo shell" in rationales

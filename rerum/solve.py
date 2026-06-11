@@ -107,6 +107,13 @@ def _make_step(metadata, before, after, label) -> RewriteStep:
         kwargs["bindings"] = label.get("bindings")
     if "path" in _STEP_PARAMS:
         kwargs["path"] = label.get("path")
+    if "rationale" in _STEP_PARAMS:
+        # Parity with the engine's own emit sites (rule_applied stamps
+        # rationale=metadata.reasoning or metadata.category): the sidecar
+        # 'reasoning' field exists precisely for paraphrasable derivation
+        # steps, and without this solve-driven corpora lose the WHY.
+        kwargs["rationale"] = (getattr(metadata, "reasoning", None)
+                               or getattr(metadata, "category", None))
     return RewriteStep(
         rule_index=label.get("rule_index", -1),
         metadata=metadata,
