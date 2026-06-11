@@ -188,3 +188,30 @@ class TestIntegrationByParts:
         assert res.found is True
         names = [s.metadata.name for s in res.derivation.steps]
         assert not any(n and n.startswith("int-byparts") for n in names)
+
+
+def _load_checker():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "calculus_checker", EXAMPLES_DIR / "calculus_checker.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestIntegrationNumericallyVerified:
+    @pytest.mark.parametrize("integrand", [
+        ["cos", "x"],
+        ["sin", "x"],
+        ["*", 2, "x"],
+        ["+", "x", ["cos", "x"]],
+        ["*", ["cos", ["^", "x", 2]], ["*", 2, "x"]],  # u-sub
+        ["*", "x", ["exp", "x"]],                       # by-parts
+    ])
+    def test_solve_result_differentiates_back(self, integrand):
+        eng = _integration_engine()
+        checker = _load_checker()
+        res = integrate(eng, integrand, "x", max_nodes=5000)
+        assert res.found is True
+        assert not contains_op(res.solution, {"int"})
+        assert checker.is_integral(integrand, "x", res.solution) is True

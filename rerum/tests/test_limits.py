@@ -144,3 +144,33 @@ class TestAlgebraicLimits:
         assert res.found is True
         assert res.solution == 2
         assert not contains_op(res.solution, {"lim"})
+
+
+def _load_checker():
+    spec = importlib.util.spec_from_file_location(
+        "calculus_checker", EXAMPLES / "calculus_checker.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestLimitsEndToEndVerified:
+    @pytest.mark.parametrize("body,point,answer", [
+        ("(+ x 1)", 2, 3),
+        ("(/ (sin x) x)", 0, 1),
+        ("(/ (- 1 (cos x)) x)", 0, 0),
+        ("(/ (- (^ x 2) 1) (- x 1))", 1, 2),
+    ])
+    def test_solve_and_is_limit_agree(self, body, point, answer):
+        eng = _limits_engine()
+        checker = _load_checker()
+        res = _solve_limit(eng, f"(lim {body} x {point})", max_nodes=8000)
+        assert res.found is True, f"solve failed to close {body}"
+        assert res.solution == answer
+        assert checker.is_limit(E(body), "x", point, answer) is True
+        # Derivation is reconstructible: replaying step.after reaches the
+        # solution.
+        current = res.derivation.initial
+        for step in res.derivation.steps:
+            current = step.after
+        assert current == res.solution

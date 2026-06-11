@@ -151,3 +151,88 @@ def is_derivative(expr, var, result, *, samples=8, tol=1e-6) -> bool:
             return False
 
     return checked > 0
+
+
+# ------------------------------------------------------------------
+# D2 validators: antiderivatives and limits. Same foundations as
+# is_derivative: the general numeval over NUMERIC_PRELUDE, with
+# NumevalDomainError as the skip channel and NumevalError as the
+# structural-failure channel.
+# ------------------------------------------------------------------
+
+def is_integral(integrand, var, result, *, samples=8, tol=1e-3) -> bool:
+    """True iff d/d(var)[result] matches ``integrand`` at sampled points.
+
+    Differentiates ``result`` NUMERICALLY (central finite difference via the
+    general numeval) and compares to the integrand at the same points. This
+    decouples integration verification from any symbolic dd rule set: a
+    correct antiderivative is recognized however it was produced. Sample
+    points where either side is out of domain are skipped
+    (``NumevalDomainError``); a structural failure (a leftover ``int`` head,
+    an unbound symbol -- ``NumevalError``) is a real failure. DOMAIN content;
+    the engine never imports this.
+    """
+    if isinstance(integrand, str):
+        integrand = parse_sexpr(integrand)
+    if isinstance(result, str):
+        result = parse_sexpr(result)
+
+    h = 1e-5
+    usable = 0
+    for i in range(samples):
+        x0 = 0.3 + 0.37 * i  # deterministic, away from 0 (1/x, ln poles)
+        try:
+            hi = _numeval(result, {var: x0 + h})
+            lo = _numeval(result, {var: x0 - h})
+            lhs = (hi - lo) / (2.0 * h)
+            rhs = _numeval(integrand, {var: x0})
+        except NumevalDomainError:
+            continue
+        except NumevalError:
+            return False
+        usable += 1
+        if abs(lhs - rhs) > max(tol, tol * abs(rhs)):
+            return False
+    return usable > 0
+
+
+def is_limit(expr, var, point, result, *,
+             eps_seq=(0.1, 0.01, 0.001, 1e-4, 1e-6, 1e-8), tol=1e-3) -> bool:
+    """True iff lim_{var->point} expr == result, by numeric two-sided approach.
+
+    Samples ``expr`` at var = point +/- eps for shrinking eps (both sides),
+    skipping samples that fail to evaluate (a 0/0 quotient AT the point is a
+    domain skip; so is an out-of-domain draw like sqrt of a negative).
+    Accepts iff at least one side is defined arbitrarily close to the point
+    and every defined side's closest sample is within tolerance of
+    ``result``. An entirely undefined side (one-sided limits at a domain
+    boundary) is not a counterexample; an expression that NEVER evaluates
+    anywhere yields False (any_defined stays False). The default ``eps_seq``
+    reaches 1e-8 because a limit converging like sqrt(eps) (e.g.
+    lim_{x->0+} sqrt(x)) only lands within ``tol`` for eps well below
+    tol**2. DOMAIN content.
+    """
+    if isinstance(expr, str):
+        expr = parse_sexpr(expr)
+
+    target = float(result)
+    any_defined = False
+    sides_ok = []
+    for sign in (-1.0, +1.0):
+        last_err = None
+        defined_here = False
+        for eps in eps_seq:
+            x = float(point) + sign * eps
+            try:
+                fval = _numeval(expr, {var: x})
+            except (NumevalDomainError, NumevalError):
+                continue
+            defined_here = True
+            any_defined = True
+            last_err = abs(fval - target)
+        if defined_here:
+            sides_ok.append(last_err is not None
+                            and last_err <= max(tol, abs(target) * tol))
+        else:
+            sides_ok.append(True)  # undefined side is not a counterexample
+    return any_defined and all(sides_ok)
