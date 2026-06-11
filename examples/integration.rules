@@ -45,3 +45,43 @@
 @int-sin {category=trig}: (int (sin ?v) ?v) => (- (cos :v))
 # int cos x dx = sin x.
 @int-cos {category=trig}: (int (cos ?v) ?v) => (sin :v)
+
+[u-substitution]
+# int g(inner) * inner' dx = G(inner), the chain rule in reverse, for the
+# table functions whose antiderivative G is known. inner = v^2, inner' = 2v.
+# Both factor orders are spelled out (matching is syntactic, not AC).
+@int-usub-cos-sq {category=u-substitution}: (int (* (cos (^ ?v 2)) (* 2 ?v)) ?v) => (sin (^ :v 2))
+@int-usub-cos-sq-rev {category=u-substitution}: (int (* (* 2 ?v) (cos (^ ?v 2))) ?v) => (sin (^ :v 2))
+@int-usub-sin-sq {category=u-substitution}: (int (* (sin (^ ?v 2)) (* 2 ?v)) ?v) => (- (cos (^ :v 2)))
+@int-usub-sin-sq-rev {category=u-substitution}: (int (* (* 2 ?v) (sin (^ ?v 2))) ?v) => (- (cos (^ :v 2)))
+@int-usub-exp-sq {category=u-substitution}: (int (* (exp (^ ?v 2)) (* 2 ?v)) ?v) => (exp (^ :v 2))
+@int-usub-exp-sq-rev {category=u-substitution}: (int (* (* 2 ?v) (exp (^ ?v 2))) ?v) => (exp (^ :v 2))
+
+# NOTE on the fresh-variable u-sub form the original plan sketched: a rule
+# whose skeleton repeats (fresh u) CANNOT route the inner integral through
+# the table, because multiple same-base (fresh u) markers in one skeleton
+# deliberately resolve to DISTINCT names (u, u1, ...), so the produced
+# (int (cos u) u1) never matches (int (cos ?v) ?v). Verified live; the
+# concrete collapsing rules above are the honest encoding. A general
+# substitution mechanism needs engine support (a subst marker or
+# search-introduces-subgoals), recorded as future work alongside the
+# general by-parts schema below.
+
+[by-parts]
+# int(x * e^x) dx = x*e^x - int(e^x) dx, by parts with u = x, dv = e^x dx.
+# Guarded to this product shape (left factor is the variable, right factor is
+# exp of the variable). The produced inner integral int(e^x) closes by int-exp.
+@int-byparts-x-exp {category=by-parts}: (int (* ?v (exp ?v)) ?v) => (- (* :v (exp :v)) (int (exp :v) :v))
+
+# General by-parts schema (reference; NOT active this phase):
+#   int(u * dv) dx = u*v - int(v * du) dx
+# needs a way to (a) compute v = int dv and du = dd u, and (b) introduce a
+# capture-avoiding fresh integration variable when u and v share names. A
+# pure embedded-subgoal encoding is expressible --
+#   (int (* ?u ?dv) ?v) => (- (* :u (int :dv :v)) (int (* (int :dv :v) (dd :u :v)) :v))
+# -- but it branches the search on EVERY product and needs the dd rules
+# co-loaded plus a cost function that rewards eliminating int nodes; the
+# boomerang family (int(e^x sin x), where parts twice reproduces the
+# original and one solves I = A - I algebraically) is beyond pure
+# rewriting entirely. Left as the measured frontier; the concrete rule
+# above is the active, tested, verifiable one.

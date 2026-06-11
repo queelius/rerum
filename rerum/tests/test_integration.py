@@ -151,3 +151,40 @@ class TestSolveDrivenIntegration:
         assert res.found is False
         assert res.solution is None
         assert res.explored <= 1
+
+
+class TestUSubstitution:
+    def test_int_2x_cos_x2_closes_to_sin_x2(self):
+        eng = _integration_engine()
+        # int(cos(x^2) * 2x) dx = sin(x^2) via u = x^2.
+        integrand = ["*", ["cos", ["^", "x", 2]], ["*", 2, "x"]]
+        res = integrate(eng, integrand, "x", max_nodes=3000)
+        assert res.found is True
+        assert res.solution == ["sin", ["^", "x", 2]]
+        assert not contains_op(res.solution, {"int"})
+
+    def test_usub_reversed_factor_order_also_closes(self):
+        eng = _integration_engine()
+        integrand = ["*", ["*", 2, "x"], ["cos", ["^", "x", 2]]]
+        res = integrate(eng, integrand, "x", max_nodes=3000)
+        assert res.found is True
+        assert res.solution == ["sin", ["^", "x", 2]]
+
+
+class TestIntegrationByParts:
+    def test_int_x_exp_x_closes_int_free(self):
+        eng = _integration_engine()
+        # int(x * e^x) dx = (x - 1) e^x. Assert int-free + numeric verify
+        # (Task I), not a specific normal form (no normalizer loaded).
+        integrand = ["*", "x", ["exp", "x"]]
+        res = integrate(eng, integrand, "x", max_nodes=5000)
+        assert res.found is True
+        assert not contains_op(res.solution, {"int"})
+
+    def test_by_parts_only_fires_on_its_product_shape(self):
+        eng = _integration_engine()
+        # Integrating cos still closes via the table, not via by-parts.
+        res = integrate(eng, ["cos", "x"], "x")
+        assert res.found is True
+        names = [s.metadata.name for s in res.derivation.steps]
+        assert not any(n and n.startswith("int-byparts") for n in names)

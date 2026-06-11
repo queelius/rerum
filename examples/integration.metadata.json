@@ -44,5 +44,40 @@
     "examples": [
       {"in": "(int (cos x) x)", "out": "(sin x)"}
     ]
+  },
+  "int-usub-cos-sq": {
+    "examples": [
+      {"in": "(int (* (cos (^ x 2)) (* 2 x)) x)", "out": "(sin (^ x 2))"}
+    ]
+  },
+  "int-usub-cos-sq-rev": {
+    "examples": [
+      {"in": "(int (* (* 2 x) (cos (^ x 2))) x)", "out": "(sin (^ x 2))"}
+    ]
+  },
+  "int-usub-sin-sq": {
+    "examples": [
+      {"in": "(int (* (sin (^ x 2)) (* 2 x)) x)", "out": "(- (cos (^ x 2)))"}
+    ]
+  },
+  "int-usub-sin-sq-rev": {
+    "examples": [
+      {"in": "(int (* (* 2 x) (sin (^ x 2))) x)", "out": "(- (cos (^ x 2)))"}
+    ]
+  },
+  "int-usub-exp-sq": {
+    "examples": [
+      {"in": "(int (* (exp (^ x 2)) (* 2 x)) x)", "out": "(exp (^ x 2))"}
+    ]
+  },
+  "int-usub-exp-sq-rev": {
+    "examples": [
+      {"in": "(int (* (* 2 x) (exp (^ x 2))) x)", "out": "(exp (^ x 2))"}
+    ]
+  },
+  "int-byparts-x-exp": {
+    "examples": [
+      {"in": "(int (* x (exp x)) x)", "out": "(- (* x (exp x)) (int (exp x) x))"}
+    ]
   }
 }
