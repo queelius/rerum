@@ -49,13 +49,15 @@
 [u-substitution]
 # int g(inner) * inner' dx = G(inner), the chain rule in reverse, for the
 # table functions whose antiderivative G is known. inner = v^2, inner' = 2v.
-# Both factor orders are spelled out (matching is syntactic, not AC).
-@int-usub-cos-sq {category=u-substitution}: (int (* (cos (^ ?v 2)) (* 2 ?v)) ?v) => (sin (^ :v 2))
-@int-usub-cos-sq-rev {category=u-substitution}: (int (* (* 2 ?v) (cos (^ ?v 2))) ?v) => (sin (^ :v 2))
-@int-usub-sin-sq {category=u-substitution}: (int (* (sin (^ ?v 2)) (* 2 ?v)) ?v) => (- (cos (^ :v 2)))
-@int-usub-sin-sq-rev {category=u-substitution}: (int (* (* 2 ?v) (sin (^ ?v 2))) ?v) => (- (cos (^ :v 2)))
-@int-usub-exp-sq {category=u-substitution}: (int (* (exp (^ ?v 2)) (* 2 ?v)) ?v) => (exp (^ :v 2))
-@int-usub-exp-sq-rev {category=u-substitution}: (int (* (* 2 ?v) (exp (^ ?v 2))) ?v) => (exp (^ :v 2))
+# ONE rule per function: the patterns match the THEORY-CANONICAL flat form
+# (* 2 v (g (^ v 2))) -- numbers before symbols before compounds -- and the
+# search runs with normalize_between under arithmetic.theory.json, so BOTH
+# surface factor orders normalize to this one shape before matching.
+# (Previously each rule was spelled twice, once per factor order; theory-
+# normalized search deleted the -rev family with zero engine code.)
+@int-usub-cos-sq {category=u-substitution}: (int (* 2 ?v (cos (^ ?v 2))) ?v) => (sin (^ :v 2))
+@int-usub-sin-sq {category=u-substitution}: (int (* 2 ?v (sin (^ ?v 2))) ?v) => (- (cos (^ :v 2)))
+@int-usub-exp-sq {category=u-substitution}: (int (* 2 ?v (exp (^ ?v 2))) ?v) => (exp (^ :v 2))
 
 # NOTE on the fresh-variable u-sub form the original plan sketched: a rule
 # whose skeleton repeats (fresh u) CANNOT route the inner integral through

@@ -95,10 +95,16 @@ def integrate(eng, integrand, var, *, max_nodes=2000):
     (or None on honest failure within budget), result.derivation is the
     labeled RewriteTrace, result.found says whether the search closed. The
     goal predicate "no int operator remains" is caller-supplied; the engine
-    supplies the general search.
+    supplies the general search. The arithmetic THEORY is threaded so
+    normalize_between canonicalizes nodes -- the u-sub rules match the one
+    canonical factor order instead of spelling every order out.
     """
+    from rerum.normalize import Theory
+    theory = Theory.from_json(
+        (EXAMPLES_DIR / "arithmetic.theory.json").read_text())
     goal = lambda e: not contains_op(e, {"int"})
-    return solve(eng, ["int", integrand, var], goal, max_nodes=max_nodes)
+    return solve(eng, ["int", integrand, var], goal, max_nodes=max_nodes,
+                 theory=theory, normalize_between=True)
 
 
 class TestSolveDrivenIntegration:
