@@ -86,3 +86,68 @@ class TestPowerRuleRational:
         out, meta = eng.apply_once(["int", ["^", "x", 5], "x"])
         assert meta.name == "int-power"
         assert out == ["*", ["^", "x", 6], Fraction(1, 6)]
+
+
+def integrate(eng, integrand, var, *, max_nodes=2000):
+    """Integrate `integrand` w.r.t. `var` by goal-directed search.
+
+    Returns the SolveResult: result.solution is the int-free antiderivative
+    (or None on honest failure within budget), result.derivation is the
+    labeled RewriteTrace, result.found says whether the search closed. The
+    goal predicate "no int operator remains" is caller-supplied; the engine
+    supplies the general search.
+    """
+    goal = lambda e: not contains_op(e, {"int"})
+    return solve(eng, ["int", integrand, var], goal, max_nodes=max_nodes)
+
+
+class TestSolveDrivenIntegration:
+    def test_int_2x_closes_to_int_free(self):
+        eng = _integration_engine()
+        # int(2x) dx -> x^2 (up to a constant-product normal form). Without a
+        # normalizer loaded, assert int-free + numeric verify rather than an
+        # exact normal form.
+        res = integrate(eng, ["*", 2, "x"], "x")
+        assert res.found is True
+        assert not contains_op(res.solution, {"int"})
+
+    def test_int_cos_closes_to_sin(self):
+        eng = _integration_engine()
+        res = integrate(eng, ["cos", "x"], "x")
+        assert res.found is True
+        assert res.solution == ["sin", "x"]
+
+    def test_int_sin_closes_to_neg_cos(self):
+        eng = _integration_engine()
+        res = integrate(eng, ["sin", "x"], "x")
+        assert res.found is True
+        assert res.solution == ["-", ["cos", "x"]]
+
+    def test_int_sum_decomposes_and_closes(self):
+        eng = _integration_engine()
+        # int(x + cos x) dx -> x^2/2 + sin x (int-free).
+        res = integrate(eng, ["+", "x", ["cos", "x"]], "x")
+        assert res.found is True
+        assert not contains_op(res.solution, {"int"})
+
+    def test_derivation_is_reconstructible(self):
+        eng = _integration_engine()
+        res = integrate(eng, ["cos", "x"], "x")
+        deriv = res.derivation
+        assert deriv.initial == ["int", ["cos", "x"], "x"]
+        assert deriv.final == res.solution
+        # Replaying step.after from initial reaches the solution.
+        current = deriv.initial
+        for step in deriv.steps:
+            current = step.after
+        assert current == res.solution
+        names = [s.metadata.name for s in deriv.steps]
+        assert "int-cos" in names
+
+    def test_honest_failure_on_tiny_budget(self):
+        eng = _integration_engine()
+        # int(x + cos x) needs several expansions; max_nodes=1 cannot close.
+        res = integrate(eng, ["+", "x", ["cos", "x"]], "x", max_nodes=1)
+        assert res.found is False
+        assert res.solution is None
+        assert res.explored <= 1

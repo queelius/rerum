@@ -6,8 +6,14 @@
 # JSON-only); this file carries {category=...} annotations only.
 
 [linearity]
-# Sum rule (variadic via rest-pattern): split an integral of a sum.
-@int-sum {category=structural}: (int (+ ?f ?rest...) ?v) => (+ (int :f :v) (int (+ :rest...) :v))
+# Sum rule (variadic via rest-pattern): split an integral of a sum. The
+# pattern requires >= 2 operands and the splitter's tail is unwrapped by
+# int-sum-one, so the degenerate empty sum (int (+) v) -- which nothing
+# could close, stranding the search -- never forms. (Differentiation's
+# rest-pattern linearity has the same latent shape but is rescued by its
+# top-priority free-of? guard; integration has no analogous escape.)
+@int-sum {category=structural}: (int (+ ?f ?g ?rest...) ?v) => (+ (int :f :v) (int (+ :g :rest...) :v))
+@int-sum-one {category=structural}: (int (+ ?f) ?v) => (int :f :v)
 # Difference rule.
 @int-diff {category=structural}: (int (- ?f ?g) ?v) => (- (int :f :v) (int :g :v))
 # Constant multiple: pull a literal constant factor out (left and right).
