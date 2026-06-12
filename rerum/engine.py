@@ -51,6 +51,7 @@ import json
 import random
 import re
 from collections import deque
+from fractions import Fraction
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Union, Iterator, Set, Callable, Any
 
@@ -77,6 +78,7 @@ from .hooks import (
 # Expression model (parse_sexpr, format_sexpr, expr_to_tuple, E) lives in
 # `expr.py`. Re-exported below for backward compatibility.
 from .expr import (
+    parse_rational_token,
     parse_sexpr,
     format_sexpr,
     E,
@@ -1110,6 +1112,38 @@ def load_rules_from_file(
         )
 
 
+def _expr_to_jsonable(expr):
+    """Encode an expression for the JSON rule format.
+
+    JSON has no Fraction: a Fraction atom is encoded as its rational-literal
+    token (``Fraction(1, 3)`` -> ``"1/3"``), exactly the form the text layer
+    parses back to the same atom. Lists recurse; everything else is already
+    JSON-native.
+    """
+    if isinstance(expr, Fraction):
+        return f"{expr.numerator}/{expr.denominator}"
+    if isinstance(expr, list):
+        return [_expr_to_jsonable(e) for e in expr]
+    return expr
+
+
+def _expr_from_jsonable(expr):
+    """Decode an expression from the JSON rule format.
+
+    A string atom shaped like a rational-literal token (``"1/3"``) decodes
+    to the exact Fraction atom -- the inverse of ``_expr_to_jsonable``, and
+    the same lexical rule the text parser applies. (Post-rational-literals
+    a SYMBOL of that shape is not constructible from text, so the token
+    unambiguously means the number.)
+    """
+    if isinstance(expr, str):
+        rat = parse_rational_token(expr)
+        return rat if rat is not None else expr
+    if isinstance(expr, list):
+        return [_expr_from_jsonable(e) for e in expr]
+    return expr
+
+
 def load_rules_from_json(text: str) -> List[Tuple[RuleMetadata, List]]:
     """
     Load rules from JSON text.
@@ -1137,8 +1171,8 @@ def load_rules_from_json(text: str) -> List[Tuple[RuleMetadata, List]]:
 
     for rule in data.get('rules', []):
         if isinstance(rule, dict):
-            pattern = rule['pattern']
-            skeleton = rule['skeleton']
+            pattern = _expr_from_jsonable(rule['pattern'])
+            skeleton = _expr_from_jsonable(rule['skeleton'])
 
             # Known keys = the RuleMetadata fields (derived from its signature,
             # see _METADATA_FIELDS) plus the two structural keys a raw rule dict
@@ -1201,7 +1235,8 @@ def load_rules_from_json(text: str) -> List[Tuple[RuleMetadata, List]]:
             )
         else:
             metadata = RuleMetadata()
-            pattern, skeleton = rule[0], rule[1]
+            pattern = _expr_from_jsonable(rule[0])
+            skeleton = _expr_from_jsonable(rule[1])
         rules.append((metadata, [pattern, skeleton]))
 
     return rules
@@ -3285,8 +3320,8 @@ class RuleEngine:
             if _is_bidirectional_pair(self._metadata, i):
                 base_name, base_description = _strip_bidirectional_naming(meta)
                 rule_dict: Dict = {
-                    "pattern": pattern,
-                    "skeleton": skeleton,
+                    "pattern": _expr_to_jsonable(pattern),
+                    "skeleton": _expr_to_jsonable(skeleton),
                     "bidirectional": True,
                 }
                 if base_name:
@@ -3315,8 +3350,8 @@ class RuleEngine:
                 continue
 
             rule_dict = {
-                "pattern": pattern,
-                "skeleton": skeleton,
+                "pattern": _expr_to_jsonable(pattern),
+                "skeleton": _expr_to_jsonable(skeleton),
             }
             if meta.name:
                 rule_dict["name"] = meta.name

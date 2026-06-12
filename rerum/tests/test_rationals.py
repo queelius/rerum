@@ -268,3 +268,45 @@ class TestRationalLiterals:
         sidecar = json.dumps({"p": {"examples": [
             {"in": "(intp (^ x 2) x)", "out": "(* (^ x 3) 1/3)"}]}})
         eng.load_metadata_json(sidecar, validate_examples=True)  # must not raise
+
+
+class TestFractionJsonRoundTrip:
+    """Persistence parity for rational literals: a Fraction atom in a rule
+    must survive to_json -> load_rules_from_json exactly (it previously
+    CRASHED to_json, and a 'p/q' string in JSON stayed an inert symbol
+    that rendered identically to the real Fraction but computed nothing)."""
+
+    def test_to_json_with_fraction_skeleton_does_not_crash(self):
+        from rerum.engine import RuleEngine
+        eng = RuleEngine.from_dsl("@third: (third ?x) => (* :x 1/3)")
+        js = eng.to_json()
+        assert '"1/3"' in js  # encoded as the rational-literal string
+
+    def test_round_trip_restores_the_fraction_atom(self):
+        from rerum.engine import RuleEngine, load_rules_from_json
+        eng = RuleEngine.from_dsl("@third: (third ?x) => (* :x 1/3)")
+        rules = load_rules_from_json(eng.to_json())
+        (_meta, (pattern, skeleton)), = rules
+        assert skeleton == ["*", [":", "x"], Fraction(1, 3)]
+        assert isinstance(skeleton[2], Fraction)
+
+    def test_reloaded_rule_computes(self):
+        from rerum.engine import RuleEngine
+        eng = RuleEngine.from_dsl("@third: (third ?x) => (* :x 1/3)")
+        eng2 = RuleEngine().load_rules_from_json(eng.to_json())
+        out = eng2(["third", 6])
+        # (* 6 1/3): stays symbolic without a prelude, but the Fraction
+        # ATOM must be there (not an inert string).
+        assert out == ["*", 6, Fraction(1, 3)]
+        assert isinstance(out[2], Fraction)
+
+    def test_rulestore_round_trip(self, tmp_path):
+        from rerum.engine import RuleEngine
+        from rerum.mcp.persistence import RuleStore
+        eng = RuleEngine.from_dsl("@third: (third ?x) => (* :x 1/3)")
+        store = RuleStore(root=str(tmp_path))
+        store.save_ruleset(eng, "rat")
+        eng2 = RuleEngine()
+        store.load_ruleset(eng2, "rat")
+        out = eng2(["third", 6])
+        assert out == ["*", 6, Fraction(1, 3)]

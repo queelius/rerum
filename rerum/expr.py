@@ -123,18 +123,10 @@ def parse_sexpr(s: str) -> ExprType:
         except ValueError:
             pass
 
-    # Rational literal: p/q with integer numerator and denominator parses to
-    # an exact Fraction ATOM (Scheme-style), the round-trip form of
-    # ``format_sexpr(Fraction(1, 3)) == "1/3"``. Narrowed through
-    # ``coerce_number`` so an int-valued literal like 4/2 becomes the int 2
-    # (the engine invariant: no int-valued Fraction atoms). A zero
-    # denominator is not a number and falls through to a plain symbol, as
-    # does anything non-integer around the slash (x/y, 1/x, 1/2/3).
-    if "/" in s:
-        num_s, _, den_s = s.partition("/")
-        digits = num_s[1:] if num_s.startswith("-") else num_s
-        if digits.isdigit() and den_s.isdigit() and int(den_s) != 0:
-            return coerce_number(Fraction(int(num_s), int(den_s)))
+    # Rational literal: p/q (see parse_rational_token).
+    rat = parse_rational_token(s)
+    if rat is not None:
+        return rat
 
     # Pattern variable syntax conversion
     if s.startswith('?'):
@@ -187,6 +179,26 @@ def parse_sexpr(s: str) -> ExprType:
 
     # Plain symbol
     return s
+
+
+def parse_rational_token(s: str):
+    """Parse a rational-literal token ``p/q`` to its exact number, or None.
+
+    The single definition of the rational-literal lexical form, used by
+    ``parse_sexpr`` (text atoms) AND the JSON rule loader (string atoms in
+    persisted rules -- the JSON encoding of a Fraction is this same token).
+    Integer numerator and denominator only; narrowed through
+    ``coerce_number`` so an int-valued literal like ``4/2`` becomes the
+    int 2. A zero denominator or anything non-integer around the slash
+    (``x/y``, ``1/x``, ``1/2/3``) yields None (a plain symbol).
+    """
+    if not isinstance(s, str) or "/" not in s:
+        return None
+    num_s, _, den_s = s.partition("/")
+    digits = num_s[1:] if num_s.startswith("-") else num_s
+    if digits.isdigit() and den_s.isdigit() and int(den_s) != 0:
+        return coerce_number(Fraction(int(num_s), int(den_s)))
+    return None
 
 
 def format_sexpr(expr: ExprType, dsl_syntax: bool = True) -> str:
