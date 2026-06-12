@@ -7,7 +7,28 @@
 
 **Rewriting Expressions via Rules Using Morphisms**
 
-A pattern matching and term rewriting library for symbolic computation in Python.
+A pattern matching and term rewriting library for symbolic computation in
+Python. One GENERAL engine -- rules are data, domains are content:
+
+- **Rewriting**: a DSL for rewrite rules (guards, priorities, groups,
+  bidirectional `<=>`), fixpoint/bottomup/topdown strategies, full traces.
+- **Equivalence reasoning**: enumerate equivalence classes, prove equality
+  by bidirectional search, minimize under cost functions.
+- **Goal-directed search** (`solve`): best-first search with caller-supplied
+  goals and per-operator costs, for non-confluent rule sets.
+- **Theories** (`normalize`): declare operators associative-commutative with
+  identities/annihilators as JSON data; get canonical forms with no engine
+  changes per domain.
+- **Numeric verification** (`numeval`, `numeric_equiv`): evaluate ground
+  terms over a prelude; check expression equivalence by sampling.
+- **Training corpora** (`training`): render derivations as machine-checkable
+  JSONL records and natural-language chains of thought.
+- **MCP server** (`rerum-mcp`): 19 typed tools exposing the engine to LLM
+  agents, including an agentic loop where the model proposes rules.
+- **A domain library under `examples/`**: calculus (differentiation,
+  integration, limits -- numerically certified), boolean algebra, set
+  algebra, Peano arithmetic, SKI combinators. The engine names no domain
+  operator; every domain is rules + data the engine loads.
 
 ## Installation
 
@@ -384,6 +405,125 @@ Under `assoc + commute`, the class of an `n`-term sum has exactly
 prefer `prove_equal` with a budget over full enumeration. See the
 [equivalence guide](https://queelius.github.io/rerum/equivalence/) and
 `experiments/` for benchmarks.
+
+## Goal-Directed Search
+
+Confluent rule sets reduce to a fixpoint; non-confluent ones (where rules
+COMPETE -- integration is the classic case) need search with backtracking:
+
+```python
+from rerum.solve import solve, contains_op
+
+# Goal: no `int` operator remains. The goal is YOURS; the engine just
+# searches. Honest failure: found=False within budget, never a hang.
+result = solve(engine, ["int", ["cos", "x"], "x"],
+               lambda e: not contains_op(e, {"int"}),
+               max_nodes=2000)
+result.found       # True
+result.solution    # ["sin", "x"]
+result.derivation  # a labeled RewriteTrace
+```
+
+`cost_fn` (or per-operator weights via `rerum.optimize.make_op_cost_fn`)
+steers best-first order; `theory=` + `normalize_between=True` canonicalizes
+nodes between steps so rules can match one canonical form instead of
+spelling out every operand order.
+
+## Theories and Canonical Forms
+
+Operator signatures are DATA, not engine code. Declare which operators are
+associative-commutative, their identities and annihilators, in JSON:
+
+```python
+from rerum.normalize import Theory, normalize
+
+theory = Theory.from_json('{"+": {"ac": true, "identity": 0},'
+                          ' "*": {"ac": true, "identity": 1,'
+                          '       "annihilator": 0}}')
+normalize(["+", "b", "a", 0], theory)   # ["+", "a", "b"]
+```
+
+The same machinery serves arithmetic, boolean algebra
+(`examples/boolean.theory.json`), and set algebra
+(`examples/sets.theory.json`) -- the engine never knows which.
+
+## Numeric Evaluation and Verification
+
+```python
+from rerum.numeval import numeval, numeric_equiv
+from rerum import MATH_PRELUDE
+
+numeval(["+", "x", 1], {"x": 2}, MATH_PRELUDE)          # 3
+
+# Are two forms equivalent? Sample points from ranges (DATA); domain
+# errors skip the point; all-skipped is False, never a vacuous True.
+numeric_equiv(["*", "x", 2], ["+", "x", "x"],
+              {"x": (0.5, 2.0)}, MATH_PRELUDE)          # True
+```
+
+Exact rationals are first-class: `1/3` is a rational LITERAL parsing to
+`Fraction(1, 3)` (and formatting back to `1/3` -- the round-trip is exact).
+
+## Rule Metadata and Validated Examples
+
+Rules carry metadata -- `category`, `reasoning`, and per-rule `{in, out}`
+examples validated at load time (a wrong example fails the load):
+
+```python
+engine.load_metadata_json('''{
+  "add-zero": {
+    "reasoning": "Adding zero changes nothing.",
+    "examples": [{"in": "(+ a 0)", "out": "a"}]
+  }
+}''')
+```
+
+Traces carry the reasoning into derivations (`step.rationale`), and the
+training layer renders it into chains of thought.
+
+## Training Corpora
+
+```python
+from rerum.training import to_training_record, to_prose
+
+result, trace = engine.simplify(expr, trace=True)
+to_prose(trace)             # deterministic natural-language derivation
+to_training_record(trace, problem="(+ x 0)", operator="+", answer="x")
+                            # machine-checkable JSONL record
+```
+
+`generate_corpus` streams records from a caller-supplied driver and
+checker -- see `examples/calculus_checker.py` for a numeric checker that
+certifies every derivative in a corpus.
+
+## MCP Server
+
+```bash
+pip install "rerum[mcp]"
+rerum-mcp   # stdio server
+```
+
+19 typed tools (schemas derived from the handler signatures): rule
+authoring and persistence, simplify/apply/equivalents/prove/minimize,
+goal-directed `solve_goal` (goals and costs as data), numeric verification
+(`check_numeric_equiv`), and `solve_assisted` -- an agentic loop where the
+client LLM proposes rules when the engine is stuck (via the MCP sampling
+capability). The server holds NO domain logic; a test suite enforces it.
+
+## The Domain Library (`examples/`)
+
+Every domain is rules + data the engine loads -- the repository's standing
+proof that the engine is general:
+
+| Domain | Files | Highlight |
+|---|---|---|
+| Differentiation | `differentiation.rules` + sidecar | 26 rules; partials via a `free-of?` guard; every result numerically certified |
+| Integration | `integration.rules` + sidecar | solve-driven (non-confluent); exact-rational power rule; u-sub via theory-canonical matching; by-parts |
+| Limits | `limits.rules` + `limits_fold_ops.py` | L'Hopital REUSES the differentiation rules in the same engine |
+| Boolean algebra | `boolean.rules` + theory | truth-table test certifies every rule; no prelude |
+| Set algebra | `sets.rules` + theory | rule-for-rule isomorphic to boolean: the swap test as a diff |
+| Peano arithmetic | `peano.rules` | computation from PURE rewriting: 5*5=25 with an empty prelude |
+| SKI combinators | `ski.rules` | Turing-complete in 3 rules; honest non-termination under budgets |
 
 ## API Reference
 
