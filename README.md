@@ -634,9 +634,11 @@ from rerum import rewriter, match, instantiate, parse_sexpr, format_sexpr
 simplify = rewriter(rules, fold_funcs=ARITHMETIC_PRELUDE)
 result = simplify(expr)
 
-# Pattern matching
-bindings = match(pattern, expr, [])
-if bindings != "failed":
+# Pattern matching: match returns Bindings (truthy) or NoMatch (falsy).
+# (The pre-0.5 "failed" string sentinel is gone -- use truthiness.)
+from rerum.rewriter import wrap_bindings
+bindings = match(pattern, expr, wrap_bindings({}))
+if bindings:
     result = instantiate(skeleton, bindings, fold_funcs)
 
 # S-expression parsing

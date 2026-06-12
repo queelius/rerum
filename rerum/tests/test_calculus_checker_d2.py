@@ -101,3 +101,22 @@ class TestIsLimit:
         # lim_{x->0+} sqrt(x) = 0; the x<0 side is a domain error and must
         # not be treated as a counterexample.
         assert c.is_limit(["sqrt", "x"], "x", 0, 0) is True
+
+
+class TestIsLimitCancellationRobustness:
+    def test_second_order_limit_survives_cancellation(self):
+        # lim_{x->0} (1 - cos x)/x^2 = 1/2: at eps=1e-8 the numerator
+        # underflows to 0 (catastrophic cancellation), so judging by the
+        # smallest-eps error alone wrongly rejected this correct limit.
+        # The verdict uses the MEDIAN of the smallest defined errors.
+        c = _load_checker()
+        expr = ["/", ["-", 1, ["cos", "x"]], ["^", "x", 2]]
+        assert c.is_limit(expr, "x", 0, 0.5) is True
+
+    def test_wrong_target_still_rejected_despite_cancellation(self):
+        # The same expression with the WRONG target 0: cancellation at
+        # 1e-8 makes that single sample agree, but the median over the
+        # approach does not.
+        c = _load_checker()
+        expr = ["/", ["-", 1, ["cos", "x"]], ["^", "x", 2]]
+        assert c.is_limit(expr, "x", 0, 0) is False

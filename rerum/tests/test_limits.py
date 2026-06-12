@@ -174,3 +174,15 @@ class TestLimitsEndToEndVerified:
         for step in res.derivation.steps:
             current = step.after
         assert current == res.solution
+
+
+class TestLnLimits:
+    def test_ln_limit_solves(self):
+        # lim_{x->1} ln(x) = 0. defined-at? evaluates via numeval, whose
+        # prelude must know the rule files' op NAME ln (MATH_PRELUDE's
+        # natural log is named log) -- without the alias this limit was
+        # silently unsolvable (found=False) and fold-ln was dead.
+        eng = _limits_engine()
+        res = _solve_limit(eng, "(lim (ln x) x 1)")
+        assert res.found is True
+        assert res.solution == 0

@@ -13,7 +13,20 @@ non-evaluable side is not provably indeterminate).
 import math
 
 from rerum.numeval import numeval
-from rerum.rewriter import MATH_PRELUDE
+from rerum.rewriter import MATH_PRELUDE, combine_preludes, unary_only
+
+# The evaluation prelude for defined-at? / indeterminate? must know every
+# op NAME the rule files use: the limits/differentiation rules emit ln
+# (MATH_PRELUDE's natural log is named log) and sec/csc/cot (from the
+# trig derivatives). Without the aliases, defined-at? silently answered
+# False for any ln-containing limit -- lim (ln x) x->1 was unsolvable and
+# fold-ln was dead code.
+_EVAL_PRELUDE = combine_preludes(MATH_PRELUDE, {
+    "ln": unary_only(math.log),
+    "sec": unary_only(lambda x: 1.0 / math.cos(x)),
+    "csc": unary_only(lambda x: 1.0 / math.sin(x)),
+    "cot": unary_only(lambda x: math.cos(x) / math.sin(x)),
+})
 
 
 def _subst_expr(body, var, value):
@@ -40,7 +53,7 @@ def _defined_at(args):
         return False
     body, var, point = args
     try:
-        val = numeval(_subst_expr(body, var, point), {}, MATH_PRELUDE)
+        val = numeval(_subst_expr(body, var, point), {}, _EVAL_PRELUDE)
     except Exception:
         return False
     try:
@@ -56,8 +69,8 @@ def _indeterminate(args):
         return False
     num, den, var, point = args
     try:
-        n = numeval(_subst_expr(num, var, point), {}, MATH_PRELUDE)
-        d = numeval(_subst_expr(den, var, point), {}, MATH_PRELUDE)
+        n = numeval(_subst_expr(num, var, point), {}, _EVAL_PRELUDE)
+        d = numeval(_subst_expr(den, var, point), {}, _EVAL_PRELUDE)
     except Exception:
         return False
     try:

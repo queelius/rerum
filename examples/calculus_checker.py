@@ -219,20 +219,26 @@ def is_limit(expr, var, point, result, *,
     any_defined = False
     sides_ok = []
     for sign in (-1.0, +1.0):
-        last_err = None
-        defined_here = False
+        errs = []
         for eps in eps_seq:
             x = float(point) + sign * eps
             try:
                 fval = _numeval(expr, {var: x})
             except (NumevalDomainError, NumevalError):
                 continue
-            defined_here = True
             any_defined = True
-            last_err = abs(fval - target)
-        if defined_here:
-            sides_ok.append(last_err is not None
-                            and last_err <= max(tol, abs(target) * tol))
+            errs.append(abs(fval - target))
+        if errs:
+            # Judge by the MEDIAN of the smallest defined epsilons (up to
+            # three), not the single smallest: at eps ~ 1e-8 catastrophic
+            # float cancellation can corrupt a CORRECT limit (e.g.
+            # (1 - cos x)/x^2 underflows to 0/1e-16), while a WRONG target
+            # can coincidentally agree at one corrupted point. The median
+            # over the approach tolerates one bad sample in either
+            # direction.
+            tail = sorted(errs[-3:])
+            median = tail[len(tail) // 2]
+            sides_ok.append(median <= max(tol, abs(target) * tol))
         else:
             sides_ok.append(True)  # undefined side is not a counterexample
     return any_defined and all(sides_ok)
