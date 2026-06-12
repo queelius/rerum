@@ -193,15 +193,21 @@ class TestSolveSemantics:
 
     def test_rewrites_at_child_position_with_path_label(self):
         # The matching redex is nested: only the child `target` is rewritten,
-        # exercising the child-position recursion in the edge generator. The
-        # situated step records the child path, per the Done-When contract.
+        # exercising the child-position recursion in the edge generator.
+        # CONTRACT (corrected): solve steps carry WHOLE search states as
+        # before/after, so path is [] -- the original Phase 3 behavior
+        # stamped the redex-local path [1] on whole-expression steps, which
+        # made to_global_sequence splice the whole state INTO itself and
+        # fabricate nonexistent intermediates.
         eng = _engine("@t: target => done\n")
         goal = lambda e: e == ["wrap", "done"]
         result = solve(eng, ["wrap", "target"], goal, max_nodes=50)
         assert result  # truthy iff found
         assert result.solution == ["wrap", "done"]
         step = result.derivation.steps[-1]
-        assert step.path == [1]  # the child position that was rewritten
+        assert step.path == []  # whole-state step: splices at the root
+        assert step.before == ["wrap", "target"]
+        assert step.after == ["wrap", "done"]
 
     def test_normalize_between_with_theory_canonicalizes_nodes(self):
         # Without a theory, normalize_between is a no-op: the produced node
@@ -267,3 +273,40 @@ class TestSolveStepMetadataParity:
             res.derivation, problem="(foo a)", operator="foo", answer="a")
         rationales = [step.get("rationale") for step in record["steps"]]
         assert "unwrap the foo shell" in rationales
+
+
+class TestSubPositionDerivationContract:
+    """Regression for the path/before-after contract violation: solve steps
+    carry WHOLE expressions, so path must be [] -- a redex-local path made
+    to_global_sequence fabricate states like (top (top (bar a))) whenever a
+    rule fired below the root. All prior tests used root-level rewrites."""
+
+    def test_sub_root_rewrite_global_sequence_is_truthful(self):
+        from rerum.engine import RuleEngine
+        from rerum.solve import contains_op, solve
+
+        eng = RuleEngine.from_dsl("@inner: (foo ?x) => (bar :x)")
+        # The rewrite fires INSIDE (top ...): sub-root position.
+        res = solve(eng, ["top", ["foo", "a"]],
+                    lambda e: not contains_op(e, {"foo"}))
+        assert res.found is True
+        assert res.solution == ["top", ["bar", "a"]]
+        seq = res.derivation.to_global_sequence()
+        assert seq[0]["before_root"] == ["top", ["foo", "a"]]
+        assert seq[-1]["after_root"] == ["top", ["bar", "a"]]
+        for k in range(len(seq) - 1):
+            assert seq[k]["after_root"] == seq[k + 1]["before_root"]
+
+    def test_multi_level_chain(self):
+        from rerum.engine import RuleEngine
+        from rerum.solve import contains_op, solve
+
+        eng = RuleEngine.from_dsl(
+            "@a: (foo ?x) => (bar :x)\n@b: (bar ?x) => :x")
+        res = solve(eng, ["wrap", ["wrap", ["foo", "c"]]],
+                    lambda e: not contains_op(e, {"foo", "bar"}))
+        assert res.found is True
+        seq = res.derivation.to_global_sequence()
+        assert seq[-1]["after_root"] == res.solution
+        for k in range(len(seq) - 1):
+            assert seq[k]["after_root"] == seq[k + 1]["before_root"]

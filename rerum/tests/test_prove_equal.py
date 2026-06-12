@@ -603,3 +603,24 @@ class TestProveEqualLabeledPaths:
                 assert s.rule_id is not None
                 assert s.bindings is not None
                 assert s.direction in ("fwd", "rev")
+
+
+class TestSubPositionProofSteps:
+    """Proof-path steps carry whole expressions; their path must be [] so
+    reconstructed derivations (minimize's in particular) replay truthfully
+    for sub-root rewrites."""
+
+    def test_minimize_derivation_chains_for_nested_redex(self):
+        from rerum.engine import RuleEngine
+
+        eng = RuleEngine.from_dsl(
+            "@mul1: (* ?x 1) <=> :x\n@comm: (* ?x ?y) <=> (* :y :x)")
+        # The reducing rewrite fires INSIDE (+ ... y): sub-root position.
+        opt = eng.minimize(["+", ["*", "x", 1], "y"])
+        assert opt.expr == ["+", "x", "y"]
+        if opt.derivation is not None:
+            seq = opt.derivation.to_global_sequence()
+            assert seq[0]["before_root"] == ["+", ["*", "x", 1], "y"]
+            assert seq[-1]["after_root"] == ["+", "x", "y"]
+            for k in range(len(seq) - 1):
+                assert seq[k]["after_root"] == seq[k + 1]["before_root"]

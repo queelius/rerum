@@ -106,7 +106,14 @@ def _make_step(metadata, before, after, label) -> RewriteStep:
     if "bindings" in _STEP_PARAMS:
         kwargs["bindings"] = label.get("bindings")
     if "path" in _STEP_PARAMS:
-        kwargs["path"] = label.get("path")
+        # The step's before/after are WHOLE search states (and with
+        # normalize_between the label's redex path may not even index into
+        # the canonicalized parent), so the only contract-honest path is
+        # []: to_global_sequence splices `after` at `path`, and stamping
+        # the redex-local path here fabricated nonexistent intermediate
+        # states for every sub-root rewrite -- corrupting solve-driven
+        # traces, MCP solve_goal responses, and training corpora.
+        kwargs["path"] = []
     if "rationale" in _STEP_PARAMS:
         # Parity with the engine's own emit sites (rule_applied stamps
         # rationale=metadata.reasoning or metadata.category): the sidecar

@@ -3781,7 +3781,15 @@ class RuleEngine:
                         rule_id=label.get("rule_id"),
                         direction=label.get("direction"),
                         bindings=label.get("bindings"),
-                        path=label.get("path"),
+                        # before/after above are WHOLE expressions (the BFS
+                        # states), so the path MUST be [] -- the
+                        # to_global_sequence contract splices `after` at
+                        # `path`, and stamping the redex-local path here
+                        # fabricated nonexistent intermediate states for any
+                        # sub-root rewrite. The label's redex path is kept
+                        # out of the step until steps carry redex-local
+                        # before/after.
+                        path=[],
                         kind="rule",
                     )
                 steps.append(step)
