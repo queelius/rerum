@@ -455,3 +455,62 @@ class TestCorpusJsonlRoundTrip:
         # non-serializable type surfaces as a bug, not silent coercion.
         with pytest.raises(TypeError):
             corpus_json_default(object())
+
+
+class TestRecordProvenance:
+    """A training record must carry the provenance a dataset consumer needs
+    to stratify: per-step category, and a record-level rules_used summary
+    (category, fire count, and sidecar extra fields like difficulty)."""
+
+    def test_step_carries_category(self):
+        import json
+        from rerum import RuleEngine
+        from rerum.training import to_training_record
+        eng = RuleEngine.from_dsl("@az {category=identity}: (+ ?x 0) => :x")
+        _r, trace = eng.simplify(["+", "a", 0], trace=True)
+        rec = to_training_record(trace, problem="(+ a 0)", operator="+",
+                                 answer="a")
+        assert rec["steps"][0]["category"] == "identity"
+
+    def test_rules_used_summary(self):
+        import json
+        from rerum import RuleEngine
+        from rerum.training import to_training_record
+        eng = RuleEngine.from_dsl(
+            "@az {category=identity}: (+ ?x 0) => :x\n"
+            "@mo {category=identity}: (* ?x 1) => :x")
+        _r, trace = eng.simplify(["+", ["*", "a", 1], 0], trace=True)
+        rec = to_training_record(trace, problem="(+ (* a 1) 0)",
+                                 operator="+", answer="a")
+        used = {ru["rule_id"]: ru for ru in rec["rules_used"]}
+        assert set(used) == {"az", "mo"}
+        assert used["az"]["category"] == "identity"
+        assert all(ru["count"] >= 1 for ru in rec["rules_used"])
+        json.dumps(rec, default=__import__("rerum.training",
+                   fromlist=["corpus_json_default"]).corpus_json_default)
+
+    def test_rules_used_carries_sidecar_extra(self):
+        import json
+        from rerum import RuleEngine
+        from rerum.training import to_training_record
+        eng = RuleEngine.from_dsl("@az: (+ ?x 0) => :x")
+        eng.load_metadata_json(json.dumps({
+            "az": {"examples": [{"in": "(+ a 0)", "out": "a"}],
+                   "difficulty": "easy", "citation": "EOM 1.2"}}))
+        _r, trace = eng.simplify(["+", "a", 0], trace=True)
+        rec = to_training_record(trace, problem="(+ a 0)", operator="+",
+                                 answer="a")
+        extra = rec["rules_used"][0]["extra"]
+        assert extra["difficulty"] == "easy"
+        assert extra["citation"] == "EOM 1.2"
+
+    def test_count_increments_for_repeated_rule(self):
+        from rerum import RuleEngine
+        from rerum.training import to_training_record
+        eng = RuleEngine.from_dsl("@az: (+ ?x 0) => :x")
+        # (+ (+ a 0) 0) fires az twice.
+        _r, trace = eng.simplify(["+", ["+", "a", 0], 0], trace=True)
+        rec = to_training_record(trace, problem="(+ (+ a 0) 0)",
+                                 operator="+", answer="a")
+        az = [ru for ru in rec["rules_used"] if ru["rule_id"] == "az"][0]
+        assert az["count"] == 2

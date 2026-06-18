@@ -76,11 +76,19 @@ def to_training_record(trace, *, problem, operator, answer,
     e.g. ``generate_corpus``, runs a checker and supplies the verdict).
     """
     steps: List[Dict[str, Any]] = []
+    rules_used: Dict[str, Dict[str, Any]] = {}
     for entry in trace.to_global_sequence():
         step = entry["step"]
+        meta = getattr(step, "metadata", None)
+        category = getattr(meta, "category", None)
         steps.append({
             "kind": step.kind,
             "rule_id": step.rule_id,
+            # Per-step provenance: the rule's category (a free-form label).
+            # ``rationale`` already carries reasoning-or-category for prose;
+            # ``category`` is the explicit, separable field a downstream
+            # dataset can group/filter on without parsing prose.
+            "category": category,
             "rationale": step.rationale,
             "before_root": entry["before_root"],
             "after_root": entry["after_root"],
@@ -88,12 +96,30 @@ def to_training_record(trace, *, problem, operator, answer,
             "path": step.path,
             "guard": step.guard,
         })
+        # Record-level provenance: the distinct rules that fired, with their
+        # category, fire count, and any sidecar ``extra`` (difficulty,
+        # citation, prerequisites). This is the data path a corpus consumer
+        # needs to stratify a dataset; it previously never reached the record.
+        rid = step.rule_id
+        if rid is not None:
+            slot = rules_used.get(rid)
+            if slot is None:
+                extra = getattr(meta, "extra", None) or None
+                rules_used[rid] = {
+                    "rule_id": rid,
+                    "category": category,
+                    "count": 1,
+                    "extra": dict(extra) if extra else None,
+                }
+            else:
+                slot["count"] += 1
     return {
         "problem": problem,
         "operator": operator,
         "steps": steps,
         "answer": answer,
         "verified": verified,
+        "rules_used": list(rules_used.values()),
     }
 
 
