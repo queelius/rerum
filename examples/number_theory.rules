@@ -19,13 +19,22 @@
 @eval-zero: (zero? ?x) => (! zero? :x) when (! const? :x)
 
 [identities]
-# Mathematical identities
+# Mathematical identities.
+#
+# Soundness notes:
+# - The gcd/lcm "same" and "one" identities below return :x directly. They are
+#   only exact for NON-NEGATIVE symbolic x, since gcd and lcm are conventionally
+#   non-negative (e.g. gcd(-3,-3) = 3, not -3). For any CONSTANT operand the
+#   eval-* rules above fire first and compute the true non-negative value, so
+#   the residual symbolic identities are the convention-respecting case.
+# - @mod-same is guarded: x mod x = 0 only for x != 0. (0 mod 0 is undefined --
+#   division by zero -- so the rule must not fire there.)
 @gcd-same: (gcd ?x ?x) => :x
 @gcd-one: (gcd ?x 1) => 1
 @gcd-one-left: (gcd 1 ?x) => 1
 @lcm-same: (lcm ?x ?x) => :x
 @lcm-one: (lcm ?x 1) => :x
 @lcm-one-left: (lcm 1 ?x) => :x
-@mod-same: (mod ?x ?x) => 0
+@mod-same: (mod ?x ?x) => 0 when (! != :x 0)
 @factorial-zero: (factorial 0) => 1
 @factorial-one: (factorial 1) => 1

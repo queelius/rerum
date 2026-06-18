@@ -1,5 +1,15 @@
 # Calculus Rules - Differentiation
 # dd represents d/d (derivative operator)
+#
+# STATUS: minimal DSL test fixture / legacy demo -- NOT the canonical
+# differentiation domain. This small, self-contained file exercises the DSL
+# parser (groups, priorities, typed patterns, guards-free skeletons) and is
+# referenced as a fixture by test_cli.py, test_includes.py, test_boolean.py,
+# and examples/demo.py. Keep its rules stable so those fixtures keep passing.
+#
+# The canonical, maintained differentiation rule set lives in
+# examples/differentiation.rules (with its metadata sidecar and manifest).
+# Use that one for real differentiation work; use this one only as a fixture.
 
 [basic-derivatives]
 # Constants and variables
