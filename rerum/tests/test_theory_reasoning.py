@@ -36,3 +36,45 @@ class TestCanonicalizeSeam:
         eng = RuleEngine().with_theory(AC_PLUS)
         # identity 0 is dropped, single operand unwraps: (+ x 0) -> x.
         assert eng._canonicalize(["+", "x", 0]) == "x"
+
+
+# --- Helpers for TestEquivalentsModuloTheory --------------------------------
+
+def _comm_plus_engine():
+    """Engine with a single commutativity rule for +."""
+    return RuleEngine.from_dsl("@comm: (+ ?x ?y) <=> (+ :y :x)")
+
+
+class TestEquivalentsModuloTheory:
+    def test_ac_class_dedups_with_theory(self):
+        eng = _comm_plus_engine().with_theory(AC_PLUS)
+        members = eng.enumerate_equivalents(["+", "a", "b"], max_depth=3)
+        # (+ a b) and (+ b a) share a canonical key -> one class member.
+        assert len(members) == 1
+        # The yielded form is canonical (sorted).
+        assert members[0] == ["+", "a", "b"]
+
+    def test_same_class_without_theory_has_both_arrangements(self):
+        eng = _comm_plus_engine()  # no theory
+        members = eng.enumerate_equivalents(["+", "a", "b"], max_depth=3)
+        # Without the theory, the commute rule yields both arrangements.
+        assert len(members) == 2
+        assert ["+", "a", "b"] in members
+        assert ["+", "b", "a"] in members
+
+    def test_every_yielded_form_is_canonical_and_unique(self):
+        eng = _comm_plus_engine().with_theory(AC_PLUS)
+        members = eng.enumerate_equivalents(["+", "c", "a", "b"], max_depth=5)
+        # Each yielded form equals its own normal form (a dedup guarantee).
+        for m in members:
+            assert eng._canonicalize(m) == m
+        # No duplicate canonical keys among the yielded members.
+        keys = [tuple(eng._canonicalize(m)) if isinstance(m, list) else m
+                for m in members]
+        assert len(set(keys)) == len(members)
+
+    def test_no_theory_output_unchanged_value_and_order(self):
+        # Backward-compat at the VALUE+ORDER level: identical generator output.
+        eng = _comm_plus_engine()
+        out = list(eng.equivalents(["+", "a", "b"], max_depth=3))
+        assert out == [["+", "a", "b"], ["+", "b", "a"]]

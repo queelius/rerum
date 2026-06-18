@@ -3694,6 +3694,11 @@ class RuleEngine:
         class. Yields expressions in order of increasing distance from the
         original (when using BFS strategy).
 
+        When a theory is loaded (see ``with_theory``), each yielded expression
+        is the CANONICAL representative of its class under the theory; AC-variants
+        that share a normal form are deduplicated. With no theory, the behavior
+        is unchanged.
+
         Args:
             expr: Starting expression
             max_depth: Maximum number of rewrite steps from original (default: 10)
@@ -3724,16 +3729,19 @@ class RuleEngine:
         self._cancel_requested = False
         bidirectional_only = not include_unidirectional
 
-        # Track visited expressions
+        # Track visited expressions. Under a theory, identity is the NORMAL
+        # FORM: the class is the set of canonical representatives. With no
+        # theory _canonicalize is the identity, so this is unchanged.
+        cexpr = self._canonicalize(expr)
         visited: Set[tuple] = set()
-        start_key = _expr_to_tuple(expr)
+        start_key = _expr_to_tuple(cexpr)
         visited.add(start_key)
 
         # Count of yielded expressions
         count = 0
 
-        # Yield the starting expression
-        yield expr
+        # Yield the starting (canonical) expression
+        yield cexpr
         count += 1
         if max_count is not None and count >= max_count:
             return
@@ -3742,11 +3750,11 @@ class RuleEngine:
         # id-reuse hazards from a per-instance dict.
         _depth_extended = False
 
-        # Initialize queue/stack with (expression, depth)
+        # Initialize queue/stack with (canonical expression, depth)
         if strategy == "bfs":
-            frontier: deque = deque([(expr, 0)])
+            frontier: deque = deque([(cexpr, 0)])
         else:  # dfs
-            frontier: List = [(expr, 0)]
+            frontier: List = [(cexpr, 0)]
 
         while frontier:
             if self._cancel_requested:
@@ -3772,10 +3780,11 @@ class RuleEngine:
             )
 
             for new_expr in rewrites:
-                key = _expr_to_tuple(new_expr)
+                cnew = self._canonicalize(new_expr)
+                key = _expr_to_tuple(cnew)
                 if key not in visited:
                     visited.add(key)
-                    yield new_expr
+                    yield cnew
                     count += 1
 
                     if max_count is not None and count >= max_count:
@@ -3784,7 +3793,7 @@ class RuleEngine:
                     # Add to frontier for further exploration.
                     # BFS vs DFS only differs on the pop side (popleft vs pop);
                     # the append side is symmetric for both structures.
-                    frontier.append((new_expr, depth + 1))
+                    frontier.append((cnew, depth + 1))
 
     def enumerate_equivalents(
         self,
