@@ -16,48 +16,55 @@ Run from the repo root:  python experiments/byparts_search.py
 
 ## Findings (measured 2026-06-18, budget=500 unless noted)
 
-Per mechanism, the classic polynomial x transcendental cases closed
-CORRECTLY (found AND is_integral):
+NOTE: the int-neg linearity rule (int(-f) = -int(f)) was SHIPPED into
+examples/integration.rules as a result of this experiment, so it is now in
+the BASE table that build_engine loads. The numbers below reflect that.
 
-- baseline (general schema, plain goal):     {int(x*cos x)} only. The rest
-  do not close (their int(-cos x) sub-integrals strand without int-neg).
-- pattern-restricted (plain goal):           {int(x*cos x)} only.
-- pattern + theory (plain goal):             {} -- and WORSE: theory makes
-  cos/sin/x^2 all "close" to WRONG answers in ~4-6 nodes. The plain goal +
-  an int-eliminating cost actively steers to the shortest int-free path,
-  which spuriously zeroes a sub-integral.
-- pattern/general + theory + int-neg (plain goal): {} -- all WRONG, fast.
-  int-neg does NOT help under the plain goal; it just gives the search more
-  ways to reach a fast wrong int-free node.
-- pattern + int-neg + VERIFIED goal:         {int(x*cos x), int(x*sin x)}
+Classic polynomial x transcendental cases closed CORRECTLY (found AND
+is_integral):
+
+- baseline (general schema, NO theory, plain goal):  {x*cos x, x*sin x}
+  (7-9 nodes). With int-neg in the table the int(-cos x) sub-integrals now
+  close, so the plain no-theory goal finds the CORRECT antiderivatives for
+  the single-by-parts cases. int(x^2*e^x) (parts twice) is not reached in
+  500 nodes; int(x*ln x) is not reached (u-choice).
+- pattern-restricted (NO theory, plain goal):        {x*cos x, x*sin x}.
+- pattern/general + THEORY + int-neg (plain goal):   {} -- and WRONG, fast.
+  THIS is the unsoundness: theory-normalization exposes a path where a
+  sub-integral spuriously collapses, and the int-eliminating cost steers
+  best-first to that SHORTEST (wrong) int-free node (~4-6 nodes). So the
+  bug is specifically PLAIN-GOAL + THEORY-NORMALIZATION.
+- pattern + int-neg + VERIFIED goal:                 {x*cos x, x*sin x}
   (9-10 nodes). bp-pow does not reach int(x^2*e^x) in 500 nodes.
-- general + int-neg + VERIFIED goal:         {int(x*cos x), int(x*sin x),
-  int(x^2*e^x)} -- the WINNER. 9 / 10 / 67 nodes, all CORRECT. Only
-  int(x*ln x) is missed (the schema picks u=x; ln x needs to be u, and
-  int(ln x) itself needs by-parts -- a recursion the search does not reach).
+- general + int-neg + VERIFIED goal:                 {x*cos x, x*sin x,
+  x^2*e^x} -- the WINNER for completeness. 9 / 10 / 67 nodes, all CORRECT.
+  The verified goal is robust WITH the theory on (it rejects the wrong
+  int-free nodes the theory exposes) and reaches the parts-twice case.
 - size-cost did not improve on the int-cost under the verified goal.
 
 Boomerang int(e^x*sin x):
-- plain goal:    found in 6 nodes -- WRONG (a false int-free answer).
-- verified goal: found=False at budget=3000 (~35s). Correctly NOT closed:
-  it needs the algebraic I = A - I step, which is beyond pure rewriting.
+- plain goal + theory:  found in ~6 nodes -- WRONG (a false int-free answer).
+- verified goal:        found=False at budget=3000 (~35s). Correctly NOT
+  closed: it needs the algebraic I = A - I step, beyond pure rewriting.
 
 ## C3 decision (2026-06-18)
 
-- The plain "no int remains" goal is UNSOUND for by-parts. Cheap cost-steered
-  search finds FAST WRONG answers. Correctness must be IN the goal.
+- The plain "no int remains" goal is UNSOUND for by-parts UNDER
+  theory-normalization: cheap cost-steered search finds FAST WRONG answers.
+  Correctness must be IN the goal (or the theory off, but then the search
+  is incomplete on parts-twice cases).
 - With a VERIFIED goal (is_integral in the goal predicate), the general
   by-parts schema + the int-neg linearity rule closes the textbook
   polynomial x transcendental battery {x*cos x, x*sin x, x^2*e^x} CORRECTLY
-  and cheaply (<= 67 nodes). -> SHIP as content: the general by-parts rule
-  + int-neg, plus a verified-goal integrate recipe (the plain goal would
-  emit wrong answers).
-- Two cases remain FRONTIER, pinning what C3 (or a richer mechanism) would
-  need:
-    * int(x*ln x): needs the u/dv CHOICE (LIATE: log should be u). The fixed
-      schema's u=left-factor heuristic is wrong here. A u-selection
-      mechanism (or trying both splits) would address it -- cheaper than
-      full AND/OR search; a candidate for a small follow-on, NOT C3.
+  and cheaply (<= 67 nodes). SHIPPED from this experiment: int-neg (a safe,
+  general table improvement). NOT shipped into the default rule set: the
+  general by-parts schema -- it over-fires on every product and is only
+  sound under the verified-goal RECIPE, so it stays a recipe-gated
+  capability (demonstrated in test_byparts_experiment), not a default rule.
+- Two cases remain FRONTIER, pinning what a richer mechanism would need:
+    * int(x*ln x): needs the u/dv CHOICE (LIATE: log should be u). A
+      u-selection mechanism (or trying both splits) would address it --
+      cheaper than full AND/OR search; a candidate for a small follow-on.
     * int(e^x*sin x) [boomerang]: needs the algebraic I = A - I resolution,
       genuinely beyond pure rewriting. This is the precise, named situation
       that justifies C3 (search-introduces-subgoals + an algebraic closer).

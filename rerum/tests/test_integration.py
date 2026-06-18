@@ -259,6 +259,7 @@ class TestEveryRuleFiresEndToEnd:
         "int-usub-sin-sq": ["*", 2, "x", ["sin", ["^", "x", 2]]],
         "int-usub-exp-sq": ["*", 2, "x", ["exp", ["^", "x", 2]]],
         "int-byparts-x-exp": ["*", "x", ["exp", "x"]],
+        "int-neg": ["-", ["cos", "x"]],
     }
 
     @pytest.mark.parametrize("rule,integrand", sorted(CASES.items()))
@@ -274,3 +275,24 @@ class TestEveryRuleFiresEndToEnd:
         all_names = {m.name for _i, _r, m in eng.iter_rules()}
         assert all_names == set(self.CASES), (
             f"uncovered rules: {all_names - set(self.CASES)}")
+
+
+class TestNegationLinearity:
+    """int-neg (int(-f) = -int(f)) fills a real table gap surfaced by the
+    C1 by-parts experiment. Pin it directly + numerically."""
+
+    def test_int_neg_cos_closes_and_verifies(self):
+        eng = _integration_engine()
+        checker = _load_checker()
+        out = integrate(eng, ["-", ["cos", "x"]], "x")
+        assert out.found is True
+        assert out.solution == ["-", ["sin", "x"]]
+        assert checker.is_integral(["-", ["cos", "x"]], "x",
+                                   out.solution) is True
+
+    def test_int_neg_fires_in_trace(self):
+        eng = _integration_engine()
+        out = integrate(eng, ["-", ["sin", "x"]], "x")
+        assert out.found is True
+        names = [s.metadata.name for s in out.derivation.steps]
+        assert "int-neg" in names

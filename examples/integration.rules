@@ -18,6 +18,11 @@
 # theory-normalized solve, normalize collapses (+ f) -> f before matching,
 # so this rule is subsumed there but still required without a theory.
 @int-sum-one {category=structural}: (int (+ ?f) ?v) => (int :f :v)
+# Negation linearity: int(-f) = -int(f). A general structural rule that
+# fills a real table gap (without it, the table cannot integrate a unary-
+# negated function). The C1 by-parts experiment surfaced this: by-parts
+# produces int(-cos x) sub-integrals that strand without this rule.
+@int-neg {category=structural}: (int (- ?f) ?v) => (- (int :f :v))
 # Difference rule.
 @int-diff {category=structural}: (int (- ?f ?g) ?v) => (- (int :f :v) (int :g :v))
 # Constant multiple: pull a literal constant factor out (left and right).

@@ -28,23 +28,25 @@ class TestBaselineFragility:
             use_theory=False, cost=h.COST_INT_HIGH, budget=500)
         assert found is True and correct is True  # the lucky case is correct
 
-    def test_raw_schema_does_not_close_x_sin_x(self):
-        h = _harness()
-        found, _correct, _explored, _secs, _r = h.measure(
-            h.BYPARTS_GENERAL, h.CASES["int(x*sin x)"],
-            use_theory=False, cost=h.COST_INT_HIGH, budget=500)
-        # Fragile: the structurally-identical sin case does NOT close (its
-        # int(-cos x) sub-integral strands without the int-neg rule).
-        assert found is False
-
-    def test_op_costs_goal_is_UNSOUND_finds_fast_wrong_answer(self):
-        # THE central finding: with int-neg added, int(x*sin x) "closes"
-        # FAST under the plain int-free goal -- to a WRONG answer (the
-        # search prefers the shortest int-free path, which spuriously zeroes
-        # a sub-integral). found=True but is_integral=False.
+    def test_no_theory_plain_goal_finds_x_sin_x_correctly(self):
+        # With int-neg now in the base table, the plain goal WITHOUT theory
+        # closes the single-by-parts case CORRECTLY (the int(-cos x)
+        # sub-integral now reduces). It is the THEORY that breaks soundness
+        # (next test), not the plain goal per se.
         h = _harness()
         found, correct, _explored, _secs, _r = h.measure(
-            h.BYPARTS_GENERAL + "\n" + h.INT_NEG, h.CASES["int(x*sin x)"],
+            h.BYPARTS_GENERAL, h.CASES["int(x*sin x)"],
+            use_theory=False, cost=h.COST_INT_HIGH, budget=500)
+        assert found is True and correct is True
+
+    def test_theory_plus_plain_goal_is_UNSOUND_finds_fast_wrong_answer(self):
+        # THE central finding: PLAIN goal + THEORY-normalization is unsound.
+        # Theory exposes a path where a sub-integral spuriously collapses;
+        # the int-eliminating cost steers best-first to that shortest (WRONG)
+        # int-free node. found=True but is_integral=False.
+        h = _harness()
+        found, correct, _explored, _secs, _r = h.measure(
+            h.BYPARTS_GENERAL, h.CASES["int(x*sin x)"],
             use_theory=True, cost=h.COST_INT_HIGH, budget=500)
         assert found is True
         assert correct is False  # FAST but WRONG -- the unsoundness
