@@ -101,21 +101,33 @@ class TestSolveToy:
         assert result.explored >= 1
 
 
-class TestEngineSolveWrapper:
-    def test_engine_method_delegates(self):
+class TestSolveIsNonCore:
+    """solve is the OPTIONAL, non-core search layer: there is NO
+    RuleEngine.solve method (the engine is pure rewriting), and `solve` is
+    NOT re-exported from the `rerum` core API -- it is imported explicitly
+    from rerum.solve."""
+
+    def test_engine_has_no_solve_method(self):
+        eng = _toy_engine()
+        assert not hasattr(eng, "solve")
+
+    def test_solve_works_as_a_standalone_function(self):
         eng = _toy_engine()
         goal = lambda e: not contains_op(e, {"foo", "double"})
-        result = eng.solve(["double", "x"], goal, max_nodes=200)
+        result = solve(eng, ["double", "x"], goal, max_nodes=200)
         assert result.found is True
         assert result.solution == ["+", "x", "x"]
 
-
-class TestTopLevelImports:
-    def test_exports(self):
+    def test_not_in_core_api_but_importable_from_submodule(self):
         import rerum
-        assert rerum.solve is solve
-        assert rerum.SolveResult is SolveResult
-        assert rerum.contains_op is contains_op
+        # Not part of the public core API (the submodule rerum.solve is
+        # always accessible, as for any package -- that is not the same as
+        # being re-exported into the core namespace).
+        assert "solve" not in rerum.__all__
+        assert "SolveResult" not in rerum.__all__
+        assert "contains_op" not in rerum.__all__
+        from rerum.solve import solve as s, SolveResult as sr, contains_op as c
+        assert s is solve and sr is SolveResult and c is contains_op
 
 
 def _engine(dsl):

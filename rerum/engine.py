@@ -4194,20 +4194,11 @@ class RuleEngine:
             derivation=derivation,
         )
 
-    def solve(self, expr: ExprType, goal_predicate, **kw):
-        """Goal-directed best-first search to a node satisfying
-        ``goal_predicate``.
-
-        The escalation driver above directed ``simplify``: use it for
-        non-confluent rule sets where solving needs backtracking. Thin
-        wrapper over :func:`rerum.solve.solve`. Keyword arguments
-        (``cost_fn``, ``max_nodes``, ``fresh_vars``, ``normalize_between``,
-        ``theory``) pass through unchanged.
-
-        Returns a :class:`rerum.solve.SolveResult`.
-        """
-        from .solve import solve as _solve
-        return _solve(self, expr, goal_predicate, **kw)
+    # NOTE: goal-directed search is NOT a method on the engine. The engine is
+    # a pure term-rewriting engine; goal-directed best-first SEARCH is an
+    # optional, non-core layer. Use it explicitly:
+    #   from rerum.solve import solve
+    #   result = solve(engine, expr, goal_predicate, ...)
 
     # ============================================================
     # Random Sampling

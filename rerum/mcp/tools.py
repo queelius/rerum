@@ -735,8 +735,11 @@ def tool_solve_goal(engine, *, expr: str, goal: Dict[str, Any],
         from rerum.optimize import make_op_cost_fn
         solve_kwargs["cost_fn"] = make_op_cost_fn(op_costs)
 
-    sr = engine.solve(
-        parsed, predicate, max_nodes=max_nodes,
+    # Goal-directed search is the optional, non-core rerum.solve layer (the
+    # engine itself is pure rewriting); call the function explicitly.
+    from rerum.solve import solve as _solve
+    sr = _solve(
+        engine, parsed, predicate, max_nodes=max_nodes,
         normalize_between=normalize_between,
         theory=engine._theory, **solve_kwargs)
 

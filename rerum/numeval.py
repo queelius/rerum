@@ -1,5 +1,11 @@
 """General numeric evaluation of ground terms under a prelude.
 
+OPTIONAL, NON-CORE LAYER. This is INTERPRETATION (evaluating a ground term
+in a numeric model), NOT term rewriting. It is deliberately not re-exported
+from the `rerum` core API; import it explicitly (`from rerum.numeval import
+numeval`). It backs numeric verification (e.g. the example calculus
+checkers) and the optional search layer, not the rewriting core.
+
 GENERAL ENGINE PRINCIPLE: this module special-cases NO operator. A term is
 interpreted using only the fold functions in the supplied prelude, exactly
 the same extension point the rewriter uses for constant folding. Swap the

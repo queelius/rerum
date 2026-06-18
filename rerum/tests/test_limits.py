@@ -26,7 +26,7 @@ def _limit_fold_ops():
     """Import examples/limits_fold_ops.py by path (example content, not a
     package module)."""
     spec = importlib.util.spec_from_file_location(
-        "limits_fold_ops", EXAMPLES / "limits_fold_ops.py")
+        "limits_fold_ops", EXAMPLES / "search" / "limits_fold_ops.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module.LIMIT_FOLD_OPS
@@ -45,8 +45,8 @@ def _limits_engine():
     eng = RuleEngine().with_prelude(_limits_prelude())
     eng.load_file(EXAMPLES / "differentiation.rules")
     eng.load_file(EXAMPLES / "algebra.rules")
-    eng.load_file(EXAMPLES / "limits.rules", validate_examples=False)
-    eng.load_metadata_json((EXAMPLES / "limits.metadata.json").read_text(),
+    eng.load_file(EXAMPLES / "search" / "limits.rules", validate_examples=False)
+    eng.load_metadata_json((EXAMPLES / "search" / "limits.metadata.json").read_text(),
                            validate_examples=True)
     return eng
 

@@ -126,20 +126,13 @@ from .hooks import (
     ResolverLoopError,
 )
 
-# Goal-directed search (escalation driver)
-from .solve import (
-    solve,
-    SolveResult,
-    contains_op,
-)
-
-# General numeric evaluation
-from .numeval import (
-    numeval,
-    numeric_equiv,
-    NumevalError,
-    NumevalDomainError,
-)
+# NOTE: `rerum.solve` (goal-directed best-first SEARCH over the rewrite graph)
+# and `rerum.numeval` (numeric evaluation of ground terms) are OPTIONAL,
+# NON-CORE layers -- they are search and model-interpretation, not term
+# rewriting -- and are deliberately NOT re-exported here. Import them
+# explicitly when needed:  `from rerum.solve import solve`,
+# `from rerum.numeval import numeval`. Keeping them out of the core API keeps
+# `import rerum` a pure term-rewriting surface.
 
 # Trace-to-text / trace-to-record projection layer (Phase 4)
 from .training import (
@@ -220,15 +213,6 @@ __all__ = [
     "Resolution",
     "ResolutionError",
     "ResolverLoopError",
-    # Search
-    "solve",
-    "SolveResult",
-    "contains_op",
-    # Numeric evaluation
-    "numeval",
-    "numeric_equiv",
-    "NumevalError",
-    "NumevalDomainError",
     # Theory-driven normalization
     "Theory",
     "RuleSetManifest",

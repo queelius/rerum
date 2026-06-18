@@ -1,5 +1,11 @@
 """Goal-directed best-first search over the rewrite graph.
 
+OPTIONAL, NON-CORE LAYER. This is search (state-space best-first toward a
+goal predicate with a cost function), NOT term rewriting (reduction toward a
+normal form). It is deliberately not re-exported from the `rerum` core API;
+import it explicitly (`from rerum.solve import solve`). The pure
+term-rewriting library does not depend on it.
+
 `solve` is the ESCALATION driver above directed `simplify`. A confluent
 rule set is solved greedily by `simplify`; `solve` exists for the
 non-confluent case, where solving requires trying a move and backing out

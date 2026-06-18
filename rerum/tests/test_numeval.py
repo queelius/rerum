@@ -192,9 +192,15 @@ class TestNumericEquivEdgeCases:
 
 
 class TestNumevalExports:
-    def test_exports(self):
+    def test_non_core_but_importable_from_submodule(self):
+        # numeval is the OPTIONAL numeric-evaluation layer: not in the
+        # `rerum` core API, imported explicitly from rerum.numeval.
         import rerum
-        assert rerum.numeval is numeval
-        assert rerum.numeric_equiv is numeric_equiv
-        assert rerum.NumevalError is NumevalError
-        assert rerum.NumevalDomainError is NumevalDomainError
+        # Not part of the public core API (the submodule rerum.numeval is
+        # always accessible, as for any package).
+        assert "numeval" not in rerum.__all__
+        assert "numeric_equiv" not in rerum.__all__
+        from rerum.numeval import (numeval as ne, numeric_equiv as nq,
+                                   NumevalError as err, NumevalDomainError as derr)
+        assert ne is numeval and nq is numeric_equiv
+        assert err is NumevalError and derr is NumevalDomainError

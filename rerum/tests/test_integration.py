@@ -16,8 +16,8 @@ from rerum.rewriter import MATH_PRELUDE, PREDICATE_PRELUDE, combine_preludes
 from rerum.solve import contains_op, solve
 
 EXAMPLES_DIR = Path(__file__).resolve().parents[2] / "examples"
-RULES_FILE = EXAMPLES_DIR / "integration.rules"
-META_FILE = EXAMPLES_DIR / "integration.metadata.json"
+RULES_FILE = EXAMPLES_DIR / "search" / "integration.rules"
+META_FILE = EXAMPLES_DIR / "search" / "integration.metadata.json"
 
 
 def _integration_prelude():
