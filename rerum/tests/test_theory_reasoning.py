@@ -227,3 +227,13 @@ class TestBackwardCompatValueLevel:
                                 include_unidirectional=True, trace=True)
         assert proof is not None
         assert proof.common == ["+", "b", "a"]
+
+    def test_minimize_result_identical_with_no_theory(self):
+        # No theory: minimize reduces via the rule alone; original is the RAW
+        # input (cexpr is expr) and the result is unchanged vs pre-F1.
+        eng = RuleEngine.from_dsl("@zero: (+ ?x 0) => :x")
+        result = eng.minimize(["+", "a", 0], metric="size",
+                              include_unidirectional=True)
+        assert result.expr == "a"
+        assert result.original == ["+", "a", 0]
+        assert result.cost == 1

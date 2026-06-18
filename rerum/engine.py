@@ -1840,9 +1840,14 @@ class RuleEngine:
     def with_theory(self, theory) -> 'RuleEngine':
         """Set the session theory (a ``normalize.Theory``) and return self.
 
-        Public setter for the ``_theory`` slot threaded into
-        ``solve(normalize_between=True)`` and available for explicit
-        ``normalize`` passes. Invalidates the cached simplifier.
+        Public setter for the ``_theory`` slot. Once set, the equational-
+        reasoning methods (``equivalents``, ``enumerate_equivalents``,
+        ``prove_equal``, ``are_equal``, ``minimize``) reason MODULO the theory:
+        they key on canonical normal forms, so AC-variants collapse and
+        ``prove_equal(x+y, y+x)`` holds with no search. The slot is also
+        threaded into ``solve(normalize_between=True)`` and available for
+        explicit ``normalize`` passes. ``simplify`` is NOT theory-aware.
+        Invalidates the cached simplifier.
         """
         self._theory = theory
         self._simplifier = None
