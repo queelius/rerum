@@ -5,11 +5,9 @@ import pytest
 
 
 class TestRuleStore:
-    def test_save_then_list_then_load_roundtrip(self, tmp_path):
+    def test_save_then_list_then_load_roundtrip(self, store, tmp_path):
         from rerum import RuleEngine
-        from rerum.mcp.persistence import RuleStore
 
-        store = RuleStore(root=str(tmp_path))
         engine = RuleEngine.from_dsl(
             '@add-zero {category=identity}: (+ ?x 0) => :x'
         )
@@ -26,13 +24,11 @@ class TestRuleStore:
         assert load_res["ok"] is True
         assert "add-zero" in fresh
 
-    def test_roundtrip_preserves_rule_semantics(self, tmp_path):
+    def test_roundtrip_preserves_rule_semantics(self, store, tmp_path):
         # A stronger round-trip: the loaded engine rewrites identically.
         from rerum import RuleEngine
         from rerum.engine import format_sexpr, parse_sexpr
-        from rerum.mcp.persistence import RuleStore
 
-        store = RuleStore(root=str(tmp_path))
         src = RuleEngine.from_dsl(
             '@add-zero {category=identity}: (+ ?x 0) => :x'
         )
@@ -43,42 +39,34 @@ class TestRuleStore:
         expr = parse_sexpr("(+ y 0)")
         assert format_sexpr(fresh.simplify(expr)) == "y"
 
-    def test_load_missing_ruleset_raises_not_found(self, tmp_path):
+    def test_load_missing_ruleset_raises_not_found(self, store, tmp_path):
         from rerum import RuleEngine
-        from rerum.mcp.persistence import RuleStore
         from rerum.mcp.errors import MCPToolError
 
-        store = RuleStore(root=str(tmp_path))
         with pytest.raises(MCPToolError) as exc:
             store.load_ruleset(RuleEngine(), "nope")
         assert exc.value.code == "not_found"
 
-    def test_name_sanitization_rejects_traversal(self, tmp_path):
+    def test_name_sanitization_rejects_traversal(self, store, tmp_path):
         from rerum import RuleEngine
-        from rerum.mcp.persistence import RuleStore
         from rerum.mcp.errors import MCPToolError
 
-        store = RuleStore(root=str(tmp_path))
         with pytest.raises(MCPToolError) as exc:
             store.save_ruleset(RuleEngine(), "../escape")
         assert exc.value.code == "parse_error"
 
-    def test_name_sanitization_rejects_separators_and_dotfiles(self, tmp_path):
+    def test_name_sanitization_rejects_separators_and_dotfiles(self, store, tmp_path):
         from rerum import RuleEngine
-        from rerum.mcp.persistence import RuleStore
         from rerum.mcp.errors import MCPToolError
 
-        store = RuleStore(root=str(tmp_path))
         for bad in ("a/b", "sub/../x", ".hidden", "", "a\\b"):
             with pytest.raises(MCPToolError) as exc:
                 store.save_ruleset(RuleEngine(), bad)
             assert exc.value.code == "parse_error", bad
 
-    def test_load_theory_applies_to_engine(self, tmp_path):
+    def test_load_theory_applies_to_engine(self, store, tmp_path):
         from rerum import RuleEngine
-        from rerum.mcp.persistence import RuleStore
 
-        store = RuleStore(root=str(tmp_path))
         theory_dir = tmp_path / "rules"
         theory_dir.mkdir(parents=True, exist_ok=True)
         (theory_dir / "arithmetic.theory.json").write_text(json.dumps({
@@ -100,36 +88,30 @@ class TestRuleStore:
         assert engine._theory.is_ac("+") is True
         assert engine._theory.identity("*") == 1
 
-    def test_load_missing_theory_raises_not_found(self, tmp_path):
+    def test_load_missing_theory_raises_not_found(self, store, tmp_path):
         from rerum import RuleEngine
-        from rerum.mcp.persistence import RuleStore
         from rerum.mcp.errors import MCPToolError
 
-        store = RuleStore(root=str(tmp_path))
         with pytest.raises(MCPToolError) as exc:
             store.load_theory(RuleEngine(), "nope")
         assert exc.value.code == "not_found"
 
-    def test_theory_name_sanitization_rejects_traversal(self, tmp_path):
+    def test_theory_name_sanitization_rejects_traversal(self, store, tmp_path):
         from rerum import RuleEngine
-        from rerum.mcp.persistence import RuleStore
         from rerum.mcp.errors import MCPToolError
 
-        store = RuleStore(root=str(tmp_path))
         with pytest.raises(MCPToolError) as exc:
             store.load_theory(RuleEngine(), "../escape")
         assert exc.value.code == "parse_error"
 
 
 class TestPersistenceToolWrappers:
-    def test_tool_wrappers_roundtrip(self, tmp_path):
+    def test_tool_wrappers_roundtrip(self, store, tmp_path):
         from rerum import RuleEngine
-        from rerum.mcp.persistence import RuleStore
         from rerum.mcp.tools import (
             tool_save_ruleset, tool_load_ruleset, tool_list_rulesets,
         )
 
-        store = RuleStore(root=str(tmp_path))
         engine = RuleEngine.from_dsl(
             '@add-zero {category=identity}: (+ ?x 0) => :x'
         )
@@ -144,13 +126,11 @@ class TestPersistenceToolWrappers:
         assert load["ok"] is True
         assert "add-zero" in fresh
 
-    def test_tool_load_theory_wrapper(self, tmp_path):
+    def test_tool_load_theory_wrapper(self, store, tmp_path):
         import json as _json
         from rerum import RuleEngine
-        from rerum.mcp.persistence import RuleStore
         from rerum.mcp.tools import tool_load_theory
 
-        store = RuleStore(root=str(tmp_path))
         theory_dir = tmp_path / "rules"
         theory_dir.mkdir(parents=True, exist_ok=True)
         (theory_dir / "arith.theory.json").write_text(_json.dumps(
