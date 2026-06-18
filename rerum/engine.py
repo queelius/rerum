@@ -1848,6 +1848,23 @@ class RuleEngine:
         self._simplifier = None
         return self
 
+    def _canonicalize(self, expr: ExprType) -> ExprType:
+        """Canonical form of ``expr`` under the engine's theory, else unchanged.
+
+        Identity function when no theory is set (``self._theory is None``) --
+        this is the backward-compat path that keeps the no-theory reasoning
+        behavior byte-for-byte unchanged. When a theory is set, returns
+        ``normalize(expr, theory)``, which is idempotent and confluent, so the
+        result is the single, well-defined IDENTITY of the expression for the
+        reasoning layer (equivalents / prove_equal / minimize key on it).
+
+        The theory is DATA; no operator is special-cased here.
+        """
+        if self._theory is None:
+            return expr
+        from .normalize import normalize as _normalize
+        return _normalize(expr, self._theory)
+
     def missing_fold_ops(self) -> List[str]:
         """Fold-op names invoked by loaded rules but absent from the prelude.
 
