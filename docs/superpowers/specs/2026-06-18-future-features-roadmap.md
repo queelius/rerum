@@ -1,6 +1,6 @@
 # RERUM future-features roadmap
 
-**Status:** approved roadmap (user sign-off 2026-06-18)
+**Status:** PARTIALLY SUPERSEDED 2026-06-18 by the solver-layer prune (commits b9e9901/7f3a0bf). After pruning rerum.solve/rerum.numeval to OPTIONAL NON-CORE layers, most features here are non-core: A=MCP (integration), B=corpus/synthdata (training/numeric), C=search (rerum.solve; C1 done+deleted). A TRS-focused roadmap would instead emphasize confluence/termination checking, Knuth-Bendix completion, AC-matching, and narrowing. Kept as historical record.
 **Date:** 2026-06-18
 **Nature:** a DECOMPOSITION + SEQUENCING index, not a single implementation
 spec. Each feature below is its own sub-project that gets the full
