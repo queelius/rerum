@@ -1825,7 +1825,16 @@ class RuleEngine:
         path = Path(path)
         if path.suffix != ".json":
             from .manifest import parse_manifest
-            self.manifest = parse_manifest(path.read_text())
+            try:
+                self.manifest = parse_manifest(path.read_text())
+            except ValueError:
+                # load_file stays LENIENT: a pre-manifest .rules file may
+                # carry a stray ':'-line (a note, a typo, a future
+                # directive). The old loader silently ignored such lines, so
+                # load_file must not regress to raising on them -- it applies
+                # nothing from the manifest anyway. ``from_manifest`` parses
+                # strictly and DOES raise, which is where typos are caught.
+                self.manifest = None
         return self._install(load_rules_from_file(path), validate_examples)
 
     def with_theory(self, theory) -> 'RuleEngine':
@@ -1900,6 +1909,16 @@ class RuleEngine:
             meta_path = path.parent / manifest.metadata
             engine.load_metadata_json(meta_path.read_text(),
                                       validate_examples=True)
+
+        # Validate ANY examples now present against the assembled prelude --
+        # not only the sidecar's. Rules were installed with
+        # validate_examples=False (the prelude was not yet set), and
+        # load_metadata_json only validates the names it carries, so examples
+        # embedded in the :include'd rules file itself would otherwise never
+        # be checked. This makes the spec's "examples validate against the
+        # assembled prelude" hold for embedded examples too, matching the
+        # validation a plain load_file(validate_examples=True) would do.
+        engine.validate_examples()
 
         # Fail-loud audit: declared + structurally-used ops must all resolve.
         installed = set(engine._fold_funcs or {})

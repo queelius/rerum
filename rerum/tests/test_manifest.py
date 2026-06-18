@@ -157,3 +157,42 @@ class TestLoadFileBoundary:
         f.write_text("@r: (f ?x) => :x\n")
         eng = RuleEngine().load_file(f)
         assert eng.manifest is not None and eng.manifest.is_empty
+
+
+class TestManifestReviewFixes:
+    """Fixes from the manifest adversarial review (PASS_WITH_NOTES)."""
+
+    def test_embedded_rules_examples_are_validated(self, tmp_path):
+        # ISSUE 1: from_manifest validated only SIDECAR examples; a WRONG
+        # example embedded in the :include'd rules JSON loaded silently.
+        # Now from_manifest validates embedded examples too (parity with a
+        # plain load_file(validate_examples=True)).
+        import json
+        (tmp_path / "r.json").write_text(json.dumps({"rules": [{
+            "name": "inc", "pattern": ["f", ["?", "x"]],
+            "skeleton": ["!", "+", [":", "x"], 1],
+            "examples": [{"in": "(f 1)", "out": "999"}],  # wrong: (f 1)->2
+        }]}))
+        man = tmp_path / "d.manifest"
+        man.write_text(":requires math\n:include r.json\n")
+        with pytest.raises(Exception):  # ExampleValidationError
+            RuleEngine.from_manifest(man)
+
+    def test_load_file_lenient_on_stray_colon_line(self, tmp_path):
+        # ISSUE 2: load_file now parses a manifest on every non-.json file;
+        # it must NOT regress to raising on a stray ':'-line (a note/typo/
+        # future directive) that the old loader silently ignored.
+        f = tmp_path / "old.rules"
+        f.write_text(":see docs for details\n@r: (f ?x) => :x\n")
+        eng = RuleEngine().load_file(f)  # must not raise
+        assert len(eng) == 1
+        assert eng.manifest is None  # malformed manifest not recorded
+
+    def test_from_manifest_still_strict_on_typo(self, tmp_path):
+        # The strict path (from_manifest) still catches the typo load_file
+        # now tolerates.
+        (tmp_path / "r.rules").write_text("@r: (f ?x) => :x\n")
+        man = tmp_path / "d.manifest"
+        man.write_text(":requies math\n:include r.rules\n")  # typo
+        with pytest.raises(ValueError, match="directive|requies"):
+            RuleEngine.from_manifest(man)

@@ -58,10 +58,13 @@ goal-directed search, equivalence-class reasoning, theory-based
 canonicalization, and numeric verification.
 
 ```python
-# Goal-directed search for a non-confluent rule set
+# Goal-directed search for a non-confluent rule set (self-contained)
+from rerum import RuleEngine
 from rerum.solve import solve, contains_op
-result = solve(engine, ["int", ["cos", "x"], "x"],
-               lambda e: not contains_op(e, {"int"}), max_nodes=2000)
+engine = RuleEngine.from_dsl("@unwrap: (box ?x) => :x")
+result = solve(engine, ["box", ["box", "a"]],
+               lambda e: not contains_op(e, {"box"}), max_nodes=100)
+# result.solution == "a"
 
 # Theory-based canonical forms (operator signatures are DATA)
 from rerum.normalize import Theory, normalize
