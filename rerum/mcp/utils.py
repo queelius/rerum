@@ -24,8 +24,11 @@ def json_safe(value: Any) -> Any:
     - A non-finite ``float`` (inf/-inf/nan) renders to its ``str`` form;
       raw it would emit non-spec JSON tokens.
     - dicts, lists, and tuples are recursed (a tuple becomes a list, the
-      JSON-native shape); every other value passes through unchanged
-      (json.dumps validates the rest).
+      JSON-native shape); a non-string dict KEY is coerced to ``str`` (JSON
+      object keys are strings, and a Fraction/int key would otherwise crash
+      ``json.dumps``); a ``set``/``frozenset`` becomes a sorted-where-
+      possible list (JSON has no set type); every other value passes through
+      unchanged (json.dumps validates the rest).
     """
     if isinstance(value, bool):
         return value
@@ -34,7 +37,30 @@ def json_safe(value: Any) -> Any:
     if isinstance(value, float) and not math.isfinite(value):
         return str(value)
     if isinstance(value, dict):
-        return {k: json_safe(v) for k, v in value.items()}
+        out = {}
+        for k, v in value.items():
+            key = k if isinstance(k, str) else _safe_key(k)
+            out[key] = json_safe(v)
+        return out
+    if isinstance(value, (set, frozenset)):
+        items = [json_safe(v) for v in value]
+        try:
+            return sorted(items, key=lambda x: (str(type(x)), x))
+        except TypeError:
+            return items
     if isinstance(value, (list, tuple)):
         return [json_safe(v) for v in value]
     return value
+
+
+def _safe_key(key: Any) -> str:
+    """Coerce a non-string dict key to a JSON object key (a string).
+
+    A bool key keeps Python's ``True``/``False`` spelling; a Fraction key
+    uses its rational literal; everything else uses ``str``.
+    """
+    if isinstance(key, bool):
+        return str(key)
+    if isinstance(key, Fraction):
+        return format_sexpr(key)
+    return str(key)

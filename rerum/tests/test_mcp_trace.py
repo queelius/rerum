@@ -323,3 +323,37 @@ class TestJsonSafeFloats:
     def test_trace_alias_is_shared_helper(self):
         from rerum.mcp import trace, utils
         assert trace._json_safe is utils.json_safe
+
+
+class TestJsonSafeSetsAndKeys:
+    """json_safe is the single transport sanitizer; it must handle the
+    non-JSON-native shapes that can reach it (sets, non-string dict keys)
+    rather than relying on the server's last-resort TypeError guard."""
+
+    def test_set_becomes_list(self):
+        import json
+        from rerum.mcp.utils import json_safe
+        out = json_safe({"ops": {"a", "b", "c"}})
+        assert sorted(out["ops"]) == ["a", "b", "c"]
+        json.dumps(out)  # must not raise
+
+    def test_frozenset_becomes_list(self):
+        import json
+        from rerum.mcp.utils import json_safe
+        json.dumps(json_safe(frozenset({1, 2})))
+
+    def test_non_string_dict_key_coerced(self):
+        import json
+        from fractions import Fraction
+        from rerum.mcp.utils import json_safe
+        # (1 and True collide as dict keys in Python -- True==1 -- so keep
+        # each coercion in its own dict.)
+        assert json_safe({1: "a"}) == {"1": "a"}
+        assert json_safe({Fraction(1, 2): "b"}) == {"1/2": "b"}
+        assert json_safe({True: "c"}) == {"True": "c"}
+        json.dumps(json_safe({7: "x", Fraction(3, 4): "y"}))  # no raise
+
+    def test_nested_set_in_list(self):
+        import json
+        from rerum.mcp.utils import json_safe
+        json.dumps(json_safe([{"k": {1, 2}}, ({3, 4},)]))

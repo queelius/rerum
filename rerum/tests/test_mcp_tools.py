@@ -703,3 +703,44 @@ class TestCheckNumericEquiv:
                 RuleEngine(), expr_a="x", expr_b="x",
                 ranges={"x": [1.0]})  # not a [lo, hi] pair
         assert exc.value.code == "parse_error"
+
+
+class TestLoadRulesErrorTaxonomy:
+    """A structurally malformed rule JSON is the caller's contract error
+    (validation_error), not a server fault (internal_error); and garbage
+    DSL that parses to zero rules surfaces a note instead of a silent
+    ok:True/rules_added:0."""
+
+    def test_malformed_json_rule_is_validation_error(self):
+        from rerum import RuleEngine
+        from rerum.mcp.errors import MCPToolError
+        from rerum.mcp.tools import tool_load_rules
+        with pytest.raises(MCPToolError) as exc:
+            tool_load_rules(RuleEngine(),
+                            text='{"rules": [{"pattern": "(+ ?x 0)"}]}',
+                            format="json")  # no skeleton
+        assert exc.value.code == "validation_error"
+
+    def test_garbage_dsl_surfaces_a_note(self):
+        from rerum import RuleEngine
+        from rerum.mcp.tools import tool_load_rules
+        result = tool_load_rules(RuleEngine(),
+                                 text="this is not a rule\nblah blah",
+                                 format="dsl")
+        assert result["rules_added"] == 0
+        assert "note" in result
+
+    def test_comment_only_input_gets_no_spurious_note(self):
+        from rerum import RuleEngine
+        from rerum.mcp.tools import tool_load_rules
+        result = tool_load_rules(RuleEngine(),
+                                 text="# just a comment\n\n", format="dsl")
+        assert result["rules_added"] == 0
+        assert "note" not in result
+
+    def test_valid_load_has_no_note(self):
+        from rerum import RuleEngine
+        from rerum.mcp.tools import tool_load_rules
+        result = tool_load_rules(RuleEngine(), text="@r: (f ?x) => :x",
+                                 format="dsl")
+        assert result == {"ok": True, "rules_added": 1}

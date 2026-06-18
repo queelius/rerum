@@ -177,8 +177,37 @@ def tool_load_rules(engine, *, text: str,
         raise _validation_error(exc) from exc
     except ValueError as exc:
         raise MCPToolError("parse_error", str(exc), cause=exc) from exc
+    except (KeyError, IndexError, TypeError, AttributeError) as exc:
+        # A structurally malformed-but-parseable rule JSON (a rule dict
+        # missing "pattern"/"skeleton", a wrong-typed field) raises one of
+        # these from the loader. That is the CALLER's contract error, not a
+        # server fault -- surface it as validation_error, not the
+        # internal_error map_exception would otherwise assign.
+        raise MCPToolError(
+            "validation_error",
+            f"malformed rule structure: {type(exc).__name__}: {exc}",
+            details={"hint": "each JSON rule needs 'pattern' and 'skeleton'"},
+            cause=exc,
+        ) from exc
 
-    return {"ok": True, "rules_added": len(engine) - rules_before}
+    added = len(engine) - rules_before
+    result = {"ok": True, "rules_added": added}
+    if added == 0 and text.strip() and not _all_comments_or_blank(text):
+        # Garbage DSL that parses to zero rules used to return a bare
+        # ok:True with no signal that nothing landed. Surface it.
+        result["note"] = ("no rules were parsed from the input; check the "
+                           "DSL/JSON syntax")
+    return result
+
+
+def _all_comments_or_blank(text: str) -> bool:
+    """True when every line is blank or a ``#`` comment (so producing zero
+    rules is expected, not a silent failure)."""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#"):
+            return False
+    return True
 
 
 def tool_add_rule(engine, *, pattern: str, skeleton: str,
