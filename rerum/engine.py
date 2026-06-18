@@ -3838,6 +3838,11 @@ class RuleEngine:
         and checks for intersection. This is more efficient than enumerating
         entire equivalence classes.
 
+        When a theory is loaded (see ``with_theory``), expressions are compared
+        MODULO the theory: AC-variant inputs are proven equal with no search via
+        the canonical-key quick check, and the search meets on canonical forms.
+        With no theory, the behavior is unchanged.
+
         Args:
             expr_a: First expression
             expr_b: Second expression
@@ -3870,18 +3875,26 @@ class RuleEngine:
         self._cancel_requested = False
         bidirectional_only = not include_unidirectional
 
-        # Convert to hashable for set operations
-        key_a = _expr_to_tuple(expr_a)
-        key_b = _expr_to_tuple(expr_b)
+        # Convert to hashable for set operations. Under a theory the key is
+        # the NORMAL FORM, so AC-variant inputs collide here and the quick
+        # check below returns a zero-step proof. With no theory _canonicalize
+        # is the identity (unchanged behavior).
+        ca = self._canonicalize(expr_a)
+        cb = self._canonicalize(expr_b)
+        key_a = _expr_to_tuple(ca)
+        key_b = _expr_to_tuple(cb)
 
-        # Quick check: are they already equal?
+        # Quick check: are they already equal? Under a theory the keys are
+        # canonical, so AC-variant inputs land here; report the CANONICAL
+        # common form (ca) for consistency with the search branches. With no
+        # theory ca is expr_a (identity), so this is byte-for-byte unchanged.
         if key_a == key_b:
             if trace:
                 init_step = RewriteStep(
                     rule_index=-1,
                     metadata=RuleMetadata(name=None),
-                    before=expr_a,
-                    after=expr_a,
+                    before=ca,
+                    after=ca,
                     kind="initial",
                 )
                 path_a: Optional[List] = [init_step]
@@ -3892,7 +3905,7 @@ class RuleEngine:
             return EqualityProof(
                 expr_a=expr_a,
                 expr_b=expr_b,
-                common=expr_a,
+                common=ca,
                 depth_a=0,
                 depth_b=0,
                 path_a=path_a,
@@ -3903,10 +3916,10 @@ class RuleEngine:
         # Maps: hashable_key -> (original_expr, depth, parent_key, label)
         # label is None for the start node, else a dict from _all_single_rewrites(labeled=True)
         visited_a: Dict[tuple, Tuple[ExprType, int, Optional[tuple], Optional[dict]]] = {
-            key_a: (expr_a, 0, None, None)
+            key_a: (ca, 0, None, None)
         }
         visited_b: Dict[tuple, Tuple[ExprType, int, Optional[tuple], Optional[dict]]] = {
-            key_b: (expr_b, 0, None, None)
+            key_b: (cb, 0, None, None)
         }
 
         # Per-side extension trackers; local to this call to avoid state leaks.
@@ -3915,9 +3928,9 @@ class RuleEngine:
         max_depth_a = max_depth
         max_depth_b = max_depth
 
-        # BFS frontiers: (expression, depth)
-        frontier_a: deque = deque([(expr_a, 0)])
-        frontier_b: deque = deque([(expr_b, 0)])
+        # BFS frontiers carry CANONICAL states (expression, depth).
+        frontier_a: deque = deque([(ca, 0)])
+        frontier_b: deque = deque([(cb, 0)])
 
         def reconstruct_path(
             visited: Dict[tuple, Tuple[ExprType, int, Optional[tuple], Optional[dict]]],
@@ -4005,10 +4018,11 @@ class RuleEngine:
                         current, bidirectional_only, groups, rules=rules, labeled=True
                     )
                     for new_expr, label in rewrites:
-                        new_key = _expr_to_tuple(new_expr)
+                        cnew = self._canonicalize(new_expr)
+                        new_key = _expr_to_tuple(cnew)
                         if new_key not in visited_a:
-                            visited_a[new_key] = (new_expr, depth + 1, current_key, label)
-                            frontier_a.append((new_expr, depth + 1))
+                            visited_a[new_key] = (cnew, depth + 1, current_key, label)
+                            frontier_a.append((cnew, depth + 1))
 
                             # Check for intersection
                             if new_key in visited_b:
@@ -4023,7 +4037,7 @@ class RuleEngine:
                                 return EqualityProof(
                                     expr_a=expr_a,
                                     expr_b=expr_b,
-                                    common=new_expr,
+                                    common=cnew,
                                     depth_a=depth + 1,
                                     depth_b=depth_b,
                                     path_a=path_a,
@@ -4045,10 +4059,11 @@ class RuleEngine:
                         current, bidirectional_only, groups, rules=rules, labeled=True
                     )
                     for new_expr, label in rewrites:
-                        new_key = _expr_to_tuple(new_expr)
+                        cnew = self._canonicalize(new_expr)
+                        new_key = _expr_to_tuple(cnew)
                         if new_key not in visited_b:
-                            visited_b[new_key] = (new_expr, depth + 1, current_key, label)
-                            frontier_b.append((new_expr, depth + 1))
+                            visited_b[new_key] = (cnew, depth + 1, current_key, label)
+                            frontier_b.append((cnew, depth + 1))
 
                             # Check for intersection
                             if new_key in visited_a:
@@ -4063,7 +4078,7 @@ class RuleEngine:
                                 return EqualityProof(
                                     expr_a=expr_a,
                                     expr_b=expr_b,
-                                    common=new_expr,
+                                    common=cnew,
                                     depth_a=depth_a_val,
                                     depth_b=depth + 1,
                                     path_a=path_a,

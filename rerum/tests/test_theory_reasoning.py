@@ -78,3 +78,47 @@ class TestEquivalentsModuloTheory:
         eng = _comm_plus_engine()
         out = list(eng.equivalents(["+", "a", "b"], max_depth=3))
         assert out == [["+", "a", "b"], ["+", "b", "a"]]
+
+
+class TestProveEqualModuloTheory:
+    def test_commute_holds_instantly_with_theory(self):
+        # No commute rule loaded: equality holds ONLY via the theory.
+        eng = RuleEngine().with_theory(AC_PLUS)
+        proof = eng.prove_equal(["+", "x", "y"], ["+", "y", "x"])
+        assert proof is not None
+        # Zero-step: the canonical keys match, so the quick check fires.
+        assert proof.depth_a == 0 and proof.depth_b == 0
+
+    def test_zero_step_proof_common_is_canonical(self):
+        # The quick-check branch must report the CANONICAL common form, not a
+        # raw input: (+ y x) and (+ x y) meet at the canonical (+ x y).
+        eng = RuleEngine().with_theory(AC_PLUS)
+        proof = eng.prove_equal(["+", "y", "x"], ["+", "x", "y"])
+        assert proof is not None
+        assert proof.common == ["+", "x", "y"]
+        assert eng._canonicalize(proof.common) == proof.common
+
+    def test_commute_not_provable_without_theory(self):
+        eng = RuleEngine()  # no theory, no commute rule
+        proof = eng.prove_equal(["+", "x", "y"], ["+", "y", "x"])
+        assert proof is None
+
+    def test_associativity_and_commutativity_modulo_theory(self):
+        eng = RuleEngine().with_theory(AC_PLUS)
+        proof = eng.prove_equal(["+", ["+", "a", "b"], "c"],
+                                ["+", "a", ["+", "c", "b"]])
+        assert proof is not None
+
+    def test_proof_path_states_are_canonical_no_normalize_steps(self):
+        # A real proof under a theory: every step.after is the canonical state,
+        # and no step is a kind="normalize" micro-step. Distinct operands a, b
+        # avoid the idempotent-collapse of (+ a a) (AC_PLUS has no "repeat"
+        # rule, so it is a join-semilattice on repeated operands).
+        eng = RuleEngine.from_dsl("@f: (f ?x ?y) => (+ :x :y)").with_theory(AC_PLUS)
+        proof = eng.prove_equal(["f", "b", "a"], ["+", "a", "b"],
+                                include_unidirectional=True, trace=True)
+        assert proof is not None
+        for step in (proof.path_a or []):
+            assert step.kind != "normalize"
+            if isinstance(step.after, list):
+                assert eng._canonicalize(step.after) == step.after
