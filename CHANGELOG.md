@@ -5,6 +5,27 @@ All notable changes to RERUM are documented here. Format follows
 [SemVer](https://semver.org/) with the caveat that while `0.x`, minor bumps
 may include breaking changes.
 
+## [0.10.0]
+
+### Added
+- RULE-SET MANIFESTS (`rerum/manifest.py`): self-describing rule files. Six
+  `:`-directives ride the existing `:include` namespace -- `:requires`
+  (named prelude bundles), `:requires-ops` (declared fold-op contract),
+  `:theory`, `:metadata`, `:driver` (hint), `:goal` (hint).
+  `RuleEngine.from_manifest(path)` assembles a whole domain from one file
+  (install preludes, set theory, load rules, merge the sidecar) and FAILS
+  LOUD when a required fold op is missing -- the silent-junk footgun where a
+  missing skeleton `(! op ...)` survived as a literal compound. Example
+  manifests: `examples/differentiation.manifest`, `examples/boolean.manifest`.
+- `RuleEngine.with_theory(theory)`: public setter for the session theory
+  (the MCP `load_theory` tool previously poked `_theory` directly).
+- `RuleEngine.missing_fold_ops()`: the fold-op audit as a public method over
+  the loaded rules + installed prelude, usable outside manifests.
+- `engine.manifest`: a plain `load_file` now parses and STORES the file's
+  declared contract (a `RuleSetManifest`) for inspection -- but applies
+  nothing (no prelude install / theory / sidecar merge); assembly is
+  `from_manifest`-only, keeping `load_file` backward compatible.
+
 ## [0.9.0]
 
 A comprehensive review-driven redesign of the MCP layer (code review +

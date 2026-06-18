@@ -1,0 +1,7 @@
+# Differentiation domain manifest: assembles the whole D1 pipeline in one
+# RuleEngine.from_manifest call (replacing the hand-wired make_diff_engine).
+:requires math predicate
+:theory arithmetic.theory.json
+:metadata differentiation.metadata.json
+:driver simplify
+:include differentiation.rules

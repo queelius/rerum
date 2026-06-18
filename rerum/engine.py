@@ -1615,6 +1615,10 @@ class RuleEngine:
         # a theory= argument is threaded (e.g. solve's normalize_between).
         # Always present, so callers never need a hasattr dance.
         self._theory = None
+        # The loading contract declared by the last file loaded via
+        # ``load_file`` (a RuleSetManifest), or None. ``load_file`` STORES
+        # it but applies nothing; ``from_manifest`` both stores and acts.
+        self.manifest = None
 
     def _sort_by_priority(self) -> None:
         """Sort rules by priority (descending). Higher priority fires first.
@@ -1810,8 +1814,107 @@ class RuleEngine:
 
     def load_file(self, path: Union[str, Path],
                   validate_examples: bool = True) -> 'RuleEngine':
-        """Load rules from a file (.rules or .json). Validates examples by default."""
+        """Load rules from a file (.rules/.json/.manifest).
+
+        Validates examples by default. If the file carries manifest
+        directives (``:requires``/``:theory``/...), they are PARSED and
+        STORED on ``self.manifest`` for inspection but NOT applied -- a
+        plain load never silently installs a prelude, sets a theory, or
+        merges a sidecar. Use ``RuleEngine.from_manifest`` for assembly.
+        """
+        path = Path(path)
+        if path.suffix != ".json":
+            from .manifest import parse_manifest
+            self.manifest = parse_manifest(path.read_text())
         return self._install(load_rules_from_file(path), validate_examples)
+
+    def with_theory(self, theory) -> 'RuleEngine':
+        """Set the session theory (a ``normalize.Theory``) and return self.
+
+        Public setter for the ``_theory`` slot threaded into
+        ``solve(normalize_between=True)`` and available for explicit
+        ``normalize`` passes. Invalidates the cached simplifier.
+        """
+        self._theory = theory
+        self._simplifier = None
+        return self
+
+    def missing_fold_ops(self) -> List[str]:
+        """Fold-op names invoked by loaded rules but absent from the prelude.
+
+        Walks every rule's skeleton AND guard condition for ``(! op ...)``
+        compute heads and returns, sorted, those not in the installed
+        prelude. Empty when no prelude is installed only if no rule computes;
+        otherwise a non-empty result is the silent-junk footgun (a missing
+        skeleton op survives as a literal compound) made visible.
+        """
+        from .manifest import collect_fold_ops
+        installed = set(self._fold_funcs or {})
+        used = set()
+        for _idx, rule, meta in self.iter_rules():
+            _pattern, skeleton = rule
+            used |= collect_fold_ops(skeleton)
+            if meta.condition is not None:
+                used |= collect_fold_ops(meta.condition)
+        return sorted(used - installed)
+
+    @classmethod
+    def from_manifest(cls, path: Union[str, Path]) -> 'RuleEngine':
+        """Assemble a complete engine from a rule-set manifest file.
+
+        Parses the file's manifest directives, then: installs the combined
+        ``:requires`` prelude bundles; sets the ``:theory``; loads the rules
+        (the file's ``:include``d body and any inline rules); merges the
+        ``:metadata`` sidecar with examples validated against the assembled
+        prelude. Finally runs a FAIL-LOUD audit: every ``(! op ...)`` head
+        across all skeletons and guards, plus every ``:requires-ops`` name,
+        must resolve in the assembled prelude -- otherwise raises
+        ``ValueError`` naming the missing ops. The ``:driver``/``:goal``
+        hints are stored on ``engine.manifest`` (data only).
+        """
+        from .manifest import parse_manifest
+        from .normalize import Theory
+        from .rewriter import PRELUDE_BUNDLES, combine_preludes
+
+        path = Path(path)
+        manifest = parse_manifest(path.read_text())
+
+        engine = cls()
+        if manifest.requires:
+            bundles = [PRELUDE_BUNDLES[name] for name in manifest.requires]
+            combined = combine_preludes(*bundles)
+            # An empty result (e.g. :requires none) installs NO prelude, so
+            # has_fold_funcs() stays False -- a domain that declares it needs
+            # no computation should not look like it has an empty one.
+            if combined:
+                engine.with_prelude(combined)
+        if manifest.theory is not None:
+            theory_path = path.parent / manifest.theory
+            engine.with_theory(Theory.from_json(theory_path.read_text()))
+
+        # Load rules WITHOUT example validation (the sidecar supplies the
+        # examples, and the prelude must be set before they validate).
+        engine._install(load_rules_from_file(path), validate_examples=False)
+
+        if manifest.metadata is not None:
+            meta_path = path.parent / manifest.metadata
+            engine.load_metadata_json(meta_path.read_text(),
+                                      validate_examples=True)
+
+        # Fail-loud audit: declared + structurally-used ops must all resolve.
+        installed = set(engine._fold_funcs or {})
+        missing = (set(engine.missing_fold_ops())
+                   | (set(manifest.requires_ops) - installed))
+        if missing:
+            raise ValueError(
+                f"manifest {path.name}: rules require fold ops absent from "
+                f"the assembled prelude {sorted(manifest.requires) or '[]'}: "
+                f"{sorted(missing)}. Add the bundle that provides them to "
+                f":requires, or load this domain manually if the ops live in "
+                f"a custom code prelude.")
+
+        engine.manifest = manifest
+        return engine
 
     def load_rules(self, rules: List[List]) -> 'RuleEngine':
         """Load rules from a Python list (without metadata)."""
@@ -1947,6 +2050,7 @@ class RuleEngine:
         self._cancel_requested = False
         self._hooks.clear()
         self._theory = None
+        self.manifest = None
         self._fold_funcs = fold_funcs
         return self
 

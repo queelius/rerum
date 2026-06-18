@@ -36,7 +36,7 @@ Example Rules File (algebra.rules):
     @dd-var: (dd ?x:var ?x) => 1
 """
 
-__version__ = "0.9.0"
+__version__ = "0.10.0"
 __author__ = "spinoza"
 
 # Core rewriter components
@@ -109,6 +109,9 @@ from .normalize import (
     collect_like_terms,
     ORDER_KEY,
 )
+
+# Rule-set manifests (self-describing rule files)
+from .manifest import RuleSetManifest, parse_manifest
 
 # Trace helpers
 from .trace import splice_at, rule_identity
@@ -228,6 +231,8 @@ __all__ = [
     "NumevalDomainError",
     # Theory-driven normalization
     "Theory",
+    "RuleSetManifest",
+    "parse_manifest",
     "normalize",
     "flatten",
     "canonical_sort",

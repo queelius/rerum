@@ -1,0 +1,8 @@
+# Boolean algebra domain manifest. No prelude: every rewrite is structural.
+# The theory drives the general normalize; the equivalences group should be
+# disabled for fixpoint simplification (see boolean.rules).
+:requires none
+:theory boolean.theory.json
+:metadata boolean.metadata.json
+:driver simplify
+:include boolean.rules
