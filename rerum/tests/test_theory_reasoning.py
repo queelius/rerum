@@ -184,3 +184,46 @@ class TestMinimizeModuloTheory:
         assert result.cost <= expr_size(["+", ["id", "a"], "b"])
         # Derivation contract: present-and-wellformed or None, never malformed.
         assert result.derivation is None or result.derivation.final == result.expr
+
+
+class TestSoundnessBoundary:
+    def test_position_pinning_rule_is_not_reached_under_ac_theory(self):
+        # DOCUMENTED INCOMPLETENESS (spec "Soundness boundary"): a distribute
+        # rule pins the (+ ...) factor as the FIRST operand of *. Under an AC *
+        # theory, canonical_sort moves it, so the syntactic matcher never sees
+        # the arrangement and the distributed form is NOT reached. This is
+        # intended behavior until F3 (AC-matching). Pinned here so a future
+        # reader does not mistake it for completeness.
+        eng = RuleEngine.from_dsl(
+            "@distrib: (* (+ ?a ?b) ?c) => (+ (* :a :c) (* :b :c))"
+        )
+        eng.with_theory(Theory.from_dict({"*": {"ac": True}}))
+        target = ["+", ["*", "a", "c"], ["*", "b", "c"]]
+        proof = eng.prove_equal(["*", ["+", "a", "b"], "c"], target,
+                                include_unidirectional=True)
+        assert proof is None  # boundary: F3 is expected to make this succeed
+
+    def test_position_pinning_rule_DOES_fire_without_theory(self):
+        # Control: the same rule reaches the distributed form with no theory.
+        eng = RuleEngine.from_dsl(
+            "@distrib: (* (+ ?a ?b) ?c) => (+ (* :a :c) (* :b :c))"
+        )
+        target = ["+", ["*", "a", "c"], ["*", "b", "c"]]
+        proof = eng.prove_equal(["*", ["+", "a", "b"], "c"], target,
+                                include_unidirectional=True)
+        assert proof is not None
+
+
+class TestBackwardCompatValueLevel:
+    def test_equivalents_identical_with_no_theory(self):
+        eng = RuleEngine.from_dsl("@comm: (+ ?x ?y) <=> (+ :y :x)")
+        out = list(eng.equivalents(["+", "a", "b"], max_depth=3))
+        # Exact value AND order, byte-for-byte with pre-F1 behavior.
+        assert out == [["+", "a", "b"], ["+", "b", "a"]]
+
+    def test_prove_equal_path_identical_with_no_theory(self):
+        eng = RuleEngine.from_dsl("@comm: (+ ?x ?y) <=> (+ :y :x)")
+        proof = eng.prove_equal(["+", "a", "b"], ["+", "b", "a"],
+                                include_unidirectional=True, trace=True)
+        assert proof is not None
+        assert proof.common == ["+", "b", "a"]
