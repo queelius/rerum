@@ -36,6 +36,32 @@ except Exception:  # pragma: no cover - exercised when normalize.py absent
     _normalize = None
 
 
+def _node_key(expr: ExprType) -> tuple:
+    """Hashable visited/dedup key that does NOT merge a bool with the equal int.
+
+    ``expr_to_tuple`` keys atoms by the atom itself. Python makes ``True == 1``
+    and ``False == 0`` (and they are hash-equal), so a plain tuple key conflates
+    the genuinely distinct nodes ``(f True)`` and ``(f 1)`` -- they would alias
+    in a visited set or dedup ``seen`` set, silently dropping one branch of the
+    search. The rest of the engine already bool-guards exactly this distinction
+    (``normalize._same_atom`` compares bools by identity; ``normalize.ORDER_KEY``
+    tags bool atoms with the ``"bool"`` discriminator). This key mirrors that
+    discipline so node identity in ``solve`` tracks the structural identity of
+    the EXPRESSION, not Python's numeric-tower equality.
+
+    Atoms keep their natural key; only bools are tagged (with a sentinel that
+    cannot collide with any real atom) so ``True``/``1`` and ``False``/``0`` map
+    to distinct keys. Knows no domain: this is pure structure.
+    """
+    if isinstance(expr, list):
+        return tuple(_node_key(e) for e in expr)
+    if isinstance(expr, bool):
+        # Tag bools so they cannot alias the equal int. The leading marker is a
+        # type object (never a valid expression atom), so no real atom collides.
+        return (bool, expr)
+    return expr
+
+
 def contains_op(expr: ExprType, ops: Set[str]) -> bool:
     """True if any compound node in ``expr`` has a head operator in ``ops``.
 
@@ -157,14 +183,17 @@ def _labeled_rewrites(engine, expr, rules, _path=None):
     Deduplicates by the resulting expression so the search frontier is not
     flooded with structurally identical neighbors.
     """
-    from .engine import _match_internal, _expr_to_tuple
+    from .engine import _match_internal
 
     if _path is None:
         _path = []
     seen = set()
 
     def emit(new_expr, label):
-        key = _expr_to_tuple(new_expr)
+        # Key with _node_key (bool-distinguishing), not _expr_to_tuple: a bool
+        # neighbor and the equal-int neighbor are distinct nodes and must both
+        # survive dedup. See _node_key for why expr_to_tuple would merge them.
+        key = _node_key(new_expr)
         if key in seen:
             return None
         seen.add(key)
@@ -254,7 +283,6 @@ def solve(
     Returns:
         A `SolveResult`.
     """
-    from .engine import _expr_to_tuple
 
     def maybe_normalize(e: ExprType) -> ExprType:
         if (normalize_between and _normalize is not None
@@ -279,12 +307,14 @@ def solve(
         return SolveResult(solution=start, derivation=trace,
                            explored=0, found=True)
 
-    start_key = _expr_to_tuple(start)
+    start_key = _node_key(start)
     # Parent pointers double as the visited set: key -> (parent_key, step).
-    # The key is _expr_to_tuple (identity on atoms), so node identity tracks
-    # Python equality exactly: True/1 and False/0 alias deliberately (they are
-    # == and hash-equal everywhere else in the engine) and no != pair is ever
-    # merged. A str()-based key would be unsafe here (it would alias "1" and 1).
+    # The key is _node_key, which keys atoms by themselves EXCEPT it tags bools
+    # so a bool atom and the equal int are NOT merged (Python's True == 1 and
+    # False == 0 are == and hash-equal, so a plain expr_to_tuple key would alias
+    # the genuinely distinct nodes (f True) and (f 1) and silently drop a
+    # branch). This mirrors normalize._same_atom / ORDER_KEY. A str()-based key
+    # would be unsafe in the other direction (it would alias "1" and 1).
     parents = {start_key: (None, None)}
     # Priority queue of (cost, tiebreak, expr). tiebreak keeps it total.
     counter = 0
@@ -313,11 +343,11 @@ def solve(
 
         _, _, node = heapq.heappop(frontier)
         explored += 1
-        node_key = _expr_to_tuple(node)
+        node_key = _node_key(node)
 
         for neighbor, label in _labeled_rewrites(engine, node, rules):
             neighbor = maybe_normalize(neighbor)
-            nkey = _expr_to_tuple(neighbor)
+            nkey = _node_key(neighbor)
             if nkey in parents:
                 continue
             step = _make_step(label["_metadata"], node, neighbor, label)
