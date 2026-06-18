@@ -25,6 +25,29 @@ python experiments/scaling.py                          # validate enumeration cl
 
 Python 3.9+. CI tests on 3.9 through 3.13.
 
+## Core vs. optional non-core layers (read this first)
+
+RERUM is a **term-rewriting library**. The CORE is rewriting and the things in
+its mathematical family: terms, rules, matching, strategies, conditional
+rewriting (guards), normalization *modulo* an equational theory (AC-rewriting,
+`normalize.py`), equational reasoning (`equivalents`/`prove_equal`/`minimize`,
+the Knuth-Bendix family), and derivations/traces. `import rerum` exposes ONLY
+this core.
+
+Two modules are OPTIONAL, NON-CORE layers, deliberately NOT re-exported from
+`rerum` (import them explicitly):
+- `rerum/solve.py` -- goal-directed best-first SEARCH over the rewrite graph.
+  This is search/planning, not reduction. There is no `RuleEngine.solve`
+  method; use `from rerum.solve import solve; solve(engine, ...)`.
+- `rerum/numeval.py` -- numeric evaluation of ground terms (model
+  interpretation), backing numeric verification and the search layer.
+
+`rerum/mcp/` (agent server) and `rerum/training.py` (corpus/prose projection)
+are likewise applications/integrations, not the rewriting core. When adding
+to the library, ask first: *is this term rewriting?* If it is search, numeric
+evaluation, an agent interface, or data generation, it belongs in a non-core
+layer, not the core.
+
 ## Architecture
 
 The package is split into a *pure functional core* (`rewriter.py`) and a *high-level OO API* (`engine.py`). The line-count ratio (~960 vs ~2,650) is a useful map of where complexity lives. Pattern matching is small and pure; rule loading, group management, equivalence reasoning, and tracing are where surface area grew.
@@ -112,8 +135,9 @@ locks this in.
   single mapping point; unwraps ``HookError`` causes, wires tool context).
 - ``utils.py``: ``json_safe``, the transport sanitizer (Fraction +
   non-finite floats).
-- Naming: engine ``solve()`` (search) vs ``solve_goal`` (its MCP wrapper)
-  vs ``solve_assisted`` (LLM-resolver loop) are three distinct things.
+- Naming: ``rerum.solve.solve(engine, ...)`` (the optional search function;
+  there is no engine method) vs ``solve_goal`` (its MCP wrapper) vs
+  ``solve_assisted`` (LLM-resolver loop) are three distinct things.
 
 ### Key design boundaries
 - **Rules are data; preludes are code.** Rules can only invoke operations the developer has explicitly enabled in the prelude. That is the security boundary for loading rules from untrusted sources, so preserve it when adding features that touch rule evaluation.
@@ -124,7 +148,7 @@ locks this in.
 
 - `rerum/tests/` is one file per feature area. Core: `test_bidirectional`, `test_bindings`, `test_cli`, `test_engine_methods`, `test_equivalents`, `test_expr_builder`, `test_groups`, `test_guards`, `test_includes`, `test_normalize`, `test_numeval`, `test_optimization`, `test_priorities`, `test_prove_equal`, `test_rationals`, `test_rewriter`, `test_sequencing`, `test_solve`, `test_strategies`, `test_trace`, `test_trace_situated`, `test_training`, plus the `test_mcp_*` family (tools, registry, wire, smoke, trace, errors, persistence, solve_goal, solve_assisted, no_domain). Example-content suites drive the GENERAL engine through `examples/` data: `test_differentiation`, `test_integration`, `test_limits`, `test_calculus_checker_d2`, `test_boolean`, `test_sets`, `test_peano`, `test_ski`. When adding a feature, add a parallel file rather than extending an unrelated one.
 - `experiments/` is for *empirical probes*: timings, scaling validation against the theoretical `n! × Catalan(n-1)` class size for associative-commutative sums. These are runnable scripts, not pytest, and they catch regressions in the equivalence/proof/minimize pipeline that unit tests miss. Run them after changes to `equivalents`, `prove_equal`, or `minimize`.
-- `examples/` is the DOMAIN CONTENT library, each domain pure data + an optional checker: calculus (`differentiation.rules`, `integration.rules`, `limits.rules` + `.metadata.json` example sidecars, `calculus_checker.py` numeric verification on the general `numeval`, `limits_fold_ops.py` example fold ops, `arithmetic.theory.json`), `boolean.rules`/`sets.rules` (+ theories; truth-table / Venn property tests certify every rule), `peano.rules` and `ski.rules` (NO prelude: computation from pure rewriting; SKI demonstrates honest non-termination budgets), legacy `algebra.rules`/`calculus.rules`/`number_theory.rules`, a custom prelude, `demo.py`, `demo.rerum`. Every domain's loading contract (prelude bundles, theory, driver+goal) currently lives in file comments and per-test loader helpers.
+- `examples/` is the DOMAIN CONTENT library, each domain pure data + an optional checker. The CONFLUENT domains (run on `simplify`, the genuine TRS demos) live at the top level: `differentiation.rules`, `boolean.rules`/`sets.rules` (+ theories; truth-table / Venn property tests certify every rule), `peano.rules` and `ski.rules` (NO prelude: computation from pure rewriting; SKI demonstrates honest non-termination budgets), legacy `algebra.rules`/`calculus.rules`/`number_theory.rules`, `calculus_checker.py` (numeric verification on the optional `numeval`), a custom prelude, `demo.py`, `demo.rerum`. The NON-CONFLUENT, SEARCH-DEPENDENT domains live under `examples/search/` (they need the optional `rerum.solve` layer, not `simplify`): `integration.rules`, `limits.rules` + their `.metadata.json` sidecars, `limits_fold_ops.py`.
 
 ## Footguns (non-obvious behavior)
 
@@ -159,10 +183,12 @@ locks this in.
   also honor it. ``apply_once`` is one-shot so it doesn't need to check.
   Cancellation from a ``fixpoint`` observer is silently ignored because
   the engine has already converged.
-- **MCP solve naming**: ``solve_goal`` is goal-directed search (engine
-  ``solve()``); ``solve_assisted`` is the LLM-resolver agentic loop (the
-  old ``solve`` tool). They do not share an implementation, and no tool is
-  named bare ``solve``.
+- **MCP solve naming**: ``solve_goal`` is goal-directed search (the optional
+  ``rerum.solve.solve`` function -- NOT an engine method); ``solve_assisted``
+  is the LLM-resolver agentic loop. They do not share an implementation, and
+  no tool is named bare ``solve``. (The MCP layer depends on the optional
+  non-core ``rerum.solve``/``rerum.numeval`` modules -- it is an integration
+  surface, not part of the rewriting core.)
 - **MCP is domain-agnostic by test**: ``test_mcp_no_domain.py`` fails if any
   ``rerum/mcp/`` file hardcodes a domain operator literal as code (it strips
   docstrings/comments first, so caller-data examples are fine). The server

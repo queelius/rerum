@@ -8,27 +8,33 @@
 **Rewriting Expressions via Rules Using Morphisms**
 
 A pattern matching and term rewriting library for symbolic computation in
-Python. One GENERAL engine -- rules are data, domains are content:
+Python. One GENERAL engine -- rules are data, domains are content.
+
+**The core (`import rerum`)** is term rewriting and its mathematical family:
 
 - **Rewriting**: a DSL for rewrite rules (guards, priorities, groups,
   bidirectional `<=>`), fixpoint/bottomup/topdown strategies, full traces.
 - **Equivalence reasoning**: enumerate equivalence classes, prove equality
   by bidirectional search, minimize under cost functions.
-- **Goal-directed search** (`solve`): best-first search with caller-supplied
-  goals and per-operator costs, for non-confluent rule sets.
-- **Theories** (`normalize`): declare operators associative-commutative with
-  identities/annihilators as JSON data; get canonical forms with no engine
-  changes per domain.
-- **Numeric verification** (`numeval`, `numeric_equiv`): evaluate ground
-  terms over a prelude; check expression equivalence by sampling.
-- **Training corpora** (`training`): render derivations as machine-checkable
-  JSONL records and natural-language chains of thought.
-- **MCP server** (`rerum-mcp`): 19 typed tools exposing the engine to LLM
-  agents, including an agentic loop where the model proposes rules.
-- **A domain library under `examples/`**: calculus (differentiation,
-  integration, limits -- numerically certified), boolean algebra, set
-  algebra, Peano arithmetic, SKI combinators. The engine names no domain
-  operator; every domain is rules + data the engine loads.
+- **Theories** (`normalize`): rewriting *modulo* an equational theory --
+  declare operators associative-commutative with identities/annihilators as
+  JSON data; get canonical forms with no engine changes per domain.
+- **A confluent domain library under `examples/`**: differentiation, boolean
+  algebra, set algebra, Peano arithmetic, SKI combinators -- each a genuine
+  rewrite system run on `simplify`, with the engine naming no domain operator.
+
+**Optional, non-core layers** (imported explicitly, not part of `import
+rerum`) build on the core but are not term rewriting:
+
+- **Goal-directed search** (`from rerum.solve import solve`): best-first
+  *search* over the rewrite graph with caller-supplied goals and costs, for
+  non-confluent rule sets. Drives the `examples/search/` domains (integration,
+  limits).
+- **Numeric evaluation / verification** (`from rerum.numeval import numeval,
+  numeric_equiv`): interpret ground terms in a numeric model; check
+  expression equivalence by sampling.
+- **Training corpora** (`rerum.training`) and an **MCP server** (`rerum-mcp`,
+  19 tools) are applications/integrations layered on the above.
 
 ## Installation
 
@@ -408,6 +414,9 @@ prefer `prove_equal` with a budget over full enumeration. See the
 
 ## Goal-Directed Search
 
+> **Optional, non-core layer.** This is *search*, not term rewriting -- it is
+> not exported from `import rerum`; use `from rerum.solve import solve`.
+
 Confluent rule sets reduce to a fixpoint; non-confluent ones (where rules
 COMPETE -- integration is the classic case) need search with backtracking:
 
@@ -448,6 +457,10 @@ The same machinery serves arithmetic, boolean algebra
 (`examples/sets.theory.json`) -- the engine never knows which.
 
 ## Numeric Evaluation and Verification
+
+> **Optional, non-core layer.** Interpreting terms in a numeric model is not
+> term rewriting -- not exported from `import rerum`; use
+> `from rerum.numeval import ...`.
 
 ```python
 from rerum.numeval import numeval, numeric_equiv
