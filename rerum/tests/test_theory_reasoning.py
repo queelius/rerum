@@ -122,3 +122,29 @@ class TestProveEqualModuloTheory:
             assert step.kind != "normalize"
             if isinstance(step.after, list):
                 assert eng._canonicalize(step.after) == step.after
+
+
+class TestInheritedAndUnits:
+    def test_are_equal_true_for_ac_variants(self):
+        eng = RuleEngine().with_theory(AC_PLUS)
+        assert eng.are_equal(["+", "x", "y"], ["+", "y", "x"]) is True
+
+    def test_are_equal_false_without_theory(self):
+        eng = RuleEngine()  # no theory, no commute rule
+        assert eng.are_equal(["+", "x", "y"], ["+", "y", "x"]) is False
+
+    def test_identity_unit_collapses_into_class(self):
+        eng = RuleEngine().with_theory(AC_PLUS)
+        # (+ x 0) and x are the same modulo the identity unit.
+        assert eng.are_equal(["+", "x", 0], "x") is True
+
+    def test_annihilator_unit_collapses_into_class(self):
+        eng = RuleEngine().with_theory(AC_TIMES)
+        # (* x 0) and 0 are the same modulo the annihilator unit.
+        assert eng.are_equal(["*", "x", 0], 0) is True
+
+    def test_domain_free_boolean_theory(self):
+        # Same engine code, a non-arithmetic AC theory: (and p q) == (and q p).
+        eng = RuleEngine().with_theory(AC_BOOL)
+        assert eng.are_equal(["and", "p", "q"], ["and", "q", "p"]) is True
+        assert eng.are_equal(["or", "p", "q"], ["or", "q", "p"]) is True
