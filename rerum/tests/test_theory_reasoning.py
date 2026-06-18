@@ -9,7 +9,7 @@ GENERAL ENGINE: theories are DATA. The boolean fixture proves the same engine
 code reasons over a non-arithmetic AC theory with no code change.
 """
 
-from rerum.engine import RuleEngine
+from rerum.engine import RuleEngine, expr_size
 from rerum.normalize import Theory
 
 
@@ -148,3 +148,39 @@ class TestInheritedAndUnits:
         eng = RuleEngine().with_theory(AC_BOOL)
         assert eng.are_equal(["and", "p", "q"], ["and", "q", "p"]) is True
         assert eng.are_equal(["or", "p", "q"], ["or", "q", "p"]) is True
+
+
+class TestMinimizeModuloTheory:
+    def test_returns_canonical_representative(self):
+        eng = RuleEngine.from_dsl("@comm: (+ ?x ?y) <=> (+ :y :x)")
+        eng.with_theory(AC_PLUS)
+        result = eng.minimize(["+", "b", "a"], metric="size")
+        # The result is canonical (sorted), not the raw (+ b a).
+        assert eng._canonicalize(result.expr) == result.expr
+        # The result is canonical-consistent: original is the canonical input
+        # and original_cost is the cost of THAT, not of the raw input.
+        assert result.original == eng._canonicalize(result.original)
+        assert result.original_cost == expr_size(result.original)
+
+    def test_no_spurious_improvement_on_normalization_only(self):
+        # Input (+ a 0) has raw size 3 but canonical size 1 (a). Without the
+        # canonical seed, minimize would measure improvement against the RAW
+        # baseline and report ~0.667 -- counting normalization as a win. With
+        # the seed, the baseline is the canonical form, so the ratio is 0.0.
+        eng = RuleEngine().with_theory(AC_PLUS)
+        result = eng.minimize(["+", "a", 0], metric="size")
+        assert result.improvement_ratio == 0.0
+        assert result.expr == "a"
+
+    def test_mixed_directional_rules_under_theory(self):
+        # A => simplification rule that genuinely fires under the theory:
+        # @unwrap reduces (id a) to a, then the AC sort canonicalizes the sum.
+        # The result is canonical and the derivation is well-formed or None.
+        eng = RuleEngine.from_dsl("@unwrap: (id ?x) => :x")
+        eng.with_theory(AC_PLUS)
+        result = eng.minimize(["+", ["id", "a"], "b"], metric="size",
+                              include_unidirectional=True)
+        assert eng._canonicalize(result.expr) == result.expr
+        assert result.cost <= expr_size(["+", ["id", "a"], "b"])
+        # Derivation contract: present-and-wellformed or None, never malformed.
+        assert result.derivation is None or result.derivation.final == result.expr

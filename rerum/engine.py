@@ -4137,6 +4137,11 @@ class RuleEngine:
         Explores the equivalence class and returns the expression with lowest cost.
         Cost can be specified via a custom function, a built-in metric, or operator costs.
 
+        When a theory is loaded (see ``with_theory``), the class is explored
+        modulo the theory and the returned expression is the min-cost CANONICAL
+        representative; improvement is measured against the canonical form of
+        the input. With no theory, the behavior is unchanged.
+
         Args:
             expr: Expression to optimize
             cost: Custom cost function (expr -> float)
@@ -4179,9 +4184,16 @@ class RuleEngine:
             # Default to size
             cost_fn = expr_size
 
-        # Track best found
-        best_expr = expr
-        best_cost = cost_fn(expr)
+        # Track best found. Seed from the CANONICAL form so the baseline lives
+        # in the same normalization state as the reps equivalents() yields;
+        # otherwise normalization alone would read as a spurious improvement.
+        # ``cexpr`` is also the result's ``original`` and the derivation's
+        # ``initial`` so the whole OptimizationResult is canonical-consistent
+        # (``original_cost == cost_fn(original)``). With no theory _canonicalize
+        # is the identity, so this is byte-for-byte unchanged.
+        cexpr = self._canonicalize(expr)
+        best_expr = cexpr
+        best_cost = cost_fn(best_expr)
         original_cost = best_cost
         count = 0
 
@@ -4201,7 +4213,7 @@ class RuleEngine:
                 best_cost = equiv_cost
 
         derivation = None
-        if _expr_to_tuple(best_expr) != _expr_to_tuple(expr):
+        if _expr_to_tuple(best_expr) != _expr_to_tuple(cexpr):
             proof = self.prove_equal(
                 expr, best_expr, trace=True,
                 max_depth=max_depth,
@@ -4212,7 +4224,7 @@ class RuleEngine:
             )
             if proof is not None and proof.path_a is not None and proof.path_b is not None:
                 trace = RewriteTrace()
-                trace.initial = expr
+                trace.initial = cexpr
                 trace.final = best_expr
                 for step in proof.path_a[1:]:        # skip synthetic initial
                     trace(step)
@@ -4229,7 +4241,7 @@ class RuleEngine:
         return OptimizationResult(
             expr=best_expr,
             cost=best_cost,
-            original=expr,
+            original=cexpr,
             original_cost=original_cost,
             expressions_checked=count,
             derivation=derivation,
