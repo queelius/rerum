@@ -13,10 +13,18 @@
 # rest-pattern linearity has the same latent shape but is rescued by its
 # top-priority free-of? guard; integration has no analogous escape.)
 @int-sum {category=structural}: (int (+ ?f ?g ?rest...) ?v) => (+ (int :f :v) (int (+ :g :rest...) :v))
+# int-sum-one unwraps the unary-sum tail (int (+ f) v) that the splitter
+# leaves. It is LOAD-BEARING under the NON-theory solve driver; under
+# theory-normalized solve, normalize collapses (+ f) -> f before matching,
+# so this rule is subsumed there but still required without a theory.
 @int-sum-one {category=structural}: (int (+ ?f) ?v) => (int :f :v)
 # Difference rule.
 @int-diff {category=structural}: (int (- ?f ?g) ?v) => (- (int :f :v) (int :g :v))
 # Constant multiple: pull a literal constant factor out (left and right).
+# Both orders are load-bearing under the NON-theory solve driver: without a
+# theory, (* x 5) stays as-is so only -right matches, while (* 5 x) needs
+# -left. Under theory-normalized solve, normalize canonicalizes the constant
+# to the front (* 5 x), so -left handles both and -right is subsumed there.
 @int-const-mult-left {category=structural}: (int (* ?c:const ?f) ?v) => (* :c (int :f :v))
 @int-const-mult-right {category=structural}: (int (* ?f ?c:const) ?v) => (* :c (int :f :v))
 

@@ -221,3 +221,56 @@ class TestIntegrationNumericallyVerified:
         assert res.found is True
         assert not contains_op(res.solution, {"int"})
         assert checker.is_integral(integrand, "x", res.solution) is True
+
+
+class TestEveryRuleFiresEndToEnd:
+    """Coverage finding: several rules were only exercised by single-step
+    sidecar validation, never end-to-end through solve. This drives EVERY
+    integration rule via a representative integrand and asserts it appears in
+    a solve derivation -- proving none are dead. Some rules (int-sum-one,
+    int-const-mult-right) fire only under the NON-theory driver, where
+    normalize does not pre-canonicalize them away; integrate_plain() omits
+    the theory so those paths are exercised."""
+
+    def _plain(self, integrand, max_nodes=4000):
+        from rerum.solve import contains_op, solve
+        eng = _integration_engine()
+        return solve(eng, ["int", integrand, "x"],
+                     lambda e: not contains_op(e, {"int"}),
+                     max_nodes=max_nodes)
+
+    # (rule name -> a plain-driver integrand that makes it fire)
+    CASES = {
+        "int-sum": ["+", "x", ["sin", "x"], ["cos", "x"]],
+        "int-sum-one": ["+", ["sin", "x"], ["cos", "x"]],
+        "int-diff": ["-", ["sin", "x"], ["cos", "x"]],
+        "int-const-mult-left": ["*", 3, ["sin", "x"]],
+        "int-const-mult-right": ["*", ["sin", "x"], 3],
+        "int-power": ["^", "x", 2],
+        "int-var": "x",
+        "int-one": 1,
+        "int-const": 5,
+        "int-recip": ["/", 1, "x"],
+        "int-power-neg1": ["^", "x", -1],
+        "int-exp": ["exp", "x"],
+        "int-sin": ["sin", "x"],
+        "int-cos": ["cos", "x"],
+        "int-usub-cos-sq": ["*", 2, "x", ["cos", ["^", "x", 2]]],
+        "int-usub-sin-sq": ["*", 2, "x", ["sin", ["^", "x", 2]]],
+        "int-usub-exp-sq": ["*", 2, "x", ["exp", ["^", "x", 2]]],
+        "int-byparts-x-exp": ["*", "x", ["exp", "x"]],
+    }
+
+    @pytest.mark.parametrize("rule,integrand", sorted(CASES.items()))
+    def test_rule_fires(self, rule, integrand):
+        res = self._plain(integrand)
+        assert res.found is True, f"{rule}: solve did not close {integrand}"
+        names = [s.metadata.name for s in res.derivation.steps]
+        assert rule in names, f"{rule} did not fire; got {names}"
+
+    def test_cases_cover_every_named_rule(self):
+        # Guard against a rule being added without coverage here.
+        eng = _integration_engine()
+        all_names = {m.name for _i, _r, m in eng.iter_rules()}
+        assert all_names == set(self.CASES), (
+            f"uncovered rules: {all_names - set(self.CASES)}")
