@@ -64,13 +64,33 @@ the BOOMERANG `int(e^x*sin x)` as the known-hard frontier case (parts twice
 reproduces the original; closing it needs the algebraic `I = A - I` step,
 beyond pure rewriting).
 
+## Soundness caveat (discovered during planning -- reshapes the success bar)
+
+A validation probe revealed that the obvious objective -- "no `int` operator
+remains" -- is UNSOUND for by-parts. By-parts spawns sub-integrals, and the
+table has rules that can reduce an integral to a constant/0; best-first
+search ordered by an int-eliminating cost therefore finds the SHORTEST
+int-free path, which can be WRONG. Concretely, `int(x*sin x)` "closes" in 4
+nodes to `(- (* x (- (cos x))) 0)` = `-x*cos x` (missing the `+ sin x`
+term); `is_integral` returns False. The cheap `op_costs` lever does not just
+fail to find answers -- it finds FAST WRONG ones. Therefore:
+
+- "Found" (int-free) is NOT the success signal; CORRECTNESS is. Every
+  measured cell must report whether the found solution passes `is_integral`.
+- One mechanism to test is a CORRECTNESS-AWARE GOAL: goal = int-free AND
+  `is_integral(integrand, var, candidate)`. This makes the search reject
+  wrong int-free nodes; the question becomes whether it stays cheap.
+
 ## Success bar
 
 A mechanism (or combination) WORKS iff it closes the classic
 polynomial-times-transcendental battery within a small node budget
-(target <= 500 nodes each) AND regresses no existing integration test. The
-boomerang is EXPECTED to remain out of reach under every cheap mechanism --
-that is the result that pins C3's necessity to a specific, named family.
+(target <= 500 nodes each) WITH A CORRECT solution (`is_integral` verifies)
+AND regresses no existing integration test. "Found but `is_integral`-false"
+is a FAILURE, not a success. The boomerang is EXPECTED to remain out of
+reach (correctly) under every cheap mechanism -- that result, plus the
+soundness caveat above, is what pins C3's necessity (or the need for a
+verified-goal search) to a specific, named situation.
 
 ## Deliverables
 
