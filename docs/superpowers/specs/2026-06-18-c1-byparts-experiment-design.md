@@ -1,6 +1,6 @@
 # C1: general integration-by-parts -- measured experiment + cheap refinement
 
-**Status:** approved design (user sign-off 2026-06-18)
+**Status:** approved design (user sign-off 2026-06-18); EXECUTED 2026-06-18 -- the plain int-free goal is UNSOUND for by-parts (finds fast wrong answers); a VERIFIED goal + the int-neg linearity rule closes the textbook polynomial-times-transcendental battery correctly and cheaply (<=67 nodes); C3 is AVOIDABLE for that battery and NEEDED only for the boomerang family (int(e^x sin x)), while int(x ln x) wants a small u-selection follow-on. Findings + decision: experiments/byparts_search.py docstring.
 **Date:** 2026-06-18
 **Roadmap:** Wave 1, first sub-project. See
 `docs/superpowers/specs/2026-06-18-future-features-roadmap.md`.

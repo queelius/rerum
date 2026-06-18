@@ -13,6 +13,57 @@ The printed findings record the C3 decision: which cases a cheap mechanism
 closes CORRECTLY, which remain frontier.
 
 Run from the repo root:  python experiments/byparts_search.py
+
+## Findings (measured 2026-06-18, budget=500 unless noted)
+
+Per mechanism, the classic polynomial x transcendental cases closed
+CORRECTLY (found AND is_integral):
+
+- baseline (general schema, plain goal):     {int(x*cos x)} only. The rest
+  do not close (their int(-cos x) sub-integrals strand without int-neg).
+- pattern-restricted (plain goal):           {int(x*cos x)} only.
+- pattern + theory (plain goal):             {} -- and WORSE: theory makes
+  cos/sin/x^2 all "close" to WRONG answers in ~4-6 nodes. The plain goal +
+  an int-eliminating cost actively steers to the shortest int-free path,
+  which spuriously zeroes a sub-integral.
+- pattern/general + theory + int-neg (plain goal): {} -- all WRONG, fast.
+  int-neg does NOT help under the plain goal; it just gives the search more
+  ways to reach a fast wrong int-free node.
+- pattern + int-neg + VERIFIED goal:         {int(x*cos x), int(x*sin x)}
+  (9-10 nodes). bp-pow does not reach int(x^2*e^x) in 500 nodes.
+- general + int-neg + VERIFIED goal:         {int(x*cos x), int(x*sin x),
+  int(x^2*e^x)} -- the WINNER. 9 / 10 / 67 nodes, all CORRECT. Only
+  int(x*ln x) is missed (the schema picks u=x; ln x needs to be u, and
+  int(ln x) itself needs by-parts -- a recursion the search does not reach).
+- size-cost did not improve on the int-cost under the verified goal.
+
+Boomerang int(e^x*sin x):
+- plain goal:    found in 6 nodes -- WRONG (a false int-free answer).
+- verified goal: found=False at budget=3000 (~35s). Correctly NOT closed:
+  it needs the algebraic I = A - I step, which is beyond pure rewriting.
+
+## C3 decision (2026-06-18)
+
+- The plain "no int remains" goal is UNSOUND for by-parts. Cheap cost-steered
+  search finds FAST WRONG answers. Correctness must be IN the goal.
+- With a VERIFIED goal (is_integral in the goal predicate), the general
+  by-parts schema + the int-neg linearity rule closes the textbook
+  polynomial x transcendental battery {x*cos x, x*sin x, x^2*e^x} CORRECTLY
+  and cheaply (<= 67 nodes). -> SHIP as content: the general by-parts rule
+  + int-neg, plus a verified-goal integrate recipe (the plain goal would
+  emit wrong answers).
+- Two cases remain FRONTIER, pinning what C3 (or a richer mechanism) would
+  need:
+    * int(x*ln x): needs the u/dv CHOICE (LIATE: log should be u). The fixed
+      schema's u=left-factor heuristic is wrong here. A u-selection
+      mechanism (or trying both splits) would address it -- cheaper than
+      full AND/OR search; a candidate for a small follow-on, NOT C3.
+    * int(e^x*sin x) [boomerang]: needs the algebraic I = A - I resolution,
+      genuinely beyond pure rewriting. This is the precise, named situation
+      that justifies C3 (search-introduces-subgoals + an algebraic closer).
+- VERDICT: C3 is AVOIDABLE for the textbook by-parts battery (a verified
+  goal + one linearity rule suffices). C3 is NEEDED only for the boomerang
+  family; int(x*ln x) wants a smaller u-selection follow-on, not C3.
 """
 from __future__ import annotations
 
