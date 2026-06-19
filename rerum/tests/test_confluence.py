@@ -1,5 +1,7 @@
 """F2: confluence and critical-pair diagnostics."""
 
+import pytest
+
 from rerum import confluence as cf
 from rerum.engine import RuleEngine
 from rerum.normalize import Theory
@@ -30,3 +32,91 @@ class TestTermSurgery:
         assert (2,) in ps        # constant a
         assert (1, 1) not in ps  # ?x is a variable position -> excluded
         assert (0,) not in ps    # operator head -> not a position
+
+
+class TestUnify:
+    def test_two_distinct_variables_unify(self):
+        s = cf.unify(["?", "x"], ["?", "y"])
+        assert s is not None
+        # x resolves to the y-variable.
+        assert cf.apply_subst(s, ["?", "x"]) == ["?", "y"]
+
+    def test_variable_binds_compound(self):
+        s = cf.unify(["?", "x"], ["g", "a"])
+        assert s is not None and cf.apply_subst(s, ["?", "x"]) == ["g", "a"]
+
+    def test_occurs_check_fails(self):
+        assert cf.unify(["?", "x"], ["f", ["?", "x"]]) is None
+
+    def test_head_and_arity_clashes_fail(self):
+        assert cf.unify(["f", "a"], ["g", "a"]) is None
+        assert cf.unify(["f", "a"], ["f", "a", "b"]) is None
+
+    def test_atoms(self):
+        assert cf.unify("a", "a") == {}
+        assert cf.unify("a", "b") is None
+        assert cf.unify(["f", "a"], "a") is None  # compound vs atom
+
+    def test_compound_unifies_pairwise(self):
+        s = cf.unify(["f", ["?", "x"], "b"], ["f", "a", ["?", "y"]])
+        assert s is not None
+        assert cf.apply_subst(s, ["?", "x"]) == "a"
+        assert cf.apply_subst(s, ["?", "y"]) == "b"
+
+    def test_repeated_variable_in_one_pattern(self):
+        # (f ?x ?x): a repeated binder (e.g. idempotence f(x,x)=>x). The two
+        # occurrences must take the SAME value, so distinct operands clash.
+        assert cf.unify(["f", ["?", "x"], ["?", "x"]], ["f", "a", "a"]) is not None
+        assert cf.apply_subst(
+            cf.unify(["f", ["?", "x"], ["?", "x"]], ["f", "a", "a"]),
+            ["?", "x"]) == "a"
+        assert cf.unify(["f", ["?", "x"], ["?", "x"]], ["f", "a", "b"]) is None
+
+    def test_variable_chain_resolves_in_one_pass(self):
+        # (f ?x ?y) ~ (f ?y a): x and y both resolve to a (the fully-applied
+        # invariant must hold across the pairwise steps).
+        s = cf.unify(["f", ["?", "x"], ["?", "y"]], ["f", ["?", "y"], "a"])
+        assert s is not None
+        assert cf.apply_subst(s, ["?", "x"]) == "a"
+        assert cf.apply_subst(s, ["?", "y"]) == "a"
+
+
+class TestUnifyRefusal:
+    @pytest.mark.parametrize("bad", [
+        ["?c", "x"], ["?v", "x"], ["?free", "x", "y"], ["?...", "r"],
+    ])
+    def test_unsupported_node_raises(self, bad):
+        with pytest.raises(cf.UnsupportedPattern):
+            cf.unify(["?", "x"], bad)
+
+    def test_mixed_var_vs_typed_raises_not_binds(self):
+        # Refuse-FIRST: the typed node must raise, not be bound as opaque.
+        with pytest.raises(cf.UnsupportedPattern):
+            cf.unify(["?", "x"], ["?c", "y"])
+
+    def test_nested_unsupported_raises(self):
+        with pytest.raises(cf.UnsupportedPattern):
+            cf.unify(["f", ["?c", "x"]], ["f", "a"])
+
+
+class TestApplySubstAndInstantiate:
+    def test_apply_subst_recurses_and_leaves_free(self):
+        s = {"x": "a"}
+        assert cf.apply_subst(s, ["f", ["?", "x"], ["?", "y"]]) == ["f", "a", ["?", "y"]]
+
+    def test_apply_subst_single_pass_on_resolved_subst(self):
+        # A fully-applied subst: x -> (g y), y -> b. One pass resolves x fully.
+        s = cf.unify(["f", ["?", "x"], ["?", "y"]], ["f", ["g", ["?", "y"]], "b"])
+        assert s is not None
+        assert cf.apply_subst(s, ["?", "x"]) == ["g", "b"]
+
+    def test_instantiate_skeleton_substitutes_colon_vars(self):
+        # skeleton (h :x) under {x -> (k z)} becomes (h (k z)); free :w stays ?w.
+        sk = ["h", [":", "x"], [":", "w"]]
+        s = {"x": ["k", ["?", "z"]]}
+        assert cf.instantiate_skeleton(sk, s) == ["h", ["k", ["?", "z"]], ["?", "w"]]
+
+    def test_instantiate_skeleton_bare_root_colon_var(self):
+        # A skeleton that is just :x at the root (rule RHS is a single var).
+        assert cf.instantiate_skeleton([":", "x"], {"x": ["g", "a"]}) == ["g", "a"]
+        assert cf.instantiate_skeleton([":", "x"], {}) == ["?", "x"]

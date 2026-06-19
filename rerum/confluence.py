@@ -77,3 +77,118 @@ def positions(term: ExprType) -> List[Position]:
 
     walk(term, ())
     return out
+
+
+class UnsupportedPattern(Exception):
+    """Raised by ``unify`` on a pattern form outside the first-order fragment:
+    ``?c``, ``?v``, ``?free``, ``?...``, or a skeleton-only marker (``!``,
+    ``fresh``). The caller records the rule as not-analyzed, keeping the
+    confluence verdict conservative."""
+
+
+# A substitution {var_name: term}, maintained fully-applied (idempotent).
+Subst = Dict[str, ExprType]
+
+_UNSUPPORTED_HEADS = {"?c", "?v", "?free", "?...", "!", "fresh"}
+
+
+def _unsupported(t: ExprType) -> bool:
+    return compound(t) and isinstance(t[0], str) and t[0] in _UNSUPPORTED_HEADS
+
+
+def _is_var(t: ExprType) -> bool:
+    return arbitrary_expression(t)  # ["?", name]
+
+
+def apply_subst(subst: Subst, term: ExprType) -> ExprType:
+    """Replace each ``["?", name]`` whose ``name`` is bound. Single pass --
+    ``subst`` is kept fully-applied -- and recurses into compound arguments."""
+    if _is_var(term):
+        name = term[1]
+        return subst[name] if name in subst else term
+    if compound(term):
+        # Recurses over index 0 (the operator head) too; that is a harmless
+        # no-op since heads are operator strings, never ["?", name] nodes.
+        return [apply_subst(subst, sub) for sub in term]
+    return term
+
+
+def _occurs(name: str, term: ExprType) -> bool:
+    if _is_var(term):
+        return term[1] == name
+    if compound(term):
+        return any(_occurs(name, sub) for sub in term)
+    return False
+
+
+def _compose_bind(subst: Subst, name: str, value: ExprType) -> Subst:
+    """Add ``name -> value`` (value already resolved), substituting it through
+    every existing range term so the result stays fully-applied."""
+    one = {name: value}
+    updated = {k: apply_subst(one, v) for k, v in subst.items()}
+    updated[name] = value
+    return updated
+
+
+def unify(t1: ExprType, t2: ExprType,
+          subst: Optional[Subst] = None) -> Optional[Subst]:
+    """First-order syntactic unification of two structured pattern terms.
+
+    Returns the mgu (a fully-applied ``Subst``) or ``None`` on a normal failure
+    (clash / occurs-check / arity / head mismatch). Raises ``UnsupportedPattern``
+    on any ?c/?v/?free/?... or skeleton-only node, checked BEFORE the
+    variable/compound branches so a typed node is never bound as opaque.
+
+    ``subst`` is an INTERNAL accumulator (left unset by external callers); it is
+    assumed to contain no unsupported nodes, since every value it stores derives
+    from a term that already passed the refuse-first guard. Do not pre-seed it
+    with caller data.
+    """
+    if subst is None:
+        subst = {}
+    if _unsupported(t1) or _unsupported(t2):
+        raise UnsupportedPattern(f"cannot unify pattern form: {t1!r} ~ {t2!r}")
+    a = apply_subst(subst, t1)
+    b = apply_subst(subst, t2)
+    if _is_var(a):
+        return _unify_var(a, b, subst)
+    if _is_var(b):
+        return _unify_var(b, a, subst)
+    if not compound(a) and not compound(b):
+        return subst if a == b else None
+    if compound(a) and compound(b):
+        if a[0] != b[0] or len(a) != len(b):
+            return None
+        s: Optional[Subst] = subst
+        for x, y in zip(a[1:], b[1:]):
+            s = unify(x, y, s)
+            if s is None:
+                return None
+        return s
+    return None  # atom vs compound
+
+
+def _unify_var(var: ExprType, other: ExprType, subst: Subst) -> Optional[Subst]:
+    name = var[1]
+    other = apply_subst(subst, other)
+    if _is_var(other) and other[1] == name:
+        return subst
+    if _occurs(name, other):
+        return None
+    return _compose_bind(subst, name, other)
+
+
+def instantiate_skeleton(skeleton: ExprType, sigma: Subst) -> ExprType:
+    """Turn a rule RHS (skeleton) into a term under ``sigma``.
+
+    A ``[":", name]`` reference becomes ``sigma``'s value for ``name`` (or the
+    variable ``["?", name]`` itself if unbound -- it remains a free variable of
+    the critical pair). Compounds recurse; literal atoms/operators are returned
+    as-is. Non-trivial skeleton forms (:.../!/fresh) never reach here because
+    such rules are refused upstream (see ``is_analyzable``).
+    """
+    if skeleton_evaluation(skeleton):  # [":", name]
+        return apply_subst(sigma, ["?", skeleton[1]])
+    if compound(skeleton):
+        return [instantiate_skeleton(sub, sigma) for sub in skeleton]
+    return skeleton
