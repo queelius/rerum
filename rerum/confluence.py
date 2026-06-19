@@ -192,3 +192,75 @@ def instantiate_skeleton(skeleton: ExprType, sigma: Subst) -> ExprType:
     if compound(skeleton):
         return [instantiate_skeleton(sub, sigma) for sub in skeleton]
     return skeleton
+
+
+# ---------------------------------------------------------------------------
+# Rename-apart and analyzability pre-scan
+# ---------------------------------------------------------------------------
+
+_PATTERN_BAD = {"?c", "?v", "?free", "?..."}
+_SKELETON_BAD = {":...", "!", "fresh"}
+
+
+def _variables(term: ExprType) -> set:
+    """The set of ``["?", name]`` variable names occurring in ``term``."""
+    out: set = set()
+
+    def walk(t: ExprType) -> None:
+        if _is_var(t):
+            out.add(t[1])
+        elif compound(t):
+            for sub in t:
+                walk(sub)
+
+    walk(term)
+    return out
+
+
+def _rename(term: ExprType, mapping: Dict[str, str]) -> ExprType:
+    """Rename ``["?", name]`` and ``[":", name]`` nodes per ``mapping``."""
+    if _is_var(term):  # ["?", name]
+        return ["?", mapping.get(term[1], term[1])]
+    if skeleton_evaluation(term):  # [":", name]
+        return [":", mapping.get(term[1], term[1])]
+    if compound(term):
+        return [_rename(sub, mapping) for sub in term]
+    return term
+
+
+def rename_apart(pattern: ExprType, skeleton: ExprType,
+                 avoid: set) -> Tuple[ExprType, ExprType]:
+    """Return ``(pattern', skeleton')`` with every rule variable renamed to a
+    fresh name not in ``avoid`` (and distinct from each other). Renames both
+    the pattern's ``["?", name]`` binders and the skeleton's ``[":", name]``
+    references with the SAME mapping."""
+    names = _variables(pattern) | _variables(skeleton)
+    mapping: Dict[str, str] = {}
+    used = set(avoid)
+    for n in sorted(names):
+        fresh = gensym(n, used)
+        mapping[n] = fresh
+        used.add(fresh)
+    return _rename(pattern, mapping), _rename(skeleton, mapping)
+
+
+def _has_marker(term: ExprType, heads: set) -> bool:
+    if compound(term):
+        if isinstance(term[0], str) and term[0] in heads:
+            return True
+        return any(_has_marker(sub, heads) for sub in term)
+    return False
+
+
+def is_analyzable(pattern: ExprType, skeleton: ExprType,
+                  condition: Optional[ExprType]) -> bool:
+    """True iff F2 can soundly analyze this directed rule: unconditional, a
+    first-order pattern (no ?c/?v/?free/?...), and a plain-substitution
+    skeleton (no :.../!/fresh)."""
+    if condition is not None:
+        return False
+    if _has_marker(pattern, _PATTERN_BAD):
+        return False
+    if _has_marker(skeleton, _SKELETON_BAD):
+        return False
+    return True

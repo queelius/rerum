@@ -120,3 +120,28 @@ class TestApplySubstAndInstantiate:
         # A skeleton that is just :x at the root (rule RHS is a single var).
         assert cf.instantiate_skeleton([":", "x"], {"x": ["g", "a"]}) == ["g", "a"]
         assert cf.instantiate_skeleton([":", "x"], {}) == ["?", "x"]
+
+
+class TestRenameAndAnalyzable:
+    def test_rename_apart_makes_fresh_variables(self):
+        pat, sk = cf.rename_apart(["f", ["?", "x"]], ["g", [":", "x"]], {"x"})
+        # The pattern variable is renamed away from the avoided "x".
+        assert pat != ["f", ["?", "x"]]
+        new_name = pat[1][1]
+        assert new_name != "x"
+        # The skeleton's [":", x] reference is renamed to the SAME new name.
+        assert sk == ["g", [":", new_name]]
+
+    def test_is_analyzable_accepts_first_order(self):
+        assert cf.is_analyzable(["f", ["?", "x"]], ["g", [":", "x"]], None) is True
+
+    def test_is_analyzable_refuses_conditional(self):
+        assert cf.is_analyzable(["f", ["?", "x"]], [":", "x"], ["pos", [":", "x"]]) is False
+
+    def test_is_analyzable_refuses_bad_pattern_forms(self):
+        assert cf.is_analyzable(["f", ["?...", "r"]], [":", "r"], None) is False
+        assert cf.is_analyzable(["f", ["?c", "x"]], [":", "x"], None) is False
+
+    def test_is_analyzable_refuses_bad_skeleton_forms(self):
+        assert cf.is_analyzable(["f", ["?", "x"]], ["!", "+", [":", "x"], 1], None) is False
+        assert cf.is_analyzable(["f", ["?", "x"]], [":...", "x"], None) is False
