@@ -108,10 +108,31 @@ class TestCheckTermination:
         assert report.not_analyzed == ["rest"]
         assert report.terminating is False
 
+    def test_fresh_rhs_variable_is_unoriented(self):
+        # RHS introduces a variable not in the LHS (Var(r) not subset Var(l)),
+        # so no reduction order can orient it: ?y is not buried in (f ?x).
+        eng = RuleEngine.from_dsl("@fr: (f ?x) => (g ?y)")
+        report = tm.check_termination(eng, ["f", "g"])
+        assert "fr" in report.unoriented
+        assert report.terminating is False
+
+    def test_conditional_rule_is_not_analyzed(self):
+        # A guarded rule is refused (is_analyzable returns False on a condition).
+        eng = RuleEngine.from_dsl("@cnd: (f ?x) => :x when (p ?x)")
+        report = tm.check_termination(eng, ["f"])
+        assert report.not_analyzed == ["cnd"]
+        assert report.terminating is False
+
     def test_general_boolean(self):
         eng = RuleEngine.from_dsl("@dn: (not (not ?x)) => :x")
         report = tm.check_termination(eng, ["not"])
         assert report.terminating is True   # (not (not x)) >_lpo x (subterm)
+
+    def test_general_arithmetic(self):
+        # Same code certifies an arithmetic rule: (+ ?x 0) >_lpo x (subterm).
+        eng = RuleEngine.from_dsl("@z: (+ ?x 0) => :x")
+        report = tm.check_termination(eng, ["+", "0"])
+        assert report.terminating is True
 
 
 class TestInstantiateSkeletonReuse:
@@ -160,3 +181,32 @@ class TestNewman:
         assert report.terminating is None
         assert report.confluent is None
         assert report.locally_confluent is False
+
+
+class TestEngineAndExports:
+    def test_engine_check_termination_delegates(self):
+        eng = RuleEngine.from_dsl("@dn: (not (not ?x)) => :x")
+        report = eng.check_termination(["not"])
+        assert report.terminating is True
+
+    def test_engine_check_confluence_precedence_passthrough(self):
+        eng = RuleEngine.from_dsl("""
+            @l: (f (f ?x)) => a
+            @r: (f ?x) => b
+        """)
+        assert eng.check_confluence(precedence=["f", "a", "b"]).confluent is False
+        assert eng.check_confluence().confluent is None  # no precedence
+
+    def test_public_reexports(self):
+        import rerum
+        for name in ("lpo_greater", "orient", "check_termination",
+                     "TerminationReport"):
+            assert name in rerum.__all__
+            assert hasattr(rerum, name)
+        assert "_prec_gt" not in rerum.__all__  # private stays private
+
+    def test_import_smoke_no_cycle(self):
+        # Both import orders succeed (pins the lazy-import boundary).
+        import importlib
+        importlib.import_module("rerum.termination")
+        importlib.import_module("rerum.confluence")

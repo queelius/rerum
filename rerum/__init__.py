@@ -153,6 +153,14 @@ from .confluence import (
     UnsupportedPattern,
 )
 
+# Termination analysis (F4)
+from .termination import (
+    lpo_greater,
+    orient,
+    check_termination,
+    TerminationReport,
+)
+
 # Public API
 __all__ = [
     # Version
@@ -246,4 +254,9 @@ __all__ = [
     "CriticalPair",
     "ConfluenceReport",
     "UnsupportedPattern",
+    # Termination analysis
+    "lpo_greater",
+    "orient",
+    "check_termination",
+    "TerminationReport",
 ]

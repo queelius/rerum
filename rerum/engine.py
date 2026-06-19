@@ -4276,14 +4276,25 @@ class RuleEngine:
         pairs, _not_analyzed = _critical_pairs(records)
         return pairs
 
-    def check_confluence(self, *, max_steps: int = 1000) -> "ConfluenceReport":
+    def check_confluence(self, *, max_steps: int = 1000,
+                         precedence=None) -> "ConfluenceReport":
         """Local-confluence diagnostic for this engine's enabled rules.
 
         Computes critical pairs and checks joinability (modulo the loaded
-        theory). Read-only. See ``rerum.confluence.ConfluenceReport``.
+        theory). With ``precedence`` (a list of function symbols in decreasing
+        order, roadmap F4), also reports global ``confluent`` via Newman's
+        Lemma. Read-only. See ``rerum.confluence.ConfluenceReport``.
         """
         from .confluence import check_confluence as _check_confluence
-        return _check_confluence(self, max_steps=max_steps)
+        return _check_confluence(self, max_steps=max_steps,
+                                 precedence=precedence)
+
+    def check_termination(self, precedence) -> "TerminationReport":
+        """LPO termination diagnostic for this engine's enabled rules under
+        ``precedence`` (roadmap F4). Read-only. See
+        ``rerum.termination.TerminationReport``."""
+        from .termination import check_termination as _check_termination
+        return _check_termination(self, precedence)
 
     # ============================================================
     # Random Sampling
