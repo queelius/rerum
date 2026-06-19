@@ -405,15 +405,22 @@ def _decide_joinable(engine, cp: CriticalPair, max_steps: int) -> Optional[bool]
     within budget is joinable regardless of normal-form status.
 
     Returns True (joinable), False (distinct normal forms under the engine's
-    reduction), or None (unknown: budget/cycle, not decided).
+    reduction), or None (unknown: budget/cycle/recursion limit, not decided).
     """
-    s2 = engine.simplify(cp.left, max_steps=max_steps)
-    t2 = engine.simplify(cp.right, max_steps=max_steps)
-    if engine._canonicalize(s2) == engine._canonicalize(t2):
-        return True  # common reduct (modulo theory) -- checked FIRST
-    if _is_normal_form(engine, s2) and _is_normal_form(engine, t2):
-        return False  # distinct normal forms under the engine's reduction
-    return None  # undecided within the budget
+    try:
+        s2 = engine.simplify(cp.left, max_steps=max_steps)
+        t2 = engine.simplify(cp.right, max_steps=max_steps)
+        if engine._canonicalize(s2) == engine._canonicalize(t2):
+            return True  # common reduct (modulo theory) -- checked FIRST
+        if _is_normal_form(engine, s2) and _is_normal_form(engine, t2):
+            return False  # distinct normal forms under the engine's reduction
+        return None  # undecided within the budget
+    except RecursionError:
+        # A pathological unbounded-growth rule can build a term deep enough to
+        # exceed Python's recursion limit during reduction before the step
+        # budget trips. That is an UNDECIDED pair, not a defect -- map it to
+        # unknown (the sound verdict) so the call returns rather than raising.
+        return None
 
 
 def check_confluence(engine, *, max_steps: int = 1000) -> ConfluenceReport:

@@ -283,3 +283,60 @@ class TestCheckConfluence:
         arith = RuleEngine.from_dsl("@z: (+ ?x 0) => :x")
         assert cf.check_confluence(boolean).locally_confluent is True
         assert cf.check_confluence(arith).locally_confluent is True
+
+
+class TestEngineWrappersAndExports:
+    def test_engine_check_confluence_delegates(self):
+        eng = RuleEngine.from_dsl("""
+            @l: (f (f ?x)) => a
+            @r: (f ?x) => b
+        """)
+        method = eng.check_confluence()
+        direct = cf.check_confluence(eng)
+        assert method.locally_confluent == direct.locally_confluent is False
+
+    def test_engine_critical_pairs_delegates(self):
+        eng = RuleEngine.from_dsl("@r: (f (f ?x)) => (f :x)")
+        pairs = eng.critical_pairs()
+        assert isinstance(pairs, list)
+        assert all(isinstance(cp, cf.CriticalPair) for cp in pairs)
+
+    def test_disabled_group_contributes_no_overlap(self):
+        # DSL groups are [section] headers; rules under [grp] carry that tag.
+        eng = RuleEngine.from_dsl("""
+            [grp]
+            @l: (f (f ?x)) => a
+            @r: (f ?x) => b
+        """)
+        eng.disable_group("grp")
+        report = eng.check_confluence()
+        # With the only rules disabled, no overlaps -> vacuously confluent.
+        assert report.locally_confluent is True
+        assert report.analyzed_pair_count == 0
+
+    def test_public_reexports(self):
+        import rerum
+        for name in ("check_confluence", "critical_pairs", "CriticalPair",
+                     "ConfluenceReport", "unify", "apply_subst",
+                     "UnsupportedPattern"):
+            assert name in rerum.__all__
+            assert hasattr(rerum, name)
+
+
+class TestRecursionGuard:
+    def test_recursion_error_maps_to_unknown(self):
+        # If reduction blows the recursion limit on a pathological growth rule,
+        # the pair is UNDECIDED (None), not an exception -- so the call returns.
+        class _Boom:
+            def simplify(self, expr, max_steps=1000):
+                raise RecursionError("deep term")
+
+            def _simplify_once(self, expr):
+                return expr
+
+            def _canonicalize(self, expr):
+                return expr
+
+        cp = cf.CriticalPair(left=["a"], right=["b"], rule_left="x",
+                             rule_right="y", position=())
+        assert cf._decide_joinable(_Boom(), cp, 10) is None

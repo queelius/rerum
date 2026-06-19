@@ -4259,6 +4259,33 @@ class RuleEngine:
     #   result = solve(engine, expr, goal_predicate, ...)
 
     # ============================================================
+    # Confluence Analysis (F2)
+    # ============================================================
+
+    def critical_pairs(self) -> "List[CriticalPair]":
+        """The critical pairs (LHS overlaps) of this engine's enabled rules.
+
+        Read-only confluence analysis (roadmap F2). See ``rerum.confluence``.
+        """
+        from .confluence import critical_pairs as _critical_pairs, DirectedRule
+        records = [
+            DirectedRule(name=meta.name, pattern=rule[0], skeleton=rule[1],
+                         condition=meta.condition)
+            for _idx, rule, meta in self.rule_set()
+        ]
+        pairs, _not_analyzed = _critical_pairs(records)
+        return pairs
+
+    def check_confluence(self, *, max_steps: int = 1000) -> "ConfluenceReport":
+        """Local-confluence diagnostic for this engine's enabled rules.
+
+        Computes critical pairs and checks joinability (modulo the loaded
+        theory). Read-only. See ``rerum.confluence.ConfluenceReport``.
+        """
+        from .confluence import check_confluence as _check_confluence
+        return _check_confluence(self, max_steps=max_steps)
+
+    # ============================================================
     # Random Sampling
     # ============================================================
 

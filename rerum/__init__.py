@@ -142,6 +142,17 @@ from .training import (
     corpus_json_default,
 )
 
+# Confluence analysis (F2)
+from .confluence import (
+    unify,
+    apply_subst,
+    critical_pairs,
+    check_confluence,
+    CriticalPair,
+    ConfluenceReport,
+    UnsupportedPattern,
+)
+
 # Public API
 __all__ = [
     # Version
@@ -227,4 +238,12 @@ __all__ = [
     "to_prose",
     "generate_corpus",
     "corpus_json_default",
+    # Confluence analysis
+    "unify",
+    "apply_subst",
+    "critical_pairs",
+    "check_confluence",
+    "CriticalPair",
+    "ConfluenceReport",
+    "UnsupportedPattern",
 ]
