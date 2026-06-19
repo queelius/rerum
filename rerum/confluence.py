@@ -264,3 +264,98 @@ def is_analyzable(pattern: ExprType, skeleton: ExprType,
     if _has_marker(skeleton, _SKELETON_BAD):
         return False
     return True
+
+
+# ---------------------------------------------------------------------------
+# Critical-pair computation
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class DirectedRule:
+    """A single directed reduction rule (post-desugar)."""
+    name: Optional[str]
+    pattern: ExprType
+    skeleton: ExprType
+    condition: Optional[ExprType] = None
+
+
+@dataclass(frozen=True)
+class CriticalPair:
+    """An overlap between two rule LHSs. ``left``/``right`` are the two reducts
+    of the overlapped term; ``joinable`` is filled by ``check_confluence``
+    (None until then, or when undecidable).
+
+    NOTE: ``frozen=True`` protects against mutation but does NOT make instances
+    hashable -- ``left``/``right`` are lists. Do not put a ``CriticalPair`` in a
+    set or use it as a dict key.
+    """
+    left: ExprType
+    right: ExprType
+    rule_left: Optional[str]
+    rule_right: Optional[str]
+    position: Position
+    joinable: Optional[bool] = None
+
+
+def critical_pairs(
+    rules: List[DirectedRule],
+) -> Tuple[List[CriticalPair], List[str]]:
+    """Compute the critical pairs of ``rules`` (the standard superposition).
+
+    Returns ``(pairs, not_analyzed)`` where ``not_analyzed`` lists the names of
+    rules skipped (conditional or non-first-order), deduplicated in order.
+    """
+    pairs: List[CriticalPair] = []
+    not_analyzed: List[str] = []
+    seen_skips: set = set()
+
+    def skip(rule: DirectedRule) -> None:
+        key = rule.name
+        if key not in seen_skips:
+            seen_skips.add(key)
+            not_analyzed.append(key)
+
+    analyzable = []
+    for r in rules:
+        if is_analyzable(r.pattern, r.skeleton, r.condition):
+            analyzable.append(r)
+        else:
+            skip(r)
+
+    # Ordered (i, j) iteration: every directed overlap is generated, including
+    # the joinability-symmetric mirror of a root overlap between two DISTINCT
+    # rules ((Ri,Rj) at () and (Rj,Ri) at ()). The redundancy is cosmetic --
+    # joinability is symmetric -- so the verdict is unaffected; check_confluence
+    # does NOT deduplicate (CriticalPair is not hashable). Non-root overlaps are
+    # genuinely distinct and must all be kept.
+    for i, ri in enumerate(analyzable):
+        avoid = free_symbols(ri.pattern) | free_symbols(ri.skeleton)
+        for j, rj in enumerate(analyzable):
+            # Rj is renamed apart ONCE per (i, j): Ri is fixed across the
+            # position loop, so one fresh copy keeps the variables disjoint at
+            # every position p.
+            rj_pat, rj_sk = rename_apart(rj.pattern, rj.skeleton, avoid)
+            for p in positions(ri.pattern):
+                if i == j and p == ():
+                    continue  # trivial root self-overlap
+                try:
+                    sigma = unify(subterm_at(ri.pattern, p), rj_pat)
+                except UnsupportedPattern:
+                    # Defense-in-depth: unreachable while is_analyzable
+                    # pre-scans the whole pattern (positions() also skips
+                    # variable nodes). Kept so unify staying authoritative on
+                    # the first-order fragment is not silently bypassed.
+                    skip(ri)
+                    continue
+                if sigma is None:
+                    continue
+                u = apply_subst(sigma, ri.pattern)
+                left = instantiate_skeleton(ri.skeleton, sigma)
+                rj_rhs = instantiate_skeleton(rj_sk, sigma)
+                right = replace_at(u, p, rj_rhs)
+                pairs.append(CriticalPair(
+                    left=left, right=right,
+                    rule_left=ri.name, rule_right=rj.name, position=p,
+                ))
+
+    return pairs, not_analyzed

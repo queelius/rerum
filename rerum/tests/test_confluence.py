@@ -145,3 +145,58 @@ class TestRenameAndAnalyzable:
     def test_is_analyzable_refuses_bad_skeleton_forms(self):
         assert cf.is_analyzable(["f", ["?", "x"]], ["!", "+", [":", "x"], 1], None) is False
         assert cf.is_analyzable(["f", ["?", "x"]], [":...", "x"], None) is False
+
+
+def _rule(name, pattern, skeleton, condition=None):
+    return cf.DirectedRule(name=name, pattern=pattern, skeleton=skeleton,
+                           condition=condition)
+
+
+class TestCriticalPairs:
+    def test_overlap_between_two_rules(self):
+        # r2 (g ?x)=>(k ?x) overlaps r1 (f (g ?x))=>(h ?x) at position (1,).
+        r1 = _rule("r1", ["f", ["g", ["?", "x"]]], ["h", [":", "x"]])
+        r2 = _rule("r2", ["g", ["?", "x"]], ["k", [":", "x"]])
+        pairs, not_analyzed = cf.critical_pairs([r1, r2])
+        assert not_analyzed == []
+        # One overlap (r2 into r1 at (1,)) plus possibly others; find it.
+        found = [cp for cp in pairs
+                 if cp.rule_left == "r1" and cp.rule_right == "r2"
+                 and cp.position == (1,)]
+        assert len(found) == 1
+
+    def test_distinct_rule_variables_are_kept_apart(self):
+        # Both rules use ?x; the overlap must not conflate them.
+        r1 = _rule("r1", ["f", ["g", ["?", "x"]]], ["h", [":", "x"]])
+        r2 = _rule("r2", ["g", ["?", "x"]], ["k", [":", "x"]])
+        pairs, _ = cf.critical_pairs([r1, r2])
+        cp = [c for c in pairs if c.rule_left == "r1" and c.rule_right == "r2"
+              and c.position == (1,)][0]
+        # left = (h ?v); right = (f (k ?v)). The CORE apartness invariant:
+        # the unified variable appears as ONE shared renamed node in both legs
+        # (left's argument equals right's inner (k ...) argument), proving the
+        # two rules' ?x were renamed apart and then unified coherently.
+        assert cp.left[0] == "h" and cp.right[0] == "f"
+        shared = cp.left[1]
+        assert cf._is_var(shared)            # ["?", <fresh>]
+        assert cp.right[1][0] == "k"
+        assert cp.right[1][1] == shared      # same renamed variable node
+
+    def test_self_overlap_excludes_trivial_root(self):
+        # (f (f ?x)) => (f ?x): the only critical pair is the NON-root self
+        # overlap at (1,); the trivial root overlap (i==j, p==()) is excluded.
+        r = _rule("r", ["f", ["f", ["?", "x"]]], ["f", [":", "x"]])
+        pairs, _ = cf.critical_pairs([r])
+        positions_seen = {cp.position for cp in pairs}
+        assert () not in positions_seen
+        assert (1,) in positions_seen
+
+    def test_conditional_and_bad_rules_are_not_analyzed(self):
+        good = _rule("good", ["f", ["?", "x"]], [":", "x"])
+        cond = _rule("cond", ["g", ["?", "x"]], [":", "x"], condition=["p", [":", "x"]])
+        rest = _rule("rest", ["h", ["?...", "r"]], [":", "r"])
+        pairs, not_analyzed = cf.critical_pairs([good, cond, rest])
+        assert "cond" in not_analyzed
+        assert "rest" in not_analyzed
+        # The good rule is still analyzed (it just may yield no overlaps here).
+        assert "good" not in not_analyzed
