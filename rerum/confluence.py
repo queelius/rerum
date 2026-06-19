@@ -184,8 +184,11 @@ def instantiate_skeleton(skeleton: ExprType, sigma: Subst) -> ExprType:
     A ``[":", name]`` reference becomes ``sigma``'s value for ``name`` (or the
     variable ``["?", name]`` itself if unbound -- it remains a free variable of
     the critical pair). Compounds recurse; literal atoms/operators are returned
-    as-is. Non-trivial skeleton forms (:.../!/fresh) never reach here because
-    such rules are refused upstream (see ``is_analyzable``).
+    as-is. A bare ``["?", name]`` in a skeleton is left LITERAL (it falls
+    through to the compound branch and rebuilds unchanged), matching the
+    engine's own ``instantiate``, which substitutes only ``:`` references.
+    Non-trivial skeleton forms (:.../!/fresh) never reach here because such
+    rules are refused upstream (see ``is_analyzable``).
     """
     if skeleton_evaluation(skeleton):  # [":", name]
         return apply_subst(sigma, ["?", skeleton[1]])
@@ -359,3 +362,94 @@ def critical_pairs(
                 ))
 
     return pairs, not_analyzed
+
+
+# ---------------------------------------------------------------------------
+# Joinability and the confluence report
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class ConfluenceReport:
+    """Result of a local-confluence check.
+
+    ``locally_confluent`` is True iff NO critical pair is non-joinable and NONE
+    is undecidable (an empty critical-pair set is vacuously True). This is LOCAL
+    confluence only: global confluence additionally requires termination
+    (Newman's Lemma; that is roadmap F4). A ``joinable is False`` means "not
+    joinable by the engine's own reduction (this strategy)", the right notion
+    for a confluence DEFECT report. ``unknown`` pairs (reduction hit the budget
+    or a cycle) are never counted as joinable.
+    """
+    locally_confluent: bool
+    critical_pairs: List[CriticalPair]
+    non_joinable: List[CriticalPair]
+    unknown: List[CriticalPair]
+    not_analyzed: List[str]
+    analyzed_pair_count: int
+
+
+def _is_normal_form(engine, term: ExprType) -> bool:
+    """A term is a normal form iff one recursive single-rule pass changes
+    nothing. Uses the engine's ``_simplify_once`` (which applies at most one
+    rule ANYWHERE in the tree), NOT the root-only ``apply_once``."""
+    return engine._simplify_once(term) == term
+
+
+def _decide_joinable(engine, cp: CriticalPair, max_steps: int) -> Optional[bool]:
+    """Decide joinability of ``cp`` via the ENGINE's own reduction.
+
+    Reduces both legs with ``engine.simplify`` (the real reduction relation --
+    all enabled rules, including conditional ones the CP generator could not
+    analyze) and compares modulo the loaded theory via ``engine._canonicalize``.
+    Canonical-EQUALITY is checked FIRST, so a pair that reaches a common form
+    within budget is joinable regardless of normal-form status.
+
+    Returns True (joinable), False (distinct normal forms under the engine's
+    reduction), or None (unknown: budget/cycle, not decided).
+    """
+    s2 = engine.simplify(cp.left, max_steps=max_steps)
+    t2 = engine.simplify(cp.right, max_steps=max_steps)
+    if engine._canonicalize(s2) == engine._canonicalize(t2):
+        return True  # common reduct (modulo theory) -- checked FIRST
+    if _is_normal_form(engine, s2) and _is_normal_form(engine, t2):
+        return False  # distinct normal forms under the engine's reduction
+    return None  # undecided within the budget
+
+
+def check_confluence(engine, *, max_steps: int = 1000) -> ConfluenceReport:
+    """Compute the engine's critical pairs, decide joinability of each, and
+    return a local-confluence report. Read-only: mutates nothing."""
+    records = [
+        DirectedRule(name=meta.name, pattern=rule[0], skeleton=rule[1],
+                     condition=meta.condition)
+        for _idx, rule, meta in engine.rule_set()
+    ]
+    raw_pairs, not_analyzed = critical_pairs(records)
+
+    decided: List[CriticalPair] = []
+    non_joinable: List[CriticalPair] = []
+    unknown: List[CriticalPair] = []
+    analyzed = 0
+    for cp in raw_pairs:
+        verdict = _decide_joinable(engine, cp, max_steps)
+        cp2 = CriticalPair(left=cp.left, right=cp.right,
+                           rule_left=cp.rule_left, rule_right=cp.rule_right,
+                           position=cp.position, joinable=verdict)
+        decided.append(cp2)
+        if verdict is True:
+            analyzed += 1
+        elif verdict is False:
+            analyzed += 1
+            non_joinable.append(cp2)
+        else:
+            unknown.append(cp2)
+
+    locally_confluent = not non_joinable and not unknown
+    return ConfluenceReport(
+        locally_confluent=locally_confluent,
+        critical_pairs=decided,
+        non_joinable=non_joinable,
+        unknown=unknown,
+        not_analyzed=not_analyzed,
+        analyzed_pair_count=analyzed,
+    )

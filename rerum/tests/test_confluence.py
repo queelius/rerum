@@ -200,3 +200,86 @@ class TestCriticalPairs:
         assert "rest" in not_analyzed
         # The good rule is still analyzed (it just may yield no overlaps here).
         assert "good" not in not_analyzed
+
+
+class TestCheckConfluence:
+    def test_confluent_set_is_locally_confluent(self):
+        # r2 makes a critical pair with r1; r3 joins it. Locally confluent.
+        # (RHS uses :x -- the rerum skeleton substitution syntax.)
+        eng = RuleEngine.from_dsl("""
+            @r1: (f (g ?x)) => (h :x)
+            @r2: (g ?x) => (k :x)
+            @r3: (f (k ?x)) => (h :x)
+        """)
+        report = cf.check_confluence(eng)
+        assert report.locally_confluent is True
+        assert report.analyzed_pair_count >= 1
+        assert report.non_joinable == []
+        assert report.unknown == []
+
+    def test_non_confluent_set_is_flagged(self):
+        eng = RuleEngine.from_dsl("""
+            @l: (f (f ?x)) => a
+            @r: (f ?x) => b
+        """)
+        report = cf.check_confluence(eng)
+        assert report.locally_confluent is False
+        assert len(report.non_joinable) >= 1
+        names = {cp.rule_left for cp in report.non_joinable} | \
+                {cp.rule_right for cp in report.non_joinable}
+        assert "l" in names and "r" in names
+
+    def test_no_overlap_is_vacuously_confluent(self):
+        eng = RuleEngine.from_dsl("""
+            @p: (f ?x) => (g :x)
+            @q: (h ?x) => (k :x)
+        """)
+        report = cf.check_confluence(eng)
+        assert report.locally_confluent is True
+        assert report.analyzed_pair_count == 0
+        assert report.not_analyzed == []
+
+    def test_not_analyzed_is_surfaced(self):
+        # A rest-pattern rule is refused; with it the ONLY rule, there are no
+        # analyzable pairs. Vacuously True, but not_analyzed + count==0 make
+        # clear nothing was actually checked.
+        eng = RuleEngine.from_dsl("@rest: (f ?x...) => (g :x...)")
+        report = cf.check_confluence(eng)
+        assert report.not_analyzed == ["rest"]
+        assert report.analyzed_pair_count == 0
+        assert report.locally_confluent is True
+
+    def test_unknown_pair_blocks_verdict_and_returns(self):
+        # r1 and r2 share LHS (a); one reduct (b) is a normal form, the other
+        # (s c) grows forever via @grow, so the critical pair never joins and is
+        # UNKNOWN (not a false verdict). The call must RETURN, not hang.
+        eng = RuleEngine.from_dsl("""
+            @r1: (a) => (b)
+            @r2: (a) => (s c)
+            @grow: (s ?x) => (s (s :x))
+        """)
+        report = cf.check_confluence(eng, max_steps=20)
+        assert len(report.unknown) >= 1
+        assert report.locally_confluent is False
+
+    def test_joinability_modulo_theory(self):
+        # Overlap whose two sides are equal only after AC-normalization.
+        eng = RuleEngine.from_dsl("""
+            @l: (m ?x) => (+ :x c)
+            @r: (m ?x) => (+ c :x)
+        """)
+        ac = Theory.from_dict({"+": {"ac": True}})
+        # Without a theory: (+ ?x c) and (+ c ?x) are distinct normal forms.
+        rep_no = cf.check_confluence(eng)
+        assert rep_no.locally_confluent is False
+        # With the AC theory: they canonicalize equal -> joinable.
+        eng.with_theory(ac)
+        rep_ac = cf.check_confluence(eng)
+        assert rep_ac.locally_confluent is True
+
+    def test_general_boolean_and_arithmetic(self):
+        # Same code analyzes a non-arithmetic rule set.
+        boolean = RuleEngine.from_dsl("@dn: (not (not ?x)) => :x")
+        arith = RuleEngine.from_dsl("@z: (+ ?x 0) => :x")
+        assert cf.check_confluence(boolean).locally_confluent is True
+        assert cf.check_confluence(arith).locally_confluent is True
