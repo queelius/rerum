@@ -386,6 +386,8 @@ class ConfluenceReport:
     unknown: List[CriticalPair]
     not_analyzed: List[str]
     analyzed_pair_count: int
+    terminating: Optional[bool] = None
+    confluent: Optional[bool] = None
 
 
 def _is_normal_form(engine, term: ExprType) -> bool:
@@ -423,7 +425,8 @@ def _decide_joinable(engine, cp: CriticalPair, max_steps: int) -> Optional[bool]
         return None
 
 
-def check_confluence(engine, *, max_steps: int = 1000) -> ConfluenceReport:
+def check_confluence(engine, *, max_steps: int = 1000,
+                     precedence=None) -> ConfluenceReport:
     """Compute the engine's critical pairs, decide joinability of each, and
     return a local-confluence report. Read-only: mutates nothing."""
     records = [
@@ -452,6 +455,25 @@ def check_confluence(engine, *, max_steps: int = 1000) -> ConfluenceReport:
             unknown.append(cp2)
 
     locally_confluent = not non_joinable and not unknown
+
+    # Newman integration (F4). With a precedence, decide global confluence.
+    # confluent=False keys on a GENUINE non_joinable witness (distinct
+    # irreducible normal forms), NOT bare not-locally-confluent: an unknown-only
+    # failure is UNDECIDED (confluent=None), never a false negative.
+    terminating = None
+    confluent = None
+    if precedence is not None:
+        from .termination import check_termination as _check_termination
+        terminating = _check_termination(engine, precedence).terminating
+        if non_joinable:
+            confluent = False
+        elif unknown:
+            confluent = None
+        elif terminating:
+            confluent = True  # locally confluent + terminating (Newman)
+        else:
+            confluent = None  # locally confluent but termination not proven
+
     return ConfluenceReport(
         locally_confluent=locally_confluent,
         critical_pairs=decided,
@@ -459,4 +481,6 @@ def check_confluence(engine, *, max_steps: int = 1000) -> ConfluenceReport:
         unknown=unknown,
         not_analyzed=not_analyzed,
         analyzed_pair_count=analyzed,
+        terminating=terminating,
+        confluent=confluent,
     )

@@ -1,5 +1,6 @@
 """F4: termination via the lexicographic path order."""
 
+from rerum import confluence as cf
 from rerum import termination as tm
 from rerum.engine import RuleEngine
 
@@ -111,3 +112,51 @@ class TestCheckTermination:
         eng = RuleEngine.from_dsl("@dn: (not (not ?x)) => :x")
         report = tm.check_termination(eng, ["not"])
         assert report.terminating is True   # (not (not x)) >_lpo x (subterm)
+
+
+class TestInstantiateSkeletonReuse:
+    def test_empty_subst_converts_colon_to_var(self):
+        assert cf.instantiate_skeleton([":", "x"], {}) == ["?", "x"]
+        assert cf.instantiate_skeleton(["+", [":", "x"], "0"], {}) == \
+            ["+", ["?", "x"], "0"]
+
+
+class TestNewman:
+    def test_locally_confluent_and_terminating_is_confluent(self):
+        eng = RuleEngine.from_dsl("""
+            @r1: (f (g ?x)) => (h :x)
+            @r2: (g ?x) => (k :x)
+            @r3: (f (k ?x)) => (h :x)
+        """)
+        report = cf.check_confluence(eng, precedence=["f", "g", "k", "h"])
+        assert report.terminating is True
+        assert report.confluent is True
+
+    def test_non_joinable_is_not_confluent(self):
+        eng = RuleEngine.from_dsl("""
+            @l: (f (f ?x)) => a
+            @r: (f ?x) => b
+        """)
+        report = cf.check_confluence(eng, precedence=["f", "a", "b"])
+        assert report.confluent is False   # a genuine non_joinable witness
+
+    def test_locally_confluent_but_unorientable_is_unknown(self):
+        # Single overlap-free rule LPO cannot orient: l >_lpo r needs the LHS to
+        # dominate, but with big > small the RHS head outranks the LHS head, so
+        # (small ?x) is NOT >_lpo (big (big ?x)) -- terminating stays False.
+        eng = RuleEngine.from_dsl("@up: (small ?x) => (big (big :x))")
+        report = cf.check_confluence(eng, precedence=["big", "small"])
+        assert report.non_joinable == [] and report.unknown == []
+        assert report.locally_confluent is True
+        assert report.terminating is False
+        assert report.confluent is None
+
+    def test_backward_compat_no_precedence(self):
+        eng = RuleEngine.from_dsl("""
+            @l: (f (f ?x)) => a
+            @r: (f ?x) => b
+        """)
+        report = cf.check_confluence(eng)   # no precedence
+        assert report.terminating is None
+        assert report.confluent is None
+        assert report.locally_confluent is False
