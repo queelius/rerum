@@ -78,3 +78,36 @@ class TestOrient:
         small = ["g", ["?", "x"]]
         assert tm.orient(big, small, ["f", "g"]) == "lr"
         assert tm.orient(small, big, ["f", "g"]) == "rl"
+
+
+class TestCheckTermination:
+    def test_terminating_set(self):
+        # f > g > h: each rule's LHS dominates its RHS.
+        eng = RuleEngine.from_dsl("""
+            @r1: (f (g ?x)) => (g (g :x))
+            @r2: (g (h ?x)) => (h :x)
+        """)
+        report = tm.check_termination(eng, ["f", "g", "h"])
+        assert report.terminating is True
+        assert report.unoriented == []
+        assert report.not_analyzed == []
+        # Both rules are positively classified as oriented "lr".
+        assert {name for name, _dir in report.oriented} == {"r1", "r2"}
+        assert all(d == "lr" for _n, d in report.oriented)
+
+    def test_commutativity_is_unoriented(self):
+        eng = RuleEngine.from_dsl("@c: (+ ?x ?y) => (+ :y :x)")
+        report = tm.check_termination(eng, ["+"])
+        assert "c" in report.unoriented
+        assert report.terminating is False
+
+    def test_not_analyzed_blocks(self):
+        eng = RuleEngine.from_dsl("@rest: (f ?x...) => (g :x...)")
+        report = tm.check_termination(eng, ["f", "g"])
+        assert report.not_analyzed == ["rest"]
+        assert report.terminating is False
+
+    def test_general_boolean(self):
+        eng = RuleEngine.from_dsl("@dn: (not (not ?x)) => :x")
+        report = tm.check_termination(eng, ["not"])
+        assert report.terminating is True   # (not (not x)) >_lpo x (subterm)

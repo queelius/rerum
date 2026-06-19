@@ -103,3 +103,43 @@ def orient(l: ExprType, r: ExprType,
     if lpo_greater(r, l, precedence):
         return "rl"
     return None
+
+
+@dataclass(frozen=True)
+class TerminationReport:
+    """Result of an LPO termination check.
+
+    ``terminating`` is True iff EVERY rule is analyzable AND oriented
+    ``l >_lpo r`` -- a PROOF of termination by this LPO. False means "not proven
+    by this precedence" (the rule may be reversed, incomparable, or genuinely
+    non-terminating), with ``unoriented``/``not_analyzed`` explaining why. Like
+    F2's ``unknown``, it is honest about the limit -- it never claims
+    "non-terminating", only "not proven".
+    """
+    terminating: bool
+    oriented: List[Tuple[str, str]]   # (rule name, direction "lr")
+    unoriented: List[str]
+    not_analyzed: List[str]
+
+
+def check_termination(engine, precedence: Precedence) -> TerminationReport:
+    """LPO termination diagnostic for ``engine``'s enabled rules under
+    ``precedence``. Read-only: mutates nothing."""
+    oriented: List[Tuple[str, str]] = []
+    unoriented: List[str] = []
+    not_analyzed: List[str] = []
+    for _idx, rule, meta in engine.rule_set():
+        pattern, skeleton = rule[0], rule[1]
+        if not is_analyzable(pattern, skeleton, meta.condition):
+            not_analyzed.append(meta.name)
+            continue
+        r_term = instantiate_skeleton(skeleton, {})  # [":",x] -> ["?",x]
+        if lpo_greater(pattern, r_term, precedence):
+            oriented.append((meta.name, "lr"))
+        else:
+            unoriented.append(meta.name)
+    terminating = (not unoriented) and (not not_analyzed)
+    return TerminationReport(
+        terminating=terminating, oriented=oriented,
+        unoriented=unoriented, not_analyzed=not_analyzed,
+    )
