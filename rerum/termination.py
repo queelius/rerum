@@ -1,0 +1,89 @@
+"""F4: termination via the lexicographic path order (read-only analysis).
+
+Certifies that a rule set TERMINATES and ORIENTS an equation toward a
+terminating direction, using the lexicographic path order (LPO) derived from a
+PRECEDENCE on function symbols supplied as DATA. If every rule l -> r satisfies
+l >_lpo r, every rewrite step strictly decreases the term in the well-founded
+order >_lpo, so the system cannot loop.
+
+GENERAL ENGINE: the precedence is DATA (a list of function symbols -- operators
+AND constants -- in decreasing order). No operator is hardcoded. First-order
+only; non-first-order rules are refused by reusing confluence.is_analyzable.
+A constant atom is treated as a 0-ARY function symbol (standard LPO).
+"""
+
+from dataclasses import dataclass
+from typing import List, Optional, Tuple
+
+from .rewriter import ExprType, compound
+from .confluence import (
+    is_analyzable,
+    instantiate_skeleton,
+    _is_var,
+)
+
+# A precedence: function symbols in DECREASING precedence (head = greatest).
+Precedence = List
+
+
+def _prec_gt(f, g, precedence: Precedence) -> bool:
+    """True iff f > g: both listed and f earlier (greater) than g. Symbols not
+    both in the list are incomparable (False both ways). The precedence list
+    must be duplicate-free (``index`` uses the first occurrence)."""
+    if f not in precedence or g not in precedence:
+        return False
+    return precedence.index(f) < precedence.index(g)
+
+
+def _head_args(t: ExprType) -> Tuple:
+    """(head, args), treating a constant atom as a 0-ary symbol."""
+    if compound(t):
+        return t[0], t[1:]
+    return t, []
+
+
+def _occurs_node(node: ExprType, term: ExprType) -> bool:
+    """True iff the subexpression ``node`` occurs anywhere inside ``term``
+    (structural equality). Distinct from ``confluence._occurs``, which tests a
+    variable NAME; this tests a whole node (e.g. a ``["?", x]`` variable node)."""
+    if node == term:
+        return True
+    if compound(term):
+        return any(_occurs_node(node, sub) for sub in term)
+    return False
+
+
+def _lex_gt(sargs: List, targs: List, precedence: Precedence) -> bool:
+    """Lexicographic compare of equal-length tuples (caller guarantees equal
+    lengths): the first DIFFERING position must have its s-arg >_lpo its t-arg
+    (earlier positions equal)."""
+    for si, ti in zip(sargs, targs):
+        if si == ti:
+            continue
+        return lpo_greater(si, ti, precedence)
+    return False  # identical
+
+
+def lpo_greater(s: ExprType, t: ExprType, precedence: Precedence) -> bool:
+    """The lexicographic path order: True iff ``s`` strictly dominates ``t``."""
+    if s == t:
+        return False
+    if _is_var(s):
+        return False  # a variable dominates nothing
+    if _is_var(t):
+        return _occurs_node(t, s)  # s != t, so t is a proper subterm of s
+    f, sargs = _head_args(s)
+    g, targs = _head_args(t)
+    # Case 1 (subterm): some argument of s is >= t.
+    if any(si == t or lpo_greater(si, t, precedence) for si in sargs):
+        return True
+    # Case 2 (precedence): f outranks g and s beats every argument of t.
+    if _prec_gt(f, g, precedence) and all(
+            lpo_greater(s, tj, precedence) for tj in targs):
+        return True
+    # Case 3 (lexicographic): same head AND arity, s beats every tj, args >lex.
+    if (f == g and len(sargs) == len(targs)
+            and all(lpo_greater(s, tj, precedence) for tj in targs)
+            and _lex_gt(sargs, targs, precedence)):
+        return True
+    return False
