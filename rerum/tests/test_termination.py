@@ -58,3 +58,23 @@ class TestPrecedenceAndLPO:
         assert tm.lpo_greater(s, t, prec) is True
         assert tm.lpo_greater(t, s, prec) is False
         assert tm.lpo_greater(s, s, prec) is False  # irreflexive
+
+
+class TestOrient:
+    def test_associativity_orients_lr_precedence_independent(self):
+        # Right-associativity decreases lexicographically on the shared + head,
+        # so it orients regardless of precedence (use []).
+        l = ["+", ["+", ["?", "x"], ["?", "y"]], ["?", "z"]]
+        r = ["+", ["?", "x"], ["+", ["?", "y"], ["?", "z"]]]
+        assert tm.orient(l, r, []) == "lr"
+
+    def test_commutativity_orients_none(self):
+        l = ["+", ["?", "x"], ["?", "y"]]
+        r = ["+", ["?", "y"], ["?", "x"]]
+        assert tm.orient(l, r, ["+"]) is None
+
+    def test_lr_and_rl(self):
+        big = ["f", ["g", ["?", "x"]]]
+        small = ["g", ["?", "x"]]
+        assert tm.orient(big, small, ["f", "g"]) == "lr"
+        assert tm.orient(small, big, ["f", "g"]) == "rl"

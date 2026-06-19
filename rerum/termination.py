@@ -87,3 +87,19 @@ def lpo_greater(s: ExprType, t: ExprType, precedence: Precedence) -> bool:
             and _lex_gt(sargs, targs, precedence)):
         return True
     return False
+
+
+def orient(l: ExprType, r: ExprType,
+           precedence: Precedence) -> Optional[str]:
+    """Pick the terminating direction for the equation ``l = r``.
+
+    Returns "lr" if ``l >_lpo r`` (rule ``l -> r`` decreases), "rl" if
+    ``r >_lpo l``, or ``None`` if this LPO/precedence orients neither (e.g. a
+    commutativity axiom, which no reduction order can orient). The orientation
+    oracle Knuth-Bendix completion (F5) needs.
+    """
+    if lpo_greater(l, r, precedence):
+        return "lr"
+    if lpo_greater(r, l, precedence):
+        return "rl"
+    return None
