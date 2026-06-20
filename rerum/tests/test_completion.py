@@ -73,3 +73,41 @@ class TestComplete:
         result = cmp.complete(eqs, [])
         assert result.status == "complete"
         assert result.rules == []
+
+
+class TestSelfValidationAndGenerality:
+    def test_complete_result_is_confluent(self):
+        # The capstone validates itself: a "complete" system is confluent under
+        # the precedence, via F2+F4's check_confluence. Same max_steps.
+        eqs = [
+            (["f", ["g", _v("x")]], "a"),
+            (["g", ["g", _v("x")]], _v("x")),
+        ]
+        prec = ["f", "g", "a"]
+        result = cmp.complete(eqs, prec, max_steps=1000)
+        report = cf.check_confluence(result.to_engine(), precedence=prec,
+                                     max_steps=1000)
+        assert report.confluent is True
+        assert report.terminating is True
+
+    def test_to_engine_reduces(self):
+        eqs = [
+            (["f", ["g", _v("x")]], "a"),
+            (["g", ["g", _v("x")]], _v("x")),
+        ]
+        eng = cmp.complete(eqs, ["f", "g", "a"]).to_engine()
+        assert eng.simplify(["f", ["g", "a"]]) == "a"
+        assert eng.simplify(["g", ["g", "a"]]) == "a"
+
+    def test_general_boolean(self):
+        # Same code completes a non-arithmetic equation set.
+        eqs = [(["not", ["not", _v("x")]], _v("x"))]
+        result = cmp.complete(eqs, ["not"])
+        assert result.status == "complete"
+        assert len(result.rules) == 1
+
+    def test_general_arithmetic(self):
+        eqs = [(["+", _v("x"), "0"], _v("x"))]
+        result = cmp.complete(eqs, ["+", "0"])
+        assert result.status == "complete"
+        assert len(result.rules) == 1
