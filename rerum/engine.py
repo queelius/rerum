@@ -4296,6 +4296,26 @@ class RuleEngine:
         from .termination import check_termination as _check_termination
         return _check_termination(self, precedence)
 
+    def complete(self, precedence, *, max_iterations: int = 100,
+                 max_steps: int = 1000) -> "CompletionResult":
+        """Basic Knuth-Bendix completion (roadmap F5) of this engine's
+        ANALYZABLE rules, treated as equations, under ``precedence``. Returns a
+        ``CompletionResult`` (the completed rule system, or failed /
+        max_iterations). Read-only -- builds fresh engines internally; mutates
+        nothing. See ``rerum.completion``."""
+        from .completion import complete as _complete
+        from .confluence import (
+            is_analyzable as _is_analyzable,
+            instantiate_skeleton as _instantiate,
+        )
+        equations = [
+            (rule[0], _instantiate(rule[1], {}))
+            for _idx, rule, meta in self.rule_set()
+            if _is_analyzable(rule[0], rule[1], meta.condition)
+        ]
+        return _complete(equations, precedence, max_iterations=max_iterations,
+                         max_steps=max_steps)
+
     # ============================================================
     # Random Sampling
     # ============================================================

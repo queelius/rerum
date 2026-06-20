@@ -161,6 +161,12 @@ from .termination import (
     TerminationReport,
 )
 
+# Completion (F5)
+from .completion import (
+    complete,
+    CompletionResult,
+)
+
 # Public API
 __all__ = [
     # Version
@@ -259,4 +265,7 @@ __all__ = [
     "orient",
     "check_termination",
     "TerminationReport",
+    # Completion
+    "complete",
+    "CompletionResult",
 ]

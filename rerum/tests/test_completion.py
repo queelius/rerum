@@ -111,3 +111,34 @@ class TestSelfValidationAndGenerality:
         result = cmp.complete(eqs, ["+", "0"])
         assert result.status == "complete"
         assert len(result.rules) == 1
+
+
+class TestEngineAndExports:
+    def test_engine_complete_extracts_and_matches(self):
+        # Engine rules become equations; engine.complete matches the pure call.
+        eng = RuleEngine.from_dsl("""
+            @r1: (f (g ?x)) => a
+            @r2: (g (g ?x)) => :x
+        """)
+        report = eng.complete(["f", "g", "a"])
+        assert report.status == "complete"
+        assert len(report.rules) == 3
+
+    def test_engine_complete_skips_non_analyzable(self):
+        # A ?... rule is not analyzable -> excluded from the extracted equations.
+        eng = RuleEngine.from_dsl("@rest: (f ?x...) => (g :x...)")
+        report = eng.complete(["f", "g"])
+        # No analyzable equations -> trivially complete with no rules.
+        assert report.status == "complete"
+        assert report.rules == []
+
+    def test_public_reexports(self):
+        import rerum
+        for name in ("complete", "CompletionResult"):
+            assert name in rerum.__all__
+            assert hasattr(rerum, name)
+
+    def test_import_smoke_no_cycle(self):
+        import importlib
+        importlib.import_module("rerum.completion")
+        importlib.import_module("rerum.engine")
