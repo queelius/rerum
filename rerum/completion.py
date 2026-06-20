@@ -79,7 +79,18 @@ class CompletionResult:
 def complete(equations, precedence, *, max_iterations: int = 100,
              max_steps: int = 1000) -> CompletionResult:
     """Basic Knuth-Bendix completion of ``equations`` (a list of ``(l, r)`` term
-    pairs in ``["?", name]`` form) under ``precedence``. Read-only."""
+    pairs in ``["?", name]`` form) under ``precedence``. Read-only.
+
+    ``max_iterations`` bounds the orient-and-add fixpoint passes; exhausting it
+    yields ``status == "max_iterations"`` (a semi-decision: did-not-converge,
+    never a false "complete"). ``max_steps`` is the per-normalization reduction
+    budget passed to ``eng.simplify`` when checking whether a critical pair
+    joins. Note: the engines this loop builds carry no theory/prelude, so
+    ``simplify`` takes its cached fast path, whose internal cap (1000) is the
+    real bound -- ``max_steps`` is effectively a floor of that, not a hard
+    ceiling. This does not affect soundness: the F2+F4 ``check_confluence``
+    oracle used to self-validate a result routes through the identical fast
+    path, so its joinability test stays byte-consistent with this one."""
     # 1. Orient the input. Drop trivial l == r BEFORE orient (orient returns
     #    None on structurally-equal terms, which would be a spurious "failed").
     rules: List[Tuple[ExprType, ExprType]] = []
@@ -111,6 +122,10 @@ def complete(equations, precedence, *, max_iterations: int = 100,
         new_rules: List[Tuple[ExprType, ExprType]] = []
         for cp in pairs:
             try:
+                # max_steps is best-effort: these no-theory engines use the
+                # fast path, whose 1000-iter cap is the real bound (see
+                # docstring). Soundness is unaffected -- the join test below
+                # is the same one check_confluence uses to validate the result.
                 s = eng.simplify(cp.left, max_steps=max_steps)
                 t = eng.simplify(cp.right, max_steps=max_steps)
             except RecursionError:
