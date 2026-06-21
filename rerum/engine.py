@@ -1615,6 +1615,8 @@ class RuleEngine:
         # a theory= argument is threaded (e.g. solve's normalize_between).
         # Always present, so callers never need a hasattr dance.
         self._theory = None
+        self._ac_match_budget = 10000     # fail-safe cap for AC enumeration
+        self._ac_match_truncated = False  # set when any AC match truncated
         # The loading contract declared by the last file loaded via
         # ``load_file`` (a RuleSetManifest), or None. ``load_file`` STORES
         # it but applies nothing; ``from_manifest`` both stores and acts.
@@ -1869,6 +1871,42 @@ class RuleEngine:
             return expr
         from .normalize import normalize as _normalize
         return _normalize(expr, self._theory)
+
+    def _theory_has_ac(self) -> bool:
+        return self._theory is not None and self._theory.has_ac()
+
+    def _match_lhs(self, pattern, expr):
+        """Yield each Bindings under which ``pattern`` matches ``expr``.
+
+        Without an AC theory this yields ``match(pattern, expr)``'s single
+        result (0 or 1) and is byte-identical to the prior single-match path.
+        Under an AC theory it yields ``ac_match``'s several results and records
+        budget truncation on ``self._ac_match_truncated``.
+        """
+        if not self._theory_has_ac():
+            b = _match_internal(pattern, expr)
+            if b is not None:
+                yield b
+            return
+        from .acmatch import ac_match, MatchBudget
+        budget = MatchBudget(steps=self._ac_match_budget)
+        try:
+            for b in ac_match(pattern, expr, self._theory, budget=budget):
+                yield b
+        except RecursionError:
+            return
+        finally:
+            if budget.truncated:
+                self._ac_match_truncated = True
+
+    def set_ac_match_budget(self, steps):
+        """Set the per-match AC enumeration budget (None = unbounded)."""
+        self._ac_match_budget = steps
+
+    @property
+    def ac_match_truncated(self) -> bool:
+        """True if an AC match hit its budget since the last top-level call."""
+        return self._ac_match_truncated
 
     def missing_fold_ops(self) -> List[str]:
         """Fold-op names invoked by loaded rules but absent from the prelude.
@@ -2364,8 +2402,7 @@ class RuleEngine:
             if not self._is_rule_active(metadata, groups):
                 continue
             pattern, skeleton = rule
-            bindings = _match_internal(pattern, expr)
-            if bindings is not None:
+            for bindings in self._match_lhs(pattern, expr):
                 # Check condition if present
                 if not self._check_condition(metadata.condition, bindings):
                     continue
@@ -2459,12 +2496,15 @@ class RuleEngine:
             return self._simplify_with_trace(expr, max_steps, groups=groups,
                                              strategy=strategy)
 
-        # Check if we need slow path (conditions or groups)
+        # Reset the AC-truncation flag at the top of every top-level simplify.
+        self._ac_match_truncated = False
+        # Check if we need slow path (conditions, groups, or an AC theory).
         has_conditions = any(m.condition is not None for m in self._metadata)
         has_groups = groups is not None or self._disabled_groups
+        has_ac = self._theory_has_ac()
 
         if strategy == "exhaustive":
-            if has_conditions or has_groups:
+            if has_conditions or has_groups or has_ac:
                 return self._simplify_exhaustive(expr, max_steps, groups=groups)
             else:
                 # Use fast path when no conditions, no groups, AND no
@@ -2896,9 +2936,16 @@ class RuleEngine:
         # resolvers that keep returning rules without making progress.
         max_resolver_retries = 100
         resolver_retries = 0
+        ac_active = self._theory_has_ac()
         for _ in range(max_steps):
             if self._cancel_requested:
                 return current
+            if ac_active:
+                # Rewriting modulo AC keeps terms canonical: this collapses a
+                # residual (+ b) -> b and (+) -> identity, and lets the
+                # visited-set cycle check compare canonical forms. _canonicalize
+                # is the identity when no theory is set, but ac_active gates it.
+                current = self._canonicalize(current)
             key = _expr_to_tuple(current)
             if key in visited:
                 self._fire_cycle(current, visited)
@@ -2914,8 +2961,8 @@ class RuleEngine:
                 if not self._is_rule_active(metadata, groups):
                     continue
                 pattern, skeleton = rule
-                bindings = _match_internal(pattern, current)
-                if bindings is not None:
+                fired = False
+                for bindings in self._match_lhs(pattern, current):
                     if not self._check_condition(metadata.condition, bindings):
                         continue
                     if not self._check_should_fire(rule, metadata, current, bindings):
@@ -2933,7 +2980,10 @@ class RuleEngine:
                             return new_expr  # Hook requested cancellation after this step.
                         current = new_expr
                         changed = True
+                        fired = True
                         break
+                if fired:
+                    break
 
             if not changed:
                 # No rule matched at this compound position. Fire no_match.
@@ -3643,8 +3693,7 @@ class RuleEngine:
         # Try rules at top level
         for rule_idx, rule, metadata in rules:
             pattern, skeleton = rule
-            bindings = _match_internal(pattern, expr)
-            if bindings is not None:
+            for bindings in self._match_lhs(pattern, expr):
                 if not self._check_condition(metadata.condition, bindings):
                     continue
                 if not self._check_should_fire(rule, metadata, expr, bindings):

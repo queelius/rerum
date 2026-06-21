@@ -205,3 +205,43 @@ class TestACSoundnessProperty:
         elems = ["a", "b", "c", "d"]
         expected = list(itertools.permutations(elems, 2))
         assert len(got) == len(expected)
+
+
+from rerum.engine import RuleEngine
+
+
+class TestEngineACMatching:
+    def test_simplify_fires_ac_rule_across_arrangements(self):
+        # Cancellation rule fires no matter where the cancelling pair sits.
+        eng = RuleEngine.from_dsl(
+            "@cancel: (+ ?x (- ?x) ?rest...) => (+ :rest...)"
+        )
+        eng.with_theory(Theory.from_dict({"+": {"ac": True, "identity": 0}}))
+        # (- a) is not adjacent to a; positional matching would miss it.
+        result = eng.simplify(["+", "a", "b", ["-", "a"]])
+        # After cancelling a and (- a), only b remains; (+ b) collapses to b.
+        assert result == "b"
+
+    def test_no_theory_simplify_unchanged(self):
+        # Without a theory, the same rule only fires on the exact arrangement.
+        eng = RuleEngine.from_dsl(
+            "@cancel: (+ ?x (- ?x) ?rest...) => (+ :rest...)"
+        )
+        # Positional: a and (- a) ARE adjacent here, so it fires syntactically.
+        assert eng.simplify(["+", "a", ["-", "a"], "b"]) == ["+", "b"]
+        # But not when separated -- no AC theory, no reordering.
+        assert eng.simplify(["+", "a", "b", ["-", "a"]]) == ["+", "a", "b", ["-", "a"]]
+
+    def test_apply_once_takes_first_ac_match(self):
+        eng = RuleEngine.from_dsl("@r: (+ ?x ?y) => (pair :x :y)")
+        eng.with_theory(Theory.from_dict({"+": {"ac": True, "identity": 0}}))
+        result, meta = eng.apply_once(["+", "a", "b"])
+        # First canonical assignment fires; result is a (pair ...).
+        assert meta is not None and result[0] == "pair"
+
+    def test_truncation_flag_exposed(self):
+        eng = RuleEngine.from_dsl("@r: (+ ?x ?y ?z) => done")
+        eng.with_theory(Theory.from_dict({"+": {"ac": True, "identity": 0}}))
+        eng.set_ac_match_budget(2)        # tiny budget
+        eng.simplify(["+", "a", "b", "c", "d", "e", "f"])
+        assert eng.ac_match_truncated is True

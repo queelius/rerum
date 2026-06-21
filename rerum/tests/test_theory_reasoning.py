@@ -187,13 +187,12 @@ class TestMinimizeModuloTheory:
 
 
 class TestSoundnessBoundary:
-    def test_position_pinning_rule_is_not_reached_under_ac_theory(self):
-        # DOCUMENTED INCOMPLETENESS (spec "Soundness boundary"): a distribute
-        # rule pins the (+ ...) factor as the FIRST operand of *. Under an AC *
-        # theory, canonical_sort moves it, so the syntactic matcher never sees
-        # the arrangement and the distributed form is NOT reached. This is
-        # intended behavior until F3 (AC-matching). Pinned here so a future
-        # reader does not mistake it for completeness.
+    def test_position_pinning_rule_IS_reached_under_ac_theory(self):
+        # F3 (AC-matching) closes the former soundness boundary: a distribute
+        # rule that pins the (+ ...) factor as the FIRST operand of * now fires
+        # under an AC * theory, because the matcher tries every arrangement.
+        # (Was test_position_pinning_rule_is_not_reached_under_ac_theory,
+        # which asserted proof is None until F3 existed.)
         eng = RuleEngine.from_dsl(
             "@distrib: (* (+ ?a ?b) ?c) => (+ (* :a :c) (* :b :c))"
         )
@@ -201,7 +200,7 @@ class TestSoundnessBoundary:
         target = ["+", ["*", "a", "c"], ["*", "b", "c"]]
         proof = eng.prove_equal(["*", ["+", "a", "b"], "c"], target,
                                 include_unidirectional=True)
-        assert proof is None  # boundary: F3 is expected to make this succeed
+        assert proof is not None  # boundary closed by F3
 
     def test_position_pinning_rule_DOES_fire_without_theory(self):
         # Control: the same rule reaches the distributed form with no theory.
