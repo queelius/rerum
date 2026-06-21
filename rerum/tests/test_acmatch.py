@@ -143,3 +143,65 @@ class TestACMultisetExhaust:
             vals = [b["x"], b["y"], b["z"]]
             assert len(set(vals)) == 3
             assert set(vals) == {"a", "b", "c"}
+
+
+import itertools
+
+
+class TestACRest:
+    def test_rest_captures_leftover_list(self):
+        # (+ ?x ?rest...) against (+ a b c): x picks one, rest is the other two.
+        got = []
+        for b in am.ac_match(["+", ["?", "x"], ["?...", "rest"]],
+                             ["+", "a", "b", "c"], AC_PLUS):
+            got.append((b["x"], b["rest"]))
+        # Three choices of x; rest is the remaining two in canonical order.
+        xs = sorted(g[0] for g in got)
+        assert xs == ["a", "b", "c"]
+        for x, rest in got:
+            assert isinstance(rest, list)
+            assert sorted([x] + rest) == ["a", "b", "c"]
+
+    def test_rest_empty_when_explicit_exhausts(self):
+        # (+ ?x ?y ?rest...) against (+ a b): rest = [].
+        got = [b["rest"] for b in am.ac_match(
+            ["+", ["?", "x"], ["?", "y"], ["?...", "rest"]],
+            ["+", "a", "b"], AC_PLUS)]
+        assert got and all(r == [] for r in got)
+
+    def test_rest_singleton(self):
+        got = [b["rest"] for b in am.ac_match(
+            ["+", ["?", "x"], ["?...", "rest"]], ["+", "a", "b"], AC_PLUS)]
+        assert all(len(r) == 1 for r in got)
+
+    def test_cancellation_idiom(self):
+        # (+ ?x (- ?x) ?rest...) against (+ a (- a) b): x=a, rest=[b].
+        pat = ["+", ["?", "x"], ["-", ["?", "x"]], ["?...", "rest"]]
+        got = list(am.ac_match(pat, ["+", "a", ["-", "a"], "b"], AC_PLUS))
+        assert any(b["x"] == "a" and b["rest"] == ["b"] for b in got)
+
+    def test_cancellation_no_pair_no_match(self):
+        pat = ["+", ["?", "x"], ["-", ["?", "x"]], ["?...", "rest"]]
+        assert list(am.ac_match(pat, ["+", "a", "b", "c"], AC_PLUS)) == []
+
+
+class TestACSoundnessProperty:
+    def test_every_yield_is_a_real_match(self):
+        from rerum.normalize import normalize
+        # Pattern with explicit + rest; verify each yield reconstructs an
+        # AC-equal subject when substituted back.
+        pat = ["+", ["?", "x"], ["?", "y"], ["?...", "rest"]]
+        exp = ["+", "a", "b", "c", "d"]
+        for b in am.ac_match(pat, exp, AC_PLUS):
+            rebuilt = ["+", b["x"], b["y"]] + list(b["rest"])
+            assert normalize(rebuilt, AC_PLUS) == normalize(exp, AC_PLUS)
+
+    def test_completeness_matches_brute_force_small(self):
+        # (+ ?x ?y ?rest...) over (+ a b c d): one yield per ordered pair (x,y)
+        # of distinct elements; rest is the remaining two.
+        pat = ["+", ["?", "x"], ["?", "y"], ["?...", "rest"]]
+        exp = ["+", "a", "b", "c", "d"]
+        got = list(am.ac_match(pat, exp, AC_PLUS))
+        elems = ["a", "b", "c", "d"]
+        expected = list(itertools.permutations(elems, 2))
+        assert len(got) == len(expected)

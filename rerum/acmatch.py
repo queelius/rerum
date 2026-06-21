@@ -190,7 +190,12 @@ def _match_ac(explicit, rest, elements, theory, bindings, budget) -> Iterator[Bi
                         seen.add(key)
                         yield binds
                 return
-            # rest handling added in Task 4
+            extended = _bind(binds, variable_name(rest), leftover, theory)
+            if extended is not None:
+                key = _binding_key(extended)
+                if key not in seen:
+                    seen.add(key)
+                    yield extended
             return
         p = explicit[pat_idx]
         for i in ordered:
