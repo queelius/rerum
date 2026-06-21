@@ -185,6 +185,45 @@ class TestACRest:
         assert list(am.ac_match(pat, ["+", "a", "b", "c"], AC_PLUS)) == []
 
 
+class TestACFreeConstraints:
+    # Regression for the ?free binding-order soundness bug: ac_match validates
+    # ?free against the COMPLETE binding (a top-level post-pass), not only
+    # inline. Without that, a ?free node LEFT of its excluded variable passes
+    # vacuously and fires spuriously under an AC theory.
+
+    def test_free_left_of_excluded_var_rejects_spurious(self):
+        # (+ ?z:free(w) ?w) vs (+ x x): every split has z containing w -> none.
+        pat = ["+", ["?free", "z", "w"], ["?", "w"]]
+        assert _dictset(pat, ["+", "x", "x"], AC_PLUS) == []
+
+    def test_free_right_of_excluded_var_rejects_spurious(self):
+        # Excluded var first; was already correct, pinned for symmetry.
+        pat = ["+", ["?", "w"], ["?free", "z", "w"]]
+        assert _dictset(pat, ["+", "x", "x"], AC_PLUS) == []
+
+    def test_free_satisfied_when_excluded_absent(self):
+        # (+ ?z:free(w) ?w) vs (+ a b): a free of b and b free of a -> both.
+        pat = ["+", ["?free", "z", "w"], ["?", "w"]]
+        assert len(_dictset(pat, ["+", "a", "b"], AC_PLUS)) == 2
+
+    def test_free_excluded_inside_compound_element(self):
+        # (+ ?z:free(w) ?w) vs (+ (g y) y): z=(g y),w=y rejected ((g y) holds y);
+        # z=y,w=(g y) kept (y does not hold (g y)).
+        pat = ["+", ["?free", "z", "w"], ["?", "w"]]
+        got = list(am.ac_match(pat, ["+", ["g", "y"], "y"], AC_PLUS))
+        assert len(got) == 1
+        assert got[0]["z"] == "y" and got[0]["w"] == ["g", "y"]
+
+    def test_engine_equivalents_excludes_spurious_free(self):
+        # End-to-end: the spurious (got (g y)) must not appear; only (got y).
+        eng = RuleEngine.from_dsl("@r: (+ ?z:free(w) ?w) => (got :z)")
+        eng.with_theory(Theory.from_dict({"+": {"ac": True, "identity": 0}}))
+        forms = list(eng.equivalents(["+", ["g", "y"], "y"],
+                                     include_unidirectional=True, max_depth=2))
+        assert ["got", "y"] in forms
+        assert ["got", ["g", "y"]] not in forms
+
+
 class TestACSoundnessProperty:
     def test_every_yield_is_a_real_match(self):
         from rerum.normalize import normalize

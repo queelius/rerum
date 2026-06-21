@@ -70,6 +70,39 @@ def _binding_key(binds: "Bindings"):
     return frozenset((k, _freeze(v)) for k, v in binds.to_dict().items())
 
 
+def _free_nodes(pat):
+    """Yield every ``["?free", name, var]`` node anywhere in ``pat``."""
+    if arbitrary_free(pat):
+        yield pat
+        return
+    if isinstance(pat, list):
+        for sub in pat:
+            yield from _free_nodes(sub)
+
+
+def _free_constraints_ok(pat, bindings: "Bindings") -> bool:
+    """Validate every ``?free`` constraint in ``pat`` against the COMPLETE
+    ``bindings``.
+
+    A ``["?free", name, var]`` node requires that the resolved value of ``var``
+    does not occur in the subterm ``name`` matched (which is exactly
+    ``bindings[name]``). Mirrors ``rewriter._check_free_constraints``: only a
+    var resolving to a SYMBOL can be "contained"; a non-symbol excluded value is
+    vacuously free. Run once at the top level (the public ``ac_match`` wrapper),
+    NOT in the recursive core -- a ``?free`` whose excluded variable binds later
+    must be checked against the final bindings, exactly as ``match()`` does.
+    """
+    for node in _free_nodes(pat):
+        name, var = node[1], node[2]
+        if name not in bindings:
+            continue
+        matched = bindings[name]
+        excluded = bindings.lookup(var)
+        if isinstance(excluded, str) and free_in(excluded, matched):
+            return False
+    return True
+
+
 def _canon_eq(a, b, theory) -> bool:
     """Equality of two terms modulo the theory's canonical form."""
     if a == b:
@@ -90,12 +123,10 @@ def _bind(bindings: Bindings, name: str, value, theory) -> Optional[Bindings]:
 
 
 def _match_one(pat, exp, theory, bindings: Bindings) -> Optional[Bindings]:
-    """Single-result match for a NON-rest, NON-AC-node pattern element.
+    """Single-result match for an atom or one of the four single-variable forms.
 
-    Handles atoms, the four single-variable forms, and delegates compounds to
-    the first ac_match yield (a compound element has at most one match here in
-    the non-AC path, but may be AC and multi-valued; callers that need every
-    match use ac_match directly). Returns Bindings or None.
+    Called only for non-rest, non-compound pattern elements (the dispatch guard
+    in ``_ac_match_core`` filters to exactly these). Returns Bindings or None.
     """
     if atom(pat):
         return bindings if (atom(exp) and pat == exp) else None
@@ -106,15 +137,13 @@ def _match_one(pat, exp, theory, bindings: Bindings) -> Optional[Bindings]:
     if arbitrary_expression(pat):
         return _bind(bindings, variable_name(pat), exp, theory)
     if arbitrary_free(pat):
-        # Optimistic bind; the excluded var's containment is validated inline:
-        # if it is already bound to a symbol present in exp, fail now.
+        # Optimistic bind; the authoritative ?free check is the whole-binding
+        # post-pass in ac_match. This inline early-exit only fails fast when the
+        # excluded var is ALREADY bound to a symbol present in exp.
         excluded = bindings.lookup(pat[2])
         if isinstance(excluded, str) and excluded != pat[2] and free_in(excluded, exp):
             return None
         return _bind(bindings, variable_name(pat), exp, theory)
-    # Compound, non-AC element: take the unique first ac_match yield, if any.
-    for b in ac_match(pat, exp, theory, bindings):
-        return b
     return None
 
 
@@ -125,10 +154,24 @@ def ac_match(pat, exp, theory, bindings: Optional[Bindings] = None,
 
     ``bindings`` seeds the match (default: empty). ``budget`` is an optional
     ``MatchBudget`` fail-safe for the AC enumeration.
+
+    Public wrapper: it runs the recursive core, then validates every ``?free``
+    constraint against each COMPLETE binding. Validating here (once, at the top)
+    rather than inside the core is what makes ``?x:free(v)`` sound regardless of
+    whether the ``?free`` node appears before or after ``?v`` in the pattern --
+    the same reason ``rewriter.match`` defers its ``?free`` post-pass.
     """
     if bindings is None:
         bindings = Bindings.empty()
+    for result in _ac_match_core(pat, exp, theory, bindings, budget):
+        if _free_constraints_ok(pat, result):
+            yield result
 
+
+def _ac_match_core(pat, exp, theory, bindings: Bindings,
+                   budget: Optional["MatchBudget"] = None) -> Iterator[Bindings]:
+    """Recursive matcher core (no ``?free`` post-pass -- the public ``ac_match``
+    wrapper applies that once against the complete binding)."""
     # Atom / single-variable / ?free: zero or one result.
     if (atom(pat) or arbitrary_constant(pat) or arbitrary_variable(pat)
             or arbitrary_expression(pat) or arbitrary_free(pat)):
@@ -203,7 +246,7 @@ def _match_ac(explicit, rest, elements, theory, bindings, budget) -> Iterator[Bi
                 continue
             if budget is not None and not budget.spend():
                 return
-            for b in ac_match(p, elements[i], theory, binds, budget):
+            for b in _ac_match_core(p, elements[i], theory, binds, budget):
                 yield from recurse(pat_idx + 1, used | {i}, b)
 
     yield from recurse(0, frozenset(), bindings)
@@ -229,5 +272,5 @@ def _match_positional(pats, exps, theory, bindings, budget) -> Iterator[Bindings
         return
     if not exps:
         return
-    for b in ac_match(head, exps[0], theory, bindings, budget):
+    for b in _ac_match_core(head, exps[0], theory, bindings, budget):
         yield from _match_positional(tail, exps[1:], theory, b, budget)

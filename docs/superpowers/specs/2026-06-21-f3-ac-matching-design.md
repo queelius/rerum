@@ -187,6 +187,13 @@ No new call sites. The pinned test
   a bare `a` by treating it as `(+ a 0)`. The common unit cases are already
   covered incidentally, because F1's `normalize` strips units from the subject
   before the equational methods match; full ACU is a future increment.
+- **Same-head nested AC patterns.** A pattern whose AC node nests ANOTHER node of
+  the same AC head -- e.g. `(+ (+ ?x ?y) ?z)` -- is NOT matched against a flat
+  subject like `(+ a b c)`. The matcher flattens the SUBJECT's AC nodes but
+  matches the pattern's inner `(+ ?x ?y)` against a single flattened element.
+  This only LOSES matches (never a wrong result); the idiomatic flat pattern
+  `(+ ?x ?y ?z)` covers the real cases. Flattening the pattern's AC nodes too is
+  a future increment.
 - **Changing `match()` or the no-theory fast path.** Out of scope by design.
 - **Performance work beyond the budget.** Correctness first; the work budget is
   the only blow-up control. An optional `experiments/` probe may validate it.
