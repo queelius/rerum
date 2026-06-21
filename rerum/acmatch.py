@@ -60,6 +60,16 @@ class MatchBudget:
         return True
 
 
+def _freeze(v):
+    """Hashable form of an expression value (lists -> tuples)."""
+    return tuple(_freeze(x) for x in v) if isinstance(v, list) else v
+
+
+def _binding_key(binds: "Bindings"):
+    """A hashable, order-insensitive key for a Bindings, for dedup."""
+    return frozenset((k, _freeze(v)) for k, v in binds.to_dict().items())
+
+
 def _canon_eq(a, b, theory) -> bool:
     """Equality of two terms modulo the theory's canonical form."""
     if a == b:
@@ -135,13 +145,63 @@ def ac_match(pat, exp, theory, bindings: Optional[Bindings] = None,
                 yield extended
         return
 
-    # Compound pattern. AC multiset case is added in a later task; for now,
-    # only the non-AC positional case is handled.
+    # Compound pattern.
     if not compound(pat) or not isinstance(exp, list) or not exp:
         return
+
+    head = car(pat)
+    if theory.is_ac(head) and isinstance(exp, list) and exp and exp[0] == head:
+        # AC multiset case: flatten both sides, enumerate assignments.
+        sub_pats = pat[1:]
+        elements = flatten(exp, theory)[1:]
+        # Split explicit sub-patterns from an optional trailing rest.
+        rest = None
+        explicit = sub_pats
+        if sub_pats and arbitrary_rest(sub_pats[-1]):
+            rest = sub_pats[-1]
+            explicit = sub_pats[:-1]
+        yield from _match_ac(explicit, rest, elements, theory,
+                             bindings, budget)
+        return
+
     if car(pat) != car(exp):
         return
     yield from _match_positional(pat[1:], exp[1:], theory, bindings, budget)
+
+
+def _match_ac(explicit, rest, elements, theory, bindings, budget) -> Iterator[Bindings]:
+    """Assign each pattern in ``explicit`` to a distinct element of the multiset
+    ``elements`` (a list), backtracking with bindings threaded. ``elements`` is
+    iterated in canonical (ORDER_KEY) order for determinism. With ``rest`` None,
+    the chosen elements must EXHAUST ``elements``.
+    """
+    ordered = sorted(range(len(elements)), key=lambda i: ORDER_KEY(elements[i]))
+    # Distinct multiset assignments can produce the same final binding (e.g.
+    # (+ ?x ?x) over (+ a a)); yield each distinct binding once.
+    seen = set()
+
+    def recurse(pat_idx, used, binds):
+        if pat_idx == len(explicit):
+            leftover = [elements[i] for i in ordered if i not in used]
+            if rest is None:
+                if not leftover:
+                    key = _binding_key(binds)
+                    if key not in seen:
+                        seen.add(key)
+                        yield binds
+                return
+            # rest handling added in Task 4
+            return
+        p = explicit[pat_idx]
+        for i in ordered:
+            if i in used:
+                continue
+            if budget is not None and not budget.spend():
+                return
+            for b in ac_match(p, elements[i], theory, binds, budget):
+                yield from recurse(pat_idx + 1, used | {i}, b)
+
+    yield from recurse(0, frozenset(), bindings)
 
 
 def _match_positional(pats, exps, theory, bindings, budget) -> Iterator[Bindings]:

@@ -75,3 +75,71 @@ class TestNonACCases:
         syntactic = match(pat, exp)
         ac = list(am.ac_match(pat, exp, NO_AC))
         assert len(ac) == 1 and ac[0].to_dict() == syntactic.to_dict()
+
+
+AC_PLUS = Theory.from_dict({"+": {"ac": True, "identity": 0}})
+
+
+def _freeze(v):
+    return tuple(_freeze(x) for x in v) if isinstance(v, list) else v
+
+
+def _dictset(pat, exp, theory, budget=None):
+    """Yielded bindings as a list of frozenset(items) for order-insensitive compare."""
+    out = []
+    for b in am.ac_match(pat, exp, theory, budget=budget):
+        out.append(frozenset((k, _freeze(v)) for k, v in b.to_dict().items()))
+    return out
+
+
+class TestACMultisetExhaust:
+    def test_two_vars_two_elements_two_matches(self):
+        # (+ ?x ?y) against (+ a b): {x=a,y=b} and {x=b,y=a}.
+        got = _dictset(["+", ["?", "x"], ["?", "y"]], ["+", "a", "b"], AC_PLUS)
+        assert len(got) == 2
+        assert frozenset({("x", "a"), ("y", "b")}) in got
+        assert frozenset({("x", "b"), ("y", "a")}) in got
+
+    def test_three_vars_three_elements_six_matches(self):
+        got = _dictset(
+            ["+", ["?", "x"], ["?", "y"], ["?", "z"]],
+            ["+", "a", "b", "c"], AC_PLUS)
+        assert len(got) == 6
+
+    def test_exhaust_required_without_rest(self):
+        # (+ ?x ?y) against (+ a b c): no rest -> must exhaust -> no match.
+        assert _dictset(["+", ["?", "x"], ["?", "y"]], ["+", "a", "b", "c"], AC_PLUS) == []
+
+    def test_literal_element_in_ac_node(self):
+        # (+ 2 ?x) against (+ 2 a): 2 matches the literal, ?x=a.
+        got = _dictset(["+", 2, ["?", "x"]], ["+", 2, "a"], AC_PLUS)
+        assert got == [frozenset({("x", "a")})]
+        # (+ 2 ?x) against (+ 3 a): no 2 present -> no match.
+        assert _dictset(["+", 2, ["?", "x"]], ["+", 3, "a"], AC_PLUS) == []
+
+    def test_flatten_before_match(self):
+        # Nested sum is seen flat: (+ ?x ?y) against (+ a (+ b)) -> a, b.
+        got = _dictset(["+", ["?", "x"], ["?", "y"]], ["+", "a", ["+", "b"]], AC_PLUS)
+        assert len(got) == 2
+
+    def test_non_linear_under_ac(self):
+        # (+ ?x ?x) against (+ a a) matches (x=a); against (+ a b) does not.
+        assert _dictset(["+", ["?", "x"], ["?", "x"]], ["+", "a", "a"], AC_PLUS) == \
+            [frozenset({("x", "a")})]
+        assert _dictset(["+", ["?", "x"], ["?", "x"]], ["+", "a", "b"], AC_PLUS) == []
+
+    def test_budget_truncates_but_yields_are_valid(self):
+        # A tiny budget over (+ ?x ?y ?z) vs (+ a b c): the 6-assignment
+        # enumeration is cut short, but each binding yielded is a real match
+        # (soundness under truncation). With steps=3 exactly one assignment
+        # completes before the budget runs out.
+        budget = am.MatchBudget(steps=3)
+        pat = ["+", ["?", "x"], ["?", "y"], ["?", "z"]]
+        exp = ["+", "a", "b", "c"]
+        got = list(am.ac_match(pat, exp, AC_PLUS, budget=budget))
+        assert budget.truncated is True
+        assert 0 < len(got) < 6        # some, but not all 6, assignments
+        for b in got:
+            vals = [b["x"], b["y"], b["z"]]
+            assert len(set(vals)) == 3
+            assert set(vals) == {"a", "b", "c"}
