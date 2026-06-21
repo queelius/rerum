@@ -1,0 +1,3 @@
+# AC-matching demo: one rule cancels a term wherever it sits in a sum.
+# Load with the paired ac_demo.theory.json so + is associative-commutative.
+@cancel: (+ ?x (- ?x) ?rest...) => (+ :rest...)

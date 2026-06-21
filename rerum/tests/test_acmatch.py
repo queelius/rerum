@@ -245,3 +245,39 @@ class TestEngineACMatching:
         eng.set_ac_match_budget(2)        # tiny budget
         eng.simplify(["+", "a", "b", "c", "d", "e", "f"])
         assert eng.ac_match_truncated is True
+
+
+class TestEquationalAC:
+    def _ac_engine(self, dsl, sig):
+        eng = RuleEngine.from_dsl(dsl)
+        eng.with_theory(Theory.from_dict(sig))
+        return eng
+
+    def test_prove_equal_ac_distributivity(self):
+        eng = self._ac_engine(
+            "@distrib: (* (+ ?a ?b) ?c) => (+ (* :a :c) (* :b :c))",
+            {"*": {"ac": True}})
+        proof = eng.prove_equal(["*", ["+", "a", "b"], "c"],
+                                ["+", ["*", "a", "c"], ["*", "b", "c"]],
+                                include_unidirectional=True)
+        assert proof is not None
+
+    def test_equivalents_includes_ac_rewrite(self):
+        eng = self._ac_engine(
+            "@cancel: (+ ?x (- ?x) ?rest...) => (+ :rest...)",
+            {"+": {"ac": True, "identity": 0}})
+        forms = list(eng.equivalents(["+", "a", "b", ["-", "a"]],
+                                     include_unidirectional=True, max_depth=3))
+        # The cancelled form (b, possibly as (+ b)) is reachable.
+        assert any(f == "b" or f == ["+", "b"] for f in forms)
+
+
+class TestExamplesDemo:
+    def test_ac_demo_cancels_across_arrangements(self):
+        import os
+        root = os.path.join(os.path.dirname(__file__), "..", "..", "examples")
+        eng = RuleEngine.from_file(os.path.join(root, "ac_demo.rules"))
+        with open(os.path.join(root, "ac_demo.theory.json")) as fh:
+            eng.with_theory(Theory.from_json(fh.read()))
+        # The cancelling pair is separated by an unrelated term.
+        assert eng.simplify(["+", "a", "b", ["-", "a"]]) == "b"

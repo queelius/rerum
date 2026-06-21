@@ -167,6 +167,12 @@ from .completion import (
     CompletionResult,
 )
 
+# AC-matching (F3)
+from .acmatch import (
+    ac_match,
+    MatchBudget,
+)
+
 # Public API
 __all__ = [
     # Version
@@ -268,4 +274,7 @@ __all__ = [
     # Completion
     "complete",
     "CompletionResult",
+    # AC-matching
+    "ac_match",
+    "MatchBudget",
 ]
