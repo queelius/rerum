@@ -61,6 +61,10 @@ class Theory:
         entry = self._sig.get(op)
         return bool(entry) and bool(entry.get("ac", False))
 
+    def has_ac(self) -> bool:
+        """True if any operator in this theory is declared AC."""
+        return any(bool(entry.get("ac", False)) for entry in self._sig.values())
+
     def identity(self, op):
         entry = self._sig.get(op)
         return entry.get("identity") if entry else None
