@@ -612,3 +612,18 @@ class TestTheoryEntryValidation:
         from rerum.normalize import Theory
         t = Theory.from_dict({"+": {"ac": True}})
         assert t.is_ac("+") is True and t.has_ac() is True
+
+
+class TestTheoryRepeatValidation:
+    def test_repeat_op_must_be_declared_ac(self):
+        import pytest
+        from rerum.normalize import Theory
+        with pytest.raises(ValueError) as ei:
+            Theory.from_dict({"+": {"ac": True, "repeat": {"op": "*", "via": "count"}}})
+        assert "*" in str(ei.value) and "repeat" in str(ei.value).lower()
+
+    def test_repeat_op_declared_ac_ok(self):
+        from rerum.normalize import Theory
+        Theory.from_dict({
+            "+": {"ac": True, "repeat": {"op": "*", "via": "count"}},
+            "*": {"ac": True}})

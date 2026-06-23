@@ -49,6 +49,15 @@ class Theory:
                 raise ValueError(
                     f"theory entry for {op!r} must be an object (operator "
                     f"signature), got {type(entry).__name__}")
+        for op, entry in sig.items():
+            rep = entry.get("repeat")
+            if rep is not None and isinstance(rep, dict) and rep.get("via") == "count":
+                rop = rep.get("op")
+                rentry = sig.get(rop)
+                if not (isinstance(rentry, dict) and rentry.get("ac", False)):
+                    raise ValueError(
+                        f"repeat.op {rop!r} for operator {op!r} must itself be a "
+                        f"declared AC operator in the same theory")
         self._sig = sig
 
     @classmethod
