@@ -496,3 +496,20 @@ The central correctness claim holds. The no-theory / no-AC paths are byte-identi
 
 ### cross-cutting -- cross-module consistency
 s
+
+---
+
+## Remediation (2026-06-23)
+
+All 20 confirmed MAJOR+MINOR findings were fixed under
+`docs/superpowers/plans/2026-06-23-trs-frontier-review-remediation.md` (15 tasks,
+TDD, subagent-driven). Full suite 1742 passed; no-domain guard 12; ASCII clean.
+An Opus holistic review of the remediation returned APPROVE-WITH-NITS; its one
+MINOR (an ORDER_KEY value-ordering regression) and two doc nits were then fixed.
+
+Key fix commits: 23e3923 (ORDER_KEY exact key), 846764e (ORDER_KEY value-order
++ doc nits), 04e48ce/82bdea4 (Theory validation), 1346a5f (max_steps fast path),
+6b87eb2/b434836 (acmatch empty-pat/typed-rest), ed9655b (confluence dangling-RHS),
+91130a1 (completion invariant), c14812f/d986cd9 (unify/not_analyzed), 823876a
+(strategy AC refusal), e2052b4 (apply_once productive-only), b8620f5 (truncation
+flag), aeaa9a1 (narrowing exhausted). The 9 NITs remain deferred.
