@@ -135,9 +135,11 @@ from .rewriter import compound, gensym, free_symbols, ExprType
 def _positions(term) -> Iterator[list]:
     """Yield the path (list of indices) to every NON-VARIABLE subterm of
     ``term``. Index 0 (the operator head) is not a position; a ``["?", _]``
-    node is not a position."""
-    if not _is_var(term):
-        yield []
+    node is not a position (and we do NOT recurse into it -- recursing would
+    yield spurious positions pointing at the variable's name)."""
+    if _is_var(term):
+        return
+    yield []
     if compound(term):
         for i in range(1, len(term)):
             for sub in _positions(term[i]):
