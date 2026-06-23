@@ -43,7 +43,13 @@ class Theory:
     __slots__ = ("_sig",)
 
     def __init__(self, sig: Dict[str, Dict[str, Any]]):
-        self._sig = dict(sig or {})
+        sig = dict(sig or {})
+        for op, entry in sig.items():
+            if not isinstance(entry, dict):
+                raise ValueError(
+                    f"theory entry for {op!r} must be an object (operator "
+                    f"signature), got {type(entry).__name__}")
+        self._sig = sig
 
     @classmethod
     def from_dict(cls, d: Dict[str, Dict[str, Any]]) -> "Theory":

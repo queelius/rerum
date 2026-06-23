@@ -592,3 +592,23 @@ class TestOrderKeyExactNumeric:
         a = Fraction(10**18, 3)
         out = normalize(["+", a, a, "x"], self._arith())
         assert any(isinstance(e, list) and e[0] == "*" for e in out[1:])
+
+
+class TestTheoryEntryValidation:
+    def test_non_dict_entry_rejected_from_dict(self):
+        import pytest
+        from rerum.normalize import Theory
+        with pytest.raises(ValueError) as ei:
+            Theory.from_dict({"+": "ac"})
+        assert "+" in str(ei.value)
+
+    def test_non_dict_entry_rejected_from_json(self):
+        import pytest
+        from rerum.normalize import Theory
+        with pytest.raises(ValueError):
+            Theory.from_json('{"+": true}')
+
+    def test_valid_theory_still_constructs(self):
+        from rerum.normalize import Theory
+        t = Theory.from_dict({"+": {"ac": True}})
+        assert t.is_ac("+") is True and t.has_ac() is True
