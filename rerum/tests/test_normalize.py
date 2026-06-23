@@ -553,3 +553,42 @@ class TestTheoryFromJsonValidation:
     def test_object_json_still_loads(self):
         t = Theory.from_json('{"+": {"ac": true, "identity": 0}}')
         assert t.is_ac("+") and t.identity("+") == 0
+
+
+class TestOrderKeyExactNumeric:
+    def _arith(self):
+        from rerum.normalize import Theory
+        return Theory.from_dict({
+            "+": {"ac": True, "identity": 0, "repeat": {"op": "*", "via": "count"}},
+            "*": {"ac": True, "identity": 1, "annihilator": 0,
+                  "repeat": {"op": "^", "via": "exp"}}})
+
+    def test_distinct_large_fractions_not_merged(self):
+        from fractions import Fraction
+        from rerum.normalize import normalize
+        a = Fraction(10**18, 3)
+        b = Fraction(10**18 + 1, 3)  # distinct, but float(a)==float(b)
+        out = normalize(["*", a, b, "x"], self._arith())
+        nums = [e for e in (out[1:] if isinstance(out, list) else []) if isinstance(e, Fraction)]
+        assert a in nums and b in nums
+
+    def test_distinct_large_ints_not_merged(self):
+        from rerum.normalize import normalize
+        big = 2**53
+        out = normalize(["*", big, big + 1, "x"], self._arith())
+        nums = [e for e in (out[1:] if isinstance(out, list) else []) if isinstance(e, int)]
+        assert big in nums and (big + 1) in nums
+
+    def test_order_key_total_on_non_finite(self):
+        from rerum.normalize import ORDER_KEY
+        nan = float("nan"); pinf = float("inf"); ninf = float("-inf")
+        keys = [ORDER_KEY(x) for x in (nan, pinf, ninf, 0, 1.5)]
+        assert sorted(keys) == sorted(keys)  # no TypeError
+        assert ORDER_KEY(ninf) < ORDER_KEY(0) < ORDER_KEY(pinf) < ORDER_KEY(nan)
+
+    def test_equal_value_same_type_still_merges(self):
+        from fractions import Fraction
+        from rerum.normalize import normalize
+        a = Fraction(10**18, 3)
+        out = normalize(["+", a, a, "x"], self._arith())
+        assert any(isinstance(e, list) and e[0] == "*" for e in out[1:])

@@ -16,6 +16,8 @@ fold is local and uses the theory's units.
 """
 
 import json as _json
+import math
+from fractions import Fraction
 from typing import Any, Callable, Dict, List, Optional
 
 from .rewriter import ExprType, compound, constant, variable
@@ -123,19 +125,33 @@ _RANK_SYMBOL = 1
 _RANK_COMPOUND = 2
 
 
+def _num_value_key(x):
+    """Exact, totally-ordered value sub-key for a numeric atom, replacing the
+    lossy ``float(x)``. Finite ints/floats/Fractions key on their EXACT rational
+    value (so distinct values never collide and equal values share a key);
+    non-finite floats sort into fixed buckets (-inf < finite < +inf < NaN)."""
+    if isinstance(x, float):
+        if math.isnan(x):
+            return (2, 0)
+        if math.isinf(x):
+            return (1, 0) if x > 0 else (-1, 0)
+    fr = Fraction(x)  # exact for int/float/Fraction/bool; finite by here
+    return (0, (fr.numerator, fr.denominator))
+
+
 def ORDER_KEY(expr: ExprType) -> tuple:
     """Domain-free structural total-order key for canonical sorting.
 
     Numbers sort before symbols before compounds. Numbers order by value
-    (int/float/Fraction comparable via ``float``), symbols lexicographically,
+    (exact rational comparison via _num_value_key), symbols lexicographically,
     compounds by ``(head, then args recursively)``. The leading integer rank
     makes keys of different shapes always comparable without ``TypeError``.
     Takes no theory: this is pure structure, no domain knowledge.
     """
     if isinstance(expr, bool):
-        return (_RANK_NUMBER, (float(expr), "bool"))
+        return (_RANK_NUMBER, (_num_value_key(expr), "bool"))
     if _is_number(expr):
-        return (_RANK_NUMBER, (float(expr), type(expr).__name__))
+        return (_RANK_NUMBER, (_num_value_key(expr), type(expr).__name__))
     if variable(expr):
         return (_RANK_SYMBOL, (expr,))
     # compound: key by head (recursively, the normal head is a string) then args.
