@@ -255,6 +255,15 @@ def _has_marker(term: ExprType, heads: set) -> bool:
     return False
 
 
+def _well_formed_rhs(pattern: ExprType, skeleton: ExprType) -> bool:
+    """True if every variable referenced by the skeleton is bound by the
+    pattern (Var(r) subset Var(l)). A dangling reference would be modeled as a
+    free variable by instantiate_skeleton but reduced to a ground symbol by the
+    engine -- a divergence that breaks the joinability oracle. Such rules are
+    not analyzable."""
+    return not (_variables(instantiate_skeleton(skeleton, {})) - _variables(pattern))
+
+
 def is_analyzable(pattern: ExprType, skeleton: ExprType,
                   condition: Optional[ExprType]) -> bool:
     """True iff F2 can soundly analyze this directed rule: unconditional, a
@@ -320,7 +329,8 @@ def critical_pairs(
 
     analyzable = []
     for r in rules:
-        if is_analyzable(r.pattern, r.skeleton, r.condition):
+        if is_analyzable(r.pattern, r.skeleton, r.condition) and \
+                _well_formed_rhs(r.pattern, r.skeleton):
             analyzable.append(r)
         else:
             skip(r)

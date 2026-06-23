@@ -351,3 +351,12 @@ class TestBudgetHonoredOnFastPath:
         def depth(t):
             return 1 + max((depth(c) for c in t[1:]), default=0) if isinstance(t, list) else 0
         assert depth(small) < depth(big)
+
+
+class TestConfluenceDanglingRHS:
+    def test_extra_rhs_variable_rule_is_not_analyzed(self):
+        from rerum.engine import RuleEngine
+        # @r: (g a) => :x  has an EXTRA RHS variable (no ?x binder in the LHS).
+        eng = RuleEngine.from_dsl("@r: (g a) => :x")
+        report = eng.check_confluence()
+        assert "r" in report.not_analyzed
