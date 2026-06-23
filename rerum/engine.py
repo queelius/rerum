@@ -1894,6 +1894,7 @@ class RuleEngine:
             for b in ac_match(pattern, expr, self._theory, budget=budget):
                 yield b
         except RecursionError:
+            self._ac_match_truncated = True
             return
         finally:
             if budget.truncated:
@@ -2396,6 +2397,7 @@ class RuleEngine:
         if _top_level:
             self._step_count = 0
             self._cancel_requested = False
+            self._ac_match_truncated = False
         for rule_idx, rule in enumerate(self._rules):
             metadata = self._metadata[rule_idx]
             # Check group filter
@@ -3301,6 +3303,7 @@ class RuleEngine:
         "bottomup", or "topdown". The trace receives steps stamped with the
         redex path under whichever strategy is active.
         """
+        self._ac_match_truncated = False
         trace_obj = RewriteTrace()
         trace_obj.initial = expr
 
@@ -3792,6 +3795,7 @@ class RuleEngine:
 
         self._step_count = 0
         self._cancel_requested = False
+        self._ac_match_truncated = False
         bidirectional_only = not include_unidirectional
 
         # Track visited expressions. Under a theory, identity is the NORMAL
@@ -3938,6 +3942,7 @@ class RuleEngine:
         """
         self._step_count = 0
         self._cancel_requested = False
+        self._ac_match_truncated = False
         bidirectional_only = not include_unidirectional
 
         # Convert to hashable for set operations. Under a theory the key is
@@ -4236,6 +4241,7 @@ class RuleEngine:
             # Operator costs
             result = engine.minimize(expr, op_costs={"+": 1, "*": 2, "/": 5, "^": 10})
         """
+        self._ac_match_truncated = False
         # Determine cost function
         if cost is not None:
             cost_fn = cost

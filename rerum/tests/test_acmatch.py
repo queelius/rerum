@@ -401,3 +401,28 @@ class TestApplyOnceACCompleteness:
         result, meta = eng.apply_once(["f", "a"])
         assert result == ["f", "a"]
         assert meta is None
+
+
+class TestTruncationFlagHonesty:
+    def _ac_eng(self):
+        eng = RuleEngine.from_dsl("@r: (+ ?x ?y ?z) => done")
+        eng.with_theory(Theory.from_dict({"+": {"ac": True, "identity": 0}}))
+        return eng
+
+    def test_flag_reset_by_later_clean_call(self):
+        # Seed the flag via a simplify call with a tiny budget.
+        eng = self._ac_eng()
+        eng.set_ac_match_budget(1)
+        eng.simplify(["+", "a", "b", "c", "d", "e"])
+        assert eng.ac_match_truncated is True
+        # A later equivalents call with a big budget must RESET the flag to False.
+        eng.set_ac_match_budget(100000)
+        list(eng.equivalents(["+", "a", "b"], include_unidirectional=True, max_depth=1))
+        assert eng.ac_match_truncated is False
+
+    def test_flag_set_after_equivalents_truncation(self):
+        eng = self._ac_eng()
+        eng.set_ac_match_budget(1)
+        list(eng.equivalents(["+", "a", "b", "c", "d", "e"],
+                             include_unidirectional=True, max_depth=2))
+        assert eng.ac_match_truncated is True
