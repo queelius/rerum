@@ -2386,8 +2386,11 @@ class RuleEngine:
 
         Returns:
             Tuple of (result, metadata) where:
-                - result: The rewritten expression (or original if no rule applied)
-                - metadata: RuleMetadata of applied rule, or None if no rule applied
+                - result: The rewritten expression (or the original unchanged
+                  when no rule PRODUCED a change)
+                - metadata: RuleMetadata of the applied rule, or None when no
+                  rule produced a change. A rule that matches but reproduces the
+                  input unchanged (a no-op) is treated as NOT applied -> None.
 
         Example:
             result, applied = engine.apply_once(expr)

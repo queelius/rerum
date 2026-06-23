@@ -141,17 +141,18 @@ _RANK_COMPOUND = 2
 
 
 def _num_value_key(x):
-    """Exact, totally-ordered value sub-key for a numeric atom, replacing the
-    lossy ``float(x)``. Finite ints/floats/Fractions key on their EXACT rational
-    value (so distinct values never collide and equal values share a key);
-    non-finite floats sort into fixed buckets (-inf < finite < +inf < NaN)."""
+    """Exact, totally-ordered, VALUE-ordered sub-key for a numeric atom,
+    replacing the lossy ``float(x)``. Finite ints/floats/Fractions key on their
+    EXACT rational value (so distinct values never collide, equal values share a
+    key, and the order is by VALUE -- ``Fraction`` compares by value, unlike a
+    ``(numerator, denominator)`` tuple which would sort 3 before 3/2). Non-finite
+    floats sort into fixed buckets (-inf < finite < +inf < NaN)."""
     if isinstance(x, float):
         if math.isnan(x):
-            return (2, 0)
+            return (2, Fraction(0))
         if math.isinf(x):
-            return (1, 0) if x > 0 else (-1, 0)
-    fr = Fraction(x)  # exact for int/float/Fraction/bool; finite by here
-    return (0, (fr.numerator, fr.denominator))
+            return (1, Fraction(0)) if x > 0 else (-1, Fraction(0))
+    return (0, Fraction(x))  # exact for int/float/Fraction/bool; finite by here
 
 
 def ORDER_KEY(expr: ExprType) -> tuple:

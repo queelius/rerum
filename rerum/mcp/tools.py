@@ -457,10 +457,11 @@ def tool_apply_once(engine, *, expr: str,
                     groups: Optional[List[str]] = None) -> Dict[str, Any]:
     """Apply the first matching rule once; return result + trace + prose.
 
-    ``matched`` reports whether ANY rule matched; ``rule`` names it.
-    ``changed`` reports whether the rewrite altered the expression --
-    a no-op match (matched=True, changed=False) is distinguishable from
-    no rule matching at all.
+    ``matched`` reports whether a rule matched AND produced a change; ``rule``
+    names it. ``changed`` mirrors that. A rule that matches but reproduces the
+    input unchanged (a no-op) is treated as NOT applied (``matched=False``,
+    ``rule=None``) -- indistinguishable from no rule matching, because no
+    rewrite occurred.
 
     Args:
         expr: The expression, as an s-expr string.

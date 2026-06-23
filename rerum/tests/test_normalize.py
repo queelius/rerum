@@ -627,3 +627,20 @@ class TestTheoryRepeatValidation:
         Theory.from_dict({
             "+": {"ac": True, "repeat": {"op": "*", "via": "count"}},
             "*": {"ac": True}})
+
+
+class TestOrderKeyValueOrdered:
+    def test_fractions_sort_by_value_not_lexicographic(self):
+        # Regression: keying on (numerator, denominator) sorted 3 before 3/2.
+        # ORDER_KEY must sort numbers by VALUE: 1/2 < 3/2 < 2 < 3.
+        from fractions import Fraction
+        from rerum.normalize import ORDER_KEY
+        vals = [Fraction(3, 1), Fraction(1, 2), Fraction(3, 2), Fraction(2, 1)]
+        assert sorted(vals, key=ORDER_KEY) == \
+            [Fraction(1, 2), Fraction(3, 2), Fraction(2, 1), Fraction(3, 1)]
+
+    def test_large_distinct_fractions_still_distinct(self):
+        from fractions import Fraction
+        from rerum.normalize import ORDER_KEY
+        a = Fraction(10**18, 3); b = Fraction(10**18 + 1, 3)
+        assert ORDER_KEY(a) != ORDER_KEY(b) and ORDER_KEY(a) < ORDER_KEY(b)
