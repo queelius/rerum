@@ -176,3 +176,29 @@ def narrow(engine, start, target, *, max_nodes=1000, max_depth=20) -> NarrowResu
     SYNTACTIC (ignores any loaded theory). See module docstring."""
     return _narrow_with_rules(_extract_rules(engine), start, target,
                               max_nodes=max_nodes, max_depth=max_depth)
+
+
+def solve_equation(engine, s, t, *, max_nodes=1000, max_depth=20) -> NarrowResult:
+    """E-unification: solve ``s =? t`` modulo ``engine``'s rules. Returns the
+    FIRST answer substitution sigma with sigma(s) and sigma(t) joinable.
+
+    Reduces to reachability: with fresh (gensym'd) ``eq``/``true`` symbols and a
+    reflexivity rule ``(eq ?x ?x) -> true``, narrow ``(eq s t)`` toward ``true``.
+    Unrestricted narrowing explores positions inside s and t, and reflexivity
+    fires at the root exactly when the two narrowed sides unify. Fresh symbols
+    keep this domain-free."""
+    rules = _extract_rules(engine)
+    avoid = set(free_symbols(s)) | set(free_symbols(t))
+    for (l, r, _rid) in rules:
+        avoid |= set(free_symbols(l)) | set(free_symbols(r))
+    eq = gensym("eq", avoid)
+    true_ = gensym("true", avoid | {eq})
+    refl = ([eq, ["?", "x"], ["?", "x"]], true_, "refl")
+    result = _narrow_with_rules(rules + [refl], [eq, s, t], true_,
+                                max_nodes=max_nodes, max_depth=max_depth)
+    if not result.found:
+        return result
+    keep = _variables(s) | _variables(t)
+    sub = {k: v for k, v in result.substitution.items() if k in keep}
+    return NarrowResult(True, sub, result.derivation,
+                        result.nodes_expanded, False)

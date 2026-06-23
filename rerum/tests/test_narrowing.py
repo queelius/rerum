@@ -135,3 +135,52 @@ class TestNarrowReachability:
         a = nw.narrow(eng, start, target).substitution
         b = nw.narrow(eng, start, target).substitution
         assert a == b
+
+
+def _append_engine():
+    return RuleEngine.from_dsl("""
+        @app0: (app nil ?ys) => :ys
+        @appC: (app (cons ?x ?xs) ?ys) => (cons :x (app :xs :ys))
+    """)
+
+
+def _lst(*items):
+    out = "nil"
+    for it in reversed(items):
+        out = ["cons", it, out]
+    return out
+
+
+class TestSolveEquation:
+    def test_append_solves_the_prefix(self):
+        # solve app(?xs, [c]) =? [a, b, c]  ->  ?xs = [a, b].
+        eng = _append_engine()
+        result = nw.solve_equation(eng,
+                                   ["app", ["?", "xs"], _lst("c")],
+                                   _lst("a", "b", "c"))
+        assert result.found is True
+        assert result.substitution["xs"] == _lst("a", "b")
+
+    def test_already_equal_solves_trivially(self):
+        eng = _peano_engine()
+        result = nw.solve_equation(eng, ["s", "z"], ["s", "z"])
+        assert result.found is True
+        assert result.substitution == {}
+
+    def test_answer_substitution_is_sound(self):
+        # The returned sigma must re-derive: sigma(s) and sigma(t) join under
+        # the engine's simplify.
+        eng = _append_engine()
+        s = ["app", ["?", "xs"], _lst("c")]
+        t = _lst("a", "b", "c")
+        result = nw.solve_equation(eng, s, t)
+        sigma = result.substitution
+        s_sub = nw.apply_subst(sigma, s)
+        assert eng.simplify(s_sub) == eng.simplify(t)
+
+    def test_no_solution_returns_not_found(self):
+        # app(?xs, [c]) can never equal [a] (length mismatch); finite search.
+        eng = _append_engine()
+        result = nw.solve_equation(eng, ["app", ["?", "xs"], _lst("c")],
+                                   _lst("a"), max_nodes=500)
+        assert result.found is False
