@@ -157,6 +157,9 @@ locks this in.
 - **`prove_equal(..., max_expressions=N)` is the work budget.** Without it, un-provable queries exhaust the depth-bounded reachable set on both BFS frontiers and can run for tens of seconds at modest depths on rich bidirectional rule sets.
 - **Equivalence-class size grows as `n! × Catalan(n-1)`** under associative-commutative `+`. Enumeration is fine to `n=5` (1,680 forms); `n=6` is roughly 30k and impractical. Past `n=5` use `prove_equal` with a budget over `enumerate_equivalents`.
 - **Strategy default is `"exhaustive"`** (apply rules to fixpoint). For one-shot rule application that also returns the matched rule's metadata, use `engine.apply_once(expr)` rather than `engine(expr, strategy="once")`.
+- **AC strategies**: under an AC theory only the default `exhaustive`
+  strategy is AC-aware; `simplify(strategy="bottomup"/"topdown")` raises
+  rather than silently matching syntactically.
 - **Hook fast-path bypass**: when any engine-fired hook is registered,
   ``simplify`` skips the cached ``rewriter()`` fast path and uses
   ``_simplify_exhaustive``. Hooks need engine context that the

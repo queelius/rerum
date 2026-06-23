@@ -2503,6 +2503,11 @@ class RuleEngine:
         has_groups = groups is not None or self._disabled_groups
         has_ac = self._theory_has_ac()
 
+        if has_ac and strategy in ("bottomup", "topdown"):
+            raise ValueError(
+                f"strategy={strategy!r} does not support AC matching; use the "
+                f"default 'exhaustive' strategy under an AC theory")
+
         if strategy == "exhaustive":
             if has_conditions or has_groups or has_ac:
                 return self._simplify_exhaustive(expr, max_steps, groups=groups)
@@ -3300,6 +3305,11 @@ class RuleEngine:
 
         def trace_hook(step, ctx):
             trace_obj(step)
+
+        if self._theory_has_ac() and strategy in ("bottomup", "topdown"):
+            raise ValueError(
+                f"strategy={strategy!r} does not support AC matching; use the "
+                f"default 'exhaustive' strategy under an AC theory")
 
         self.on_rule_applied(trace_hook)
         try:

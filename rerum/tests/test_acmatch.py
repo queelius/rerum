@@ -352,3 +352,33 @@ class TestEmptyPatternGuard:
     def test_nested_empty_in_compound(self):
         assert _matches(["f", []], ["f", []], NO_AC) == [{}]
         assert _matches(["f", []], ["f", "a"], NO_AC) == []
+
+
+class TestStrategyACRefusal:
+    def test_bottomup_under_ac_refuses(self):
+        import pytest
+        eng = RuleEngine.from_dsl("@cancel: (+ ?x (- ?x) ?rest...) => (+ :rest...)")
+        eng.with_theory(Theory.from_dict({"+": {"ac": True, "identity": 0}}))
+        with pytest.raises(ValueError) as ei:
+            eng.simplify(["+", "a", "b", ["-", "a"]], strategy="bottomup")
+        assert "AC" in str(ei.value) or "ac" in str(ei.value)
+
+    def test_topdown_under_ac_refuses(self):
+        import pytest
+        eng = RuleEngine.from_dsl("@cancel: (+ ?x (- ?x) ?rest...) => (+ :rest...)")
+        eng.with_theory(Theory.from_dict({"+": {"ac": True, "identity": 0}}))
+        with pytest.raises(ValueError) as ei:
+            eng.simplify(["+", "a", "b", ["-", "a"]], strategy="topdown")
+        assert "AC" in str(ei.value) or "ac" in str(ei.value)
+
+    def test_exhaustive_under_ac_still_works(self):
+        eng = RuleEngine.from_dsl("@cancel: (+ ?x (- ?x) ?rest...) => (+ :rest...)")
+        eng.with_theory(Theory.from_dict({"+": {"ac": True, "identity": 0}}))
+        assert eng.simplify(["+", "a", "b", ["-", "a"]]) == "b"
+
+    def test_once_under_ac_allowed(self):
+        eng = RuleEngine.from_dsl("@cancel: (+ ?x (- ?x) ?rest...) => (+ :rest...)")
+        eng.with_theory(Theory.from_dict({"+": {"ac": True, "identity": 0}}))
+        # "once" routes through apply_once which is AC-aware; must not raise.
+        result = eng.simplify(["+", "a", "b", ["-", "a"]], strategy="once")
+        assert result is not None  # no exception raised
