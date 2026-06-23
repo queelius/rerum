@@ -86,3 +86,52 @@ class TestNarrowStep:
         steps = list(nw.narrow_step(term, [ADD0]))
         # add0 (add z ?y) vs (add ?y z): ?y(term)=z and rule-?y'=z; successor z.
         assert any(s.successor == "z" for s in steps)
+
+
+from rerum.engine import RuleEngine
+
+
+def _peano_engine():
+    return RuleEngine.from_dsl("""
+        @add0: (add z ?y) => :y
+        @addS: (add (s ?x) ?y) => (s (add :x :y))
+    """)
+
+
+class TestNarrowReachability:
+    def test_solves_for_the_missing_addend(self):
+        # find ?x such that add(?x, s(z)) reduces to s(s(z)) -> ?x = s(z).
+        eng = _peano_engine()
+        result = nw.narrow(eng, ["add", ["?", "x"], ["s", "z"]],
+                           ["s", ["s", "z"]])
+        assert result.found is True
+        assert result.substitution["x"] == ["s", "z"]
+
+    def test_immediate_goal_when_start_unifies_target(self):
+        eng = _peano_engine()
+        result = nw.narrow(eng, ["?", "x"], ["s", "z"])
+        # ?x unifies the target directly: ?x = (s z), zero narrowing steps.
+        assert result.found is True
+        assert result.substitution["x"] == ["s", "z"]
+        assert result.derivation == []
+
+    def test_budget_exhaustion(self):
+        # A non-terminating rule (loop ?x) => (loop (s ?x)) never reaches done.
+        eng = RuleEngine.from_dsl("@loop: (loop ?x) => (loop (s ?x))")
+        result = nw.narrow(eng, ["loop", "z"], "done", max_nodes=20)
+        assert result.found is False
+        assert result.exhausted is True
+
+    def test_no_solution_finite_tree(self):
+        # add(z, z) -> z, never s(z); finite tree, no solution.
+        eng = _peano_engine()
+        result = nw.narrow(eng, ["add", "z", "z"], ["s", "z"], max_nodes=1000)
+        assert result.found is False
+        assert result.exhausted is False
+
+    def test_determinism(self):
+        eng = _peano_engine()
+        start, target = ["add", ["?", "x"], ["s", "z"]], ["s", ["s", "z"]]
+        a = nw.narrow(eng, start, target).substitution
+        b = nw.narrow(eng, start, target).substitution
+        assert a == b
