@@ -368,3 +368,15 @@ class TestConfluenceDanglingRHS:
         eng = RuleEngine.from_dsl("@r: (g a) => :x")
         report = eng.check_confluence()
         assert "r" in report.not_analyzed
+
+
+class TestNotAnalyzedAnonymous:
+    def test_two_anonymous_nonanalyzable_rules_both_counted(self):
+        from rerum.confluence import critical_pairs, DirectedRule
+        # Two DISTINCT non-analyzable rules (rest patterns), both unnamed.
+        r1 = DirectedRule(name=None, pattern=["f", ["?...", "a"]],
+                          skeleton=["g", [":...", "a"]], condition=None)
+        r2 = DirectedRule(name=None, pattern=["h", ["?...", "b"]],
+                          skeleton=["k", [":...", "b"]], condition=None)
+        _pairs, na = critical_pairs([r1, r2])
+        assert len(na) == 2

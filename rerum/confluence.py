@@ -333,10 +333,10 @@ def critical_pairs(
     seen_skips: set = set()
 
     def skip(rule: DirectedRule) -> None:
-        key = rule.name
+        key = id(rule)
         if key not in seen_skips:
             seen_skips.add(key)
-            not_analyzed.append(key)
+            not_analyzed.append(rule.name if rule.name is not None else "<anonymous>")
 
     analyzable = []
     for r in rules:
