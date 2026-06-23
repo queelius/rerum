@@ -1,0 +1,5 @@
+# Narrowing demo: Peano addition as DATA. With narrow(), the engine runs these
+# rules BACKWARDS to solve for a missing addend, e.g. find ?x with
+# add(?x, s(z)) = s(s(z)) -> ?x = s(z).
+@add0: (add z ?y) => :y
+@addS: (add (s ?x) ?y) => (s (add :x :y))

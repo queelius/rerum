@@ -173,6 +173,15 @@ from .acmatch import (
     MatchBudget,
 )
 
+# Narrowing (F6)
+from .narrowing import (
+    narrow,
+    solve_equation,
+    narrow_step,
+    NarrowResult,
+    NarrowStep,
+)
+
 # Public API
 __all__ = [
     # Version
@@ -277,4 +286,10 @@ __all__ = [
     # AC-matching
     "ac_match",
     "MatchBudget",
+    # Narrowing
+    "narrow",
+    "solve_equation",
+    "narrow_step",
+    "NarrowResult",
+    "NarrowStep",
 ]

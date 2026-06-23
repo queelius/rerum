@@ -184,3 +184,26 @@ class TestSolveEquation:
         result = nw.solve_equation(eng, ["app", ["?", "xs"], _lst("c")],
                                    _lst("a"), max_nodes=500)
         assert result.found is False
+
+
+class TestReexportsAndDemo:
+    def test_public_reexports(self):
+        import rerum
+        for name in ("narrow", "solve_equation", "narrow_step",
+                     "NarrowResult", "NarrowStep"):
+            assert name in rerum.__all__
+            assert hasattr(rerum, name)
+
+    def test_demo_solves_via_general_engine(self):
+        import os
+        root = os.path.join(os.path.dirname(__file__), "..", "..", "examples")
+        eng = RuleEngine.from_file(os.path.join(root, "narrowing_demo.rules"))
+        # find ?x with add(?x, s(z)) = s(s(z)) -> ?x = s(z).
+        result = nw.narrow(eng, ["add", ["?", "x"], ["s", "z"]],
+                           ["s", ["s", "z"]])
+        assert result.found and result.substitution["x"] == ["s", "z"]
+
+    def test_import_smoke_no_cycle(self):
+        import importlib
+        importlib.import_module("rerum.narrowing")
+        importlib.import_module("rerum.confluence")
