@@ -555,13 +555,16 @@ class TestApplyOnceMatchSurfacing:
         assert result["rule"] is None
         assert result["changed"] is False
 
-    def test_noop_match_is_distinguishable(self):
+    def test_noop_match_is_not_applied(self):
+        # apply_once now returns (expr, None) for no-op bindings (result == expr).
+        # A matched-but-unchanged rule is indistinguishable from no-match at the
+        # apply_once boundary: matched=False, rule=None, changed=False.
         from rerum import RuleEngine
         from rerum.mcp.tools import tool_apply_once
         engine = RuleEngine.from_dsl("@noop: (a ?x) => (a :x)")
         result = tool_apply_once(engine, expr="(a y)")
-        assert result["matched"] is True
-        assert result["rule"] == "noop"
+        assert result["matched"] is False
+        assert result["rule"] is None
         assert result["changed"] is False
 
 

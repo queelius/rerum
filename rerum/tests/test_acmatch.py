@@ -382,3 +382,22 @@ class TestStrategyACRefusal:
         # "once" routes through apply_once which is AC-aware; must not raise.
         result = eng.simplify(["+", "a", "b", ["-", "a"]], strategy="once")
         assert result is not None  # no exception raised
+
+
+class TestApplyOnceACCompleteness:
+    def test_apply_once_finds_productive_ac_binding(self):
+        # (+ (k ?x) ?y) => (found :x :y); subject (+ a (k b)): the productive
+        # binding is x=b (matching (k ?x)), y=a -- the matcher must try bindings
+        # until a productive one is found.
+        eng = RuleEngine.from_dsl("@r: (+ (k ?x) ?y) => (found :x :y)")
+        eng.with_theory(Theory.from_dict({"+": {"ac": True, "identity": 0}}))
+        result, meta = eng.apply_once(["+", "a", ["k", "b"]])
+        assert meta is not None and result[0] == "found"
+
+    def test_apply_once_noop_rule_reports_not_applied(self):
+        # A rule that matches but reproduces the input unchanged is a no-op:
+        # apply_once must report (expr, None), not (expr, metadata).
+        eng = RuleEngine.from_dsl("@id: (f ?x) => (f :x)")
+        result, meta = eng.apply_once(["f", "a"])
+        assert result == ["f", "a"]
+        assert meta is None

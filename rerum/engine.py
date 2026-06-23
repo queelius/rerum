@@ -2418,7 +2418,8 @@ class RuleEngine:
                         path=path, guard=guard,
                     )
                     self._fire_rule_applied(step, expr_path=path)
-                return result, metadata
+                    return result, metadata
+                # no-op binding: try the next binding / next rule
 
         return expr, None
 
