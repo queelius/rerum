@@ -96,6 +96,14 @@ def _unsupported(t: ExprType) -> bool:
     return compound(t) and isinstance(t[0], str) and t[0] in _UNSUPPORTED_HEADS
 
 
+def _contains_unsupported(t: ExprType) -> bool:
+    if _unsupported(t):
+        return True
+    if compound(t):
+        return any(_contains_unsupported(s) for s in t)
+    return False
+
+
 def _is_var(t: ExprType) -> bool:
     return arbitrary_expression(t)  # ["?", name]
 
@@ -173,6 +181,9 @@ def _unify_var(var: ExprType, other: ExprType, subst: Subst) -> Optional[Subst]:
     other = apply_subst(subst, other)
     if _is_var(other) and other[1] == name:
         return subst
+    if _contains_unsupported(other):
+        raise UnsupportedPattern(
+            f"cannot bind a value containing an unsupported node: {other!r}")
     if _occurs(name, other):
         return None
     return _compose_bind(subst, name, other)

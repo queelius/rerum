@@ -202,6 +202,14 @@ class TestCriticalPairs:
         assert "good" not in not_analyzed
 
 
+class TestUnifyNestedUnsupported:
+    def test_unsupported_via_binding_raises(self):
+        import pytest
+        from rerum import confluence as cf
+        with pytest.raises(cf.UnsupportedPattern):
+            cf.unify(["?", "x"], ["f", ["?c", "y"]])
+
+
 class TestCheckConfluence:
     def test_confluent_set_is_locally_confluent(self):
         # r2 makes a critical pair with r1; r3 joins it. Locally confluent.
