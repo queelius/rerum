@@ -45,6 +45,11 @@ class MatchBudget:
     reaches zero, further ``spend()`` calls return False and ``truncated`` is set,
     so the matcher stops enumerating. ``steps=None`` means unbounded. Truncation
     bounds COMPLETENESS only: every match already yielded is still valid.
+
+    Scope: the budget bounds the MULTISET-ASSIGNMENT fan-out in ``_match_ac``
+    (the combinatorial blow-up source) only. Positional and nested-compound
+    recursion are bounded by term size, not by this budget; under an AC theory a
+    very deep NON-AC structure is size-limited, not budget-limited.
     """
 
     steps: Optional[int] = None
