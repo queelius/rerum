@@ -28,6 +28,7 @@ from .rewriter import (
     arbitrary_expression,
     arbitrary_free,
     arbitrary_rest,
+    rest_type_constraint,
     variable_name,
     constant,
     variable,
@@ -68,6 +69,19 @@ def _freeze(v):
 def _binding_key(binds: "Bindings"):
     """A hashable, order-insensitive key for a Bindings, for dedup."""
     return frozenset((k, _freeze(v)) for k, v in binds.to_dict().items())
+
+
+def _rest_ok(rest_pat, items) -> bool:
+    """True if every element of ``items`` satisfies ``rest_pat``'s type
+    constraint (const/var), or there is no constraint."""
+    tc = rest_type_constraint(rest_pat)
+    if tc is None:
+        return True
+    if tc == "const":
+        return all(constant(it) for it in items)
+    if tc == "var":
+        return all(variable(it) for it in items)
+    return True
 
 
 def _free_nodes(pat):
@@ -188,7 +202,7 @@ def _ac_match_core(pat, exp, theory, bindings: Bindings,
 
     # A bare rest pattern matched directly against a list binds the whole list.
     if arbitrary_rest(pat):
-        if isinstance(exp, list):
+        if isinstance(exp, list) and _rest_ok(pat, exp):
             extended = _bind(bindings, variable_name(pat), exp, theory)
             if extended is not None:
                 yield extended
@@ -239,6 +253,8 @@ def _match_ac(explicit, rest, elements, theory, bindings, budget) -> Iterator[Bi
                         seen.add(key)
                         yield binds
                 return
+            if not _rest_ok(rest, leftover):
+                return
             extended = _bind(binds, variable_name(rest), leftover, theory)
             if extended is not None:
                 key = _binding_key(extended)
@@ -272,7 +288,10 @@ def _match_positional(pats, exps, theory, bindings, budget) -> Iterator[Bindings
         # Rest must be last; capture the positional remainder as a list.
         if tail:
             raise ValueError("Rest pattern (?...) must be last")
-        extended = _bind(bindings, variable_name(head), list(exps), theory)
+        items = list(exps)
+        if not _rest_ok(head, items):
+            return
+        extended = _bind(bindings, variable_name(head), items, theory)
         if extended is not None:
             yield extended
         return

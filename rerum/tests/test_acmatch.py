@@ -322,6 +322,25 @@ class TestExamplesDemo:
         assert eng.simplify(["+", "a", "b", ["-", "a"]]) == "b"
 
 
+class TestTypedRestConstraints:
+    def test_const_rest_rejects_nonconstant_under_ac(self):
+        # (+ ?x ?rest:const...) vs (+ 1 2 a): in every yielded binding the rest
+        # list must contain only constants (numbers), never the symbol 'a'.
+        pat = ["+", ["?", "x"], ["?...", "rest", "const"]]
+        for b in am.ac_match(pat, ["+", 1, 2, "a"], AC_PLUS):
+            assert all(not isinstance(e, str) for e in b["rest"])
+
+    def test_var_rest_rejects_constants_positional(self):
+        # (f ?x ?rest:var...) vs (f a b 1): rest tail [b,1] has a constant -> no match.
+        pat = ["f", ["?", "x"], ["?...", "rest", "var"]]
+        assert _matches(pat, ["f", "a", "b", 1], NO_AC) == []
+
+    def test_unconstrained_rest_unchanged(self):
+        pat = ["+", ["?", "x"], ["?...", "rest"]]
+        got = list(am.ac_match(pat, ["+", "a", 1], AC_PLUS))
+        assert got  # still matches (no constraint)
+
+
 class TestEmptyPatternGuard:
     def test_empty_vs_empty_matches(self):
         assert _matches([], [], NO_AC) == [{}]
