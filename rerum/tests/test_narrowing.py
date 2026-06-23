@@ -241,3 +241,21 @@ class TestReviewFixes:
                            max_nodes=100000, max_depth=5)
         assert result.found is False
         assert result.exhausted is True
+
+
+class TestNarrowExhaustedPrecision:
+    def test_cyclic_finite_tree_not_inconclusive(self):
+        # p <-> q 2-cycle: a finite cyclic tree.  With max_depth=2 the BFS
+        # reaches the state (p z)/theta={x:z} at depth=2.  Its only narrowing
+        # successor is (q z)/theta={x:z}, which is already in `seen`.  The old
+        # depth-cap branch fires depth_capped=True without checking membership,
+        # incorrectly reporting exhausted=True (inconclusive).  The fix checks
+        # membership first; since every cap-depth successor here IS already in
+        # `seen`, depth_capped stays False and exhausted is correctly False.
+        eng = RuleEngine.from_dsl("""
+            @a: (p ?x) => (q :x)
+            @b: (q ?x) => (p :x)
+        """)
+        result = nw.narrow(eng, ["p", "z"], "done", max_nodes=100000, max_depth=2)
+        assert result.found is False
+        assert result.exhausted is False

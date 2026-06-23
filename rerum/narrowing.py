@@ -181,24 +181,33 @@ def _narrow_with_rules(rules, start, target, *,
                     frontier.append((step.successor, theta2, depth + 1,
                                      deriv + [step]))
         else:
-            # At the depth cap: if this node still has successors, the tree was
-            # truncated by max_depth, so a found=False result is INCONCLUSIVE
-            # (not a genuinely finite exhausted tree). Reflect that in exhausted.
-            for _ in narrow_step(term, rules):
-                depth_capped = True
-                break
+            # At the depth cap: if this node has a successor that is NOT already
+            # in `seen`, the tree was truncated by max_depth and a found=False
+            # result is INCONCLUSIVE (not a genuinely finite exhausted tree).
+            # If ALL successors are already in `seen` the cyclic sub-tree was
+            # fully explored via shorter paths, so depth_capped stays False.
+            for step in narrow_step(term, rules):
+                if _key(step.successor, _compose(step.sigma, theta)) not in seen:
+                    depth_capped = True
+                    break
     return NarrowResult(False, None, [], nodes, depth_capped)
 
 
 def narrow(engine, start, target, *, max_nodes=1000, max_depth=20) -> NarrowResult:
-    """Reachability narrowing over ``engine``'s analyzable rules: find sigma
-    such that sigma(start) reduces to a term unifying sigma(target). Read-only;
-    SYNTACTIC (ignores any loaded theory). See module docstring.
+    """Reachability narrowing over ``engine``'s analyzable rules.
+
+    Finds sigma such that sigma(start) and sigma(target) reduce to a common form
+    (JOINABILITY) under the engine's rules; for a ground target this is
+    reachability of the target.
+
+    Read-only; SYNTACTIC (ignores any loaded theory). See module docstring.
 
     The answer may be MORE GENERAL than a ground solution (its range can carry
     a fresh internal variable, e.g. ``{x: ["?", "y"]}`` meaning "any value
     works"); that is sound. ``exhausted=True`` means the search was cut short by
-    ``max_nodes`` or ``max_depth`` (a found=False result is then inconclusive)."""
+    ``max_nodes`` or ``max_depth`` with at least one unseen successor remaining
+    (a found=False result is then inconclusive); ``exhausted=False`` with
+    ``found=False`` means the reachable set was fully explored."""
     return _narrow_with_rules(_extract_rules(engine), start, target,
                               max_nodes=max_nodes, max_depth=max_depth)
 
