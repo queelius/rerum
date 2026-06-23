@@ -207,3 +207,37 @@ class TestReexportsAndDemo:
         import importlib
         importlib.import_module("rerum.narrowing")
         importlib.import_module("rerum.confluence")
+
+
+class TestReviewFixes:
+    # Opus holistic review found a soundness hole (dangling skeleton refs) and a
+    # budget-honesty gap (max_depth truncation). These pin the fixes.
+
+    def test_dangling_skeleton_ref_rule_is_skipped(self):
+        # @r: (g a) => :x has an EXTRA RHS var (:x with no ?x binder, so
+        # Var(r) not subset Var(l)). instantiate_skeleton models it as a free
+        # var but the engine reduces it to the symbol "x"; narrowing must SKIP
+        # the rule. The former spurious answer (u=a "solving" (g ?u) -> (h c))
+        # must be gone.
+        eng = RuleEngine.from_dsl("@r: (g a) => :x")
+        result = nw.narrow(eng, ["g", ["?", "u"]], ["h", "c"], max_nodes=50)
+        assert result.found is False
+
+    def test_dangling_ref_does_not_break_wellformed_rules(self):
+        # A well-formed rule alongside a dangling one still narrows.
+        eng = RuleEngine.from_dsl("""
+            @bad: (g a) => :x
+            @good: (f ?y) => :y
+        """)
+        result = nw.narrow(eng, ["f", ["?", "u"]], "c")
+        assert result.found is True and result.substitution["u"] == "c"
+
+    def test_max_depth_truncation_sets_exhausted(self):
+        # (loop ?x) => (loop (s ?x)) grows without bound; max_depth (NOT
+        # max_nodes) truncates -> exhausted=True (inconclusive), not a finite
+        # exhausted tree.
+        eng = RuleEngine.from_dsl("@loop: (loop ?x) => (loop (s ?x))")
+        result = nw.narrow(eng, ["loop", "z"], "done",
+                           max_nodes=100000, max_depth=5)
+        assert result.found is False
+        assert result.exhausted is True

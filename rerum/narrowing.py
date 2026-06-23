@@ -90,7 +90,7 @@ def narrow_step(term, rules) -> Iterator[NarrowStep]:
     for p in _positions(term):
         sub = _term_at(term, p)
         if _is_var(sub):
-            continue
+            continue  # defensive: _positions already excludes variable nodes
         for (l, r, rule_id) in rules:
             l_r, r_r = rename_apart(l, r, avoid)
             try:
@@ -129,13 +129,25 @@ def _key(term, theta):
 def _extract_rules(engine):
     """Analyzable first-order rules from ``engine`` as (l, r_term, rule_id)
     triples; the RHS skeleton is converted to a term via instantiate_skeleton.
-    Non-analyzable rules (?c/?v/?free/?.../skeleton-compute) are skipped."""
+    Non-analyzable rules (?c/?v/?free/?.../skeleton-compute) are skipped.
+
+    Rules with an EXTRA RHS variable (Var(r) not a subset of Var(l) -- a
+    dangling ``:x`` with no ``?x`` binder) are also skipped. instantiate_skeleton
+    models such a dangling reference as the free variable ``["?", x]``, but the
+    engine reduces it to the ground symbol ``"x"``; narrowing's RHS would then
+    diverge from real reduction and could return an answer that does not
+    re-derive via simplify. Standard TRS well-formedness requires
+    Var(r) subset Var(l), so these malformed rules are dropped, consistent with
+    the skip-and-continue discipline for non-analyzable rules."""
     rules = []
     for _idx, rule, meta in engine.rule_set():
         l, skel = rule[0], rule[1]
         if not is_analyzable(l, skel, meta.condition):
             continue
-        rules.append((l, instantiate_skeleton(skel, {}), meta.name))
+        r_term = instantiate_skeleton(skel, {})
+        if _variables(r_term) - _variables(l):
+            continue
+        rules.append((l, r_term, meta.name))
     return rules
 
 
@@ -147,6 +159,7 @@ def _narrow_with_rules(rules, start, target, *,
     frontier = deque([(start, {}, 0, [])])
     seen = {_key(start, {})}
     nodes = 0
+    depth_capped = False
     while frontier:
         if nodes >= max_nodes:
             return NarrowResult(False, None, [], nodes, True)
@@ -167,13 +180,25 @@ def _narrow_with_rules(rules, start, target, *,
                     seen.add(k)
                     frontier.append((step.successor, theta2, depth + 1,
                                      deriv + [step]))
-    return NarrowResult(False, None, [], nodes, False)
+        else:
+            # At the depth cap: if this node still has successors, the tree was
+            # truncated by max_depth, so a found=False result is INCONCLUSIVE
+            # (not a genuinely finite exhausted tree). Reflect that in exhausted.
+            for _ in narrow_step(term, rules):
+                depth_capped = True
+                break
+    return NarrowResult(False, None, [], nodes, depth_capped)
 
 
 def narrow(engine, start, target, *, max_nodes=1000, max_depth=20) -> NarrowResult:
     """Reachability narrowing over ``engine``'s analyzable rules: find sigma
     such that sigma(start) reduces to a term unifying sigma(target). Read-only;
-    SYNTACTIC (ignores any loaded theory). See module docstring."""
+    SYNTACTIC (ignores any loaded theory). See module docstring.
+
+    The answer may be MORE GENERAL than a ground solution (its range can carry
+    a fresh internal variable, e.g. ``{x: ["?", "y"]}`` meaning "any value
+    works"); that is sound. ``exhausted=True`` means the search was cut short by
+    ``max_nodes`` or ``max_depth`` (a found=False result is then inconclusive)."""
     return _narrow_with_rules(_extract_rules(engine), start, target,
                               max_nodes=max_nodes, max_depth=max_depth)
 
