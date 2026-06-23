@@ -172,6 +172,12 @@ def _ac_match_core(pat, exp, theory, bindings: Bindings,
                    budget: Optional["MatchBudget"] = None) -> Iterator[Bindings]:
     """Recursive matcher core (no ``?free`` post-pass -- the public ``ac_match``
     wrapper applies that once against the complete binding)."""
+    # Empty-list pattern: must match before any predicate that calls car([]).
+    if pat == []:
+        if exp == []:
+            yield bindings
+        return
+
     # Atom / single-variable / ?free: zero or one result.
     if (atom(pat) or arbitrary_constant(pat) or arbitrary_variable(pat)
             or arbitrary_expression(pat) or arbitrary_free(pat)):

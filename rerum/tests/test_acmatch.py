@@ -320,3 +320,16 @@ class TestExamplesDemo:
             eng.with_theory(Theory.from_json(fh.read()))
         # The cancelling pair is separated by an unrelated term.
         assert eng.simplify(["+", "a", "b", ["-", "a"]]) == "b"
+
+
+class TestEmptyPatternGuard:
+    def test_empty_vs_empty_matches(self):
+        assert _matches([], [], NO_AC) == [{}]
+        assert _matches([], [], AC_PLUS) == [{}]
+
+    def test_empty_vs_nonempty_no_match(self):
+        assert _matches([], ["a"], NO_AC) == []
+
+    def test_nested_empty_in_compound(self):
+        assert _matches(["f", []], ["f", []], NO_AC) == [{}]
+        assert _matches(["f", []], ["f", "a"], NO_AC) == []
