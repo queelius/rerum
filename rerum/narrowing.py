@@ -68,3 +68,37 @@ def _compose(s2: dict, s1: dict) -> dict:
     for name, val in s2.items():
         out.setdefault(name, val)
     return out
+
+
+@dataclass
+class NarrowStep:
+    """One narrowing successor: ``successor`` is the new term, ``sigma`` the
+    step mgu, ``position`` the redex path, ``rule_id`` the rule's name."""
+    successor: ExprType
+    sigma: dict
+    position: list
+    rule_id: str
+
+
+def narrow_step(term, rules) -> Iterator[NarrowStep]:
+    """Yield every one-step narrowing successor of ``term`` under ``rules``
+    (a list of ``(l_pattern, r_term, rule_id)`` triples). For each non-variable
+    position p and each rule, rename the rule apart from ``term``, unify
+    ``term|p`` with the rule LHS, and apply the mgu to ``term`` with the RHS
+    spliced at p."""
+    avoid = _variables(term)
+    for p in _positions(term):
+        sub = _term_at(term, p)
+        if _is_var(sub):
+            continue
+        for (l, r, rule_id) in rules:
+            l_r, r_r = rename_apart(l, r, avoid)
+            try:
+                mgu = unify(sub, l_r)
+            except UnsupportedPattern:
+                continue
+            if mgu is None:
+                continue
+            successor = apply_subst(mgu, _replace_at(term, p, r_r))
+            yield NarrowStep(successor=successor, sigma=mgu,
+                             position=p, rule_id=rule_id)
