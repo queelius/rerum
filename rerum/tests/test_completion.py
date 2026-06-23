@@ -142,3 +142,19 @@ class TestEngineAndExports:
         import importlib
         importlib.import_module("rerum.completion")
         importlib.import_module("rerum.engine")
+
+
+class TestCompletionNotAnalyzedInvariant:
+    def test_internal_rules_are_always_analyzable(self):
+        import rerum.completion as cmp
+        from rerum.confluence import critical_pairs, DirectedRule
+        from rerum.completion import _term_to_skeleton
+        eqs = [(["f", ["g", ["?", "x"]]], "a"),
+               (["g", ["g", ["?", "x"]]], ["?", "x"])]
+        result = cmp.complete(eqs, ["f", "g", "a"])
+        assert result.status == "complete"
+        recs = [DirectedRule(name=str(i), pattern=l,
+                             skeleton=_term_to_skeleton(r), condition=None)
+                for i, (l, r) in enumerate(result.rules)]
+        _pairs, na = critical_pairs(recs)
+        assert na == []

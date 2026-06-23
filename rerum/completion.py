@@ -115,10 +115,13 @@ def complete(equations, precedence, *, max_iterations: int = 100,
         eng = RuleEngine.from_rules(
             [[l, _term_to_skeleton(r)] for (l, r) in rules]
         )
-        # not_analyzed is always empty here: every rule the loop builds is a
-        # first-order [pattern, [":",x]-skeleton] with no condition, so
-        # is_analyzable accepts it.
-        pairs, _na = critical_pairs(records)
+        pairs, not_analyzed = critical_pairs(records)
+        # INVARIANT: every rule the loop builds is a first-order, well-formed
+        # [pattern, [":",x]-skeleton] rule, so critical_pairs must analyze all of
+        # them. If this ever fires, a non-analyzable rule entered the loop and a
+        # "complete" verdict could not certify the full system.
+        assert not not_analyzed, (
+            "completion built a non-analyzable rule: " + repr(not_analyzed))
         new_rules: List[Tuple[ExprType, ExprType]] = []
         for cp in pairs:
             try:
