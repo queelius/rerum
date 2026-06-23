@@ -340,3 +340,14 @@ class TestRecursionGuard:
         cp = cf.CriticalPair(left=["a"], right=["b"], rule_left="x",
                              rule_right="y", position=())
         assert cf._decide_joinable(_Boom(), cp, 10) is None
+
+
+class TestBudgetHonoredOnFastPath:
+    def test_small_max_steps_bounds_growth_rule(self):
+        from rerum.engine import RuleEngine
+        eng = RuleEngine.from_dsl("@g: (f ?x) => (f (s :x))")
+        small = eng.simplify(["f", "z"], max_steps=3)
+        big = eng.simplify(["f", "z"], max_steps=50)
+        def depth(t):
+            return 1 + max((depth(c) for c in t[1:]), default=0) if isinstance(t, list) else 0
+        assert depth(small) < depth(big)

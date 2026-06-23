@@ -2525,7 +2525,7 @@ class RuleEngine:
                     return self._simplify_exhaustive(expr, max_steps, groups=groups)
                 if self._simplifier is None:
                     self._simplifier = rewriter(self._rules, fold_funcs=self._fold_funcs)
-                return self._simplifier(expr)
+                return self._simplifier(expr, max_steps=max_steps)
         elif strategy == "once":
             return self._simplify_once(expr, groups=groups)
         elif strategy == "bottomup":

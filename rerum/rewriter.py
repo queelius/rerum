@@ -1181,7 +1181,7 @@ def rewriter(
     # fold_funcs controls constant folding - None means no folding
     active_fold_funcs: FoldFuncsType = fold_funcs if fold_funcs is not None else {}
 
-    def simplify(exp: ExprType) -> ExprType:
+    def simplify(exp: ExprType, max_steps: Optional[int] = None) -> ExprType:
         """Simplify an expression using the rules.
 
         Uses a visited set to detect cycles. Non-confluent rule sets (such as
@@ -1190,7 +1190,7 @@ def rewriter(
         repeat and returns the current expression deterministically.
         """
         visited = set()
-        max_iterations = 1000
+        max_iterations = max_steps if max_steps is not None else 1000
         iterations = 0
 
         while iterations < max_iterations:
