@@ -145,15 +145,26 @@ def _unify_positional(xs, ys, theory, bindings, budget) -> Iterator[Subst]:
         yield from _unify_positional(xs[1:], ys[1:], theory, s, budget)
 
 
-def _group(atoms):
+@dataclass
+class _Atoms:
+    """One side of a Stickel problem after grouping: the parallel arrays
+    ``terms`` (the distinct atoms), ``mult`` (each atom's multiplicity /
+    Diophantine coefficient), and ``isv`` (whether each atom is a variable).
+    Indexed positionally; ``len(terms) == len(mult) == len(isv)``."""
+    terms: list
+    mult: List[int]
+    isv: List[bool]
+
+
+def _group(atoms) -> "_Atoms":
     """Group equal VARIABLE atoms (accumulating multiplicity); keep each
     NON-VARIABLE occurrence as its OWN weight-1 atom. A non-variable atom (a
     constant or compound) cannot be 'split' in the Stickel encoding -- it
     occupies a single coefficient-1 column per occurrence. Merging duplicates
     (e.g. ``a + a``) into one column of multiplicity 2 lets the variable side
     absorb that weight more than once and yields UNSOUND unifiers. Variables DO
-    carry multiplicity (``x + x`` is the coefficient-2 atom ``2x``). Returns
-    (terms, multiplicities, is_var flags)."""
+    carry multiplicity (``x + x`` is the coefficient-2 atom ``2x``). Returns an
+    ``_Atoms`` bundle (terms, multiplicities, is_var flags)."""
     terms: list = []
     mult: List[int] = []
     isv: List[bool] = []
@@ -171,7 +182,7 @@ def _group(atoms):
             terms.append(t)
             mult.append(1)
             isv.append(False)
-    return terms, mult, isv
+    return _Atoms(terms, mult, isv)
 
 
 def _ac_sum(op, parts):
@@ -184,22 +195,22 @@ def _ac_unify_node(a, b, theory, bindings, budget) -> Iterator[Subst]:
     left = flatten(a, theory)[1:]
     right = flatten(b, theory)[1:]
     # Cancel the multiset intersection (syntactically-equal common args).
-    L = list(left)
-    R = list(right)
-    for item in list(L):
-        if item in R:
-            L.remove(item)
-            R.remove(item)
-    if not L and not R:
+    lhs_args = list(left)
+    rhs_args = list(right)
+    for item in list(lhs_args):
+        if item in rhs_args:
+            lhs_args.remove(item)
+            rhs_args.remove(item)
+    if not lhs_args and not rhs_args:
         yield bindings
         return
-    if not L or not R:
+    if not lhs_args or not rhs_args:
         return  # pure AC: a non-empty sum cannot equal nothing
 
-    U, a_mult, u_isv = _group(L)
-    V, b_mult, v_isv = _group(R)
-    basis = _hilbert_basis(a_mult, b_mult)
-    M, N = len(U), len(V)
+    lhs = _group(lhs_args)
+    rhs = _group(rhs_args)
+    basis = _hilbert_basis(lhs.mult, rhs.mult)
+    M, N = len(lhs.terms), len(rhs.terms)
     # Seed the fresh-variable avoid set with every name that could collide: the
     # bound names and the variables in their values, plus the free variables of
     # both terms. Without this, a recursive AC node (a coupling whose atoms are
@@ -218,39 +229,40 @@ def _ac_unify_node(a, b, theory, bindings, budget) -> Iterator[Subst]:
             ok = True
             for i in range(M):
                 tot = sum(basis[k][i] for k in subset)
-                if (u_isv[i] and tot < 1) or (not u_isv[i] and tot != a_mult[i]):
+                if (lhs.isv[i] and tot < 1) or (not lhs.isv[i] and tot != lhs.mult[i]):
                     ok = False
                     break
             if ok:
                 for j in range(N):
                     tot = sum(basis[k][M + j] for k in subset)
-                    if (v_isv[j] and tot < 1) or (not v_isv[j] and tot != b_mult[j]):
+                    if (rhs.isv[j] and tot < 1) or (not rhs.isv[j] and tot != rhs.mult[j]):
                         ok = False
                         break
             if not ok:
                 continue
-            yield from _build_unifier(U, V, u_isv, v_isv, basis, subset, z, op,
-                                      M, theory, bindings, budget)
+            yield from _build_unifier(lhs, rhs, basis, subset, z, op,
+                                      theory, bindings, budget)
 
 
-def _build_unifier(U, V, u_isv, v_isv, basis, subset, z, op, M, theory,
-                   bindings, budget) -> Iterator[Subst]:
+def _build_unifier(lhs: "_Atoms", rhs: "_Atoms", basis, subset, z, op,
+                   theory, bindings, budget) -> Iterator[Subst]:
     """Build the unifier(s) for one admissible covering subset. Variable atoms
     bind to AC-sums of their fresh z's; non-variable atoms sharing a z are
     recursively ac_unify'd (Stickel-general, multi-valued -> a product)."""
+    M = len(lhs.terms)
     s: Optional[Subst] = dict(bindings)
-    for i in range(len(U)):
-        if not u_isv[i]:
+    for i in range(len(lhs.terms)):
+        if not lhs.isv[i]:
             continue
         parts = [z[k] for k in subset for _ in range(basis[k][i])]
-        s = unify(U[i], _ac_sum(op, parts), s)
+        s = unify(lhs.terms[i], _ac_sum(op, parts), s)
         if s is None:
             return
-    for j in range(len(V)):
-        if not v_isv[j]:
+    for j in range(len(rhs.terms)):
+        if not rhs.isv[j]:
             continue
         parts = [z[k] for k in subset for _ in range(basis[k][M + j])]
-        s = unify(V[j], _ac_sum(op, parts), s)
+        s = unify(rhs.terms[j], _ac_sum(op, parts), s)
         if s is None:
             return
     # For each chosen basis vector, collect the NON-VARIABLE atoms it couples
@@ -259,12 +271,12 @@ def _build_unifier(U, V, u_isv, v_isv, basis, subset, z, op, M, theory,
     couplings = []
     for k in subset:
         atoms = [z[k]]
-        for i in range(len(U)):
-            if not u_isv[i] and basis[k][i]:
-                atoms += [U[i]] * basis[k][i]
-        for j in range(len(V)):
-            if not v_isv[j] and basis[k][M + j]:
-                atoms += [V[j]] * basis[k][M + j]
+        for i in range(len(lhs.terms)):
+            if not lhs.isv[i] and basis[k][i]:
+                atoms += [lhs.terms[i]] * basis[k][i]
+        for j in range(len(rhs.terms)):
+            if not rhs.isv[j] and basis[k][M + j]:
+                atoms += [rhs.terms[j]] * basis[k][M + j]
         if len(atoms) > 1:
             couplings.append(atoms)
     yield from _resolve_couplings(couplings, 0, s, theory, budget)
