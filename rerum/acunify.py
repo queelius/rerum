@@ -8,6 +8,15 @@ minimal). PURE AC -- the Theory's identity/unit is NOT used (the engine's
 normalize strips units upstream). Stickel-general: nested terms, free function
 symbols, and multiple AC operators are handled (the last two by recursion).
 
+PURE AC means MULTISET semantics: ``a + a`` is NOT equal to ``a`` (no
+idempotence). A Theory with a bare ``{"ac": True}`` (no ``repeat`` clause) makes
+``normalize`` treat the operator as IDEMPOTENT (ACI: ``a + a -> a``); ac_unify
+does NOT model that idempotence, so against such a theory its unifiers are a
+SOUND SUBSET of the (larger) ACI-unifier set. Idempotent / ACI unification is
+out of scope here, like ACU (unification modulo the unit). To reason about
+ac_unify's results via ``normalize``, use a multiset-preserving theory (one
+with a ``repeat`` clause).
+
 CORE module. Reuses F2 (rerum/confluence.py): Subst, apply_subst, _occurs,
 _is_var, UnsupportedPattern; plus flatten (normalize) and gensym (rewriter).
 F2's ``unify`` is UNTOUCHED. Names NO domain operator: keys on theory.is_ac;

@@ -42,7 +42,14 @@ class TestHilbertBasis:
 from rerum.normalize import Theory, normalize
 
 NO_AC = Theory.from_dict({})
-AC_PLUS = Theory.from_dict({"+": {"ac": True, "identity": 0}})
+# ac_unify implements PURE AC (multiset semantics: a+a != a). To verify against
+# `normalize`, the test theory must be MULTISET-PRESERVING -- i.e. carry a
+# `repeat` clause so a+a normalizes to (* 2 a) rather than collapsing to a. A
+# bare {"ac": True} theory makes `normalize` IDEMPOTENT (a+a -> a, i.e. ACI),
+# which has strictly more unifiers than pure AC and would mismatch ac_unify.
+AC_PLUS = Theory.from_dict({
+    "+": {"ac": True, "identity": 0, "repeat": {"op": "*", "via": "count"}},
+    "*": {"ac": True, "identity": 1}})
 
 
 def _unifiers(t1, t2, theory):
@@ -159,3 +166,83 @@ class TestStickelNonVariable:
             for s in au.ac_unify(t1, t2, AC_PLUS):
                 assert normalize(apply_subst(s, t1), AC_PLUS) == \
                     normalize(apply_subst(s, t2), AC_PLUS)
+
+
+import itertools
+
+
+class TestVerificationBar:
+    def test_soundness_battery(self):
+        V = lambda n: ["?", n]
+        problems = [
+            (["+", V("x"), V("y")], ["+", V("u"), V("v")]),
+            (["+", V("x"), V("y"), V("z")], ["+", "a", "b", "c"]),
+            (["+", V("x"), "a"], ["+", "b", V("y")]),
+            (["+", ["f", V("x")], V("y")], ["+", "a", ["f", "b"]]),
+        ]
+        for t1, t2 in problems:
+            for s in au.ac_unify(t1, t2, AC_PLUS):
+                assert normalize(apply_subst(s, t1), AC_PLUS) == \
+                    normalize(apply_subst(s, t2), AC_PLUS)
+
+    def test_completeness_vs_brute_force(self):
+        t1 = ["+", ["?", "x"], ["?", "y"]]
+        t2 = ["+", "a", "b"]
+        oracle = set()
+        for sx in (["a"], ["b"], ["a", "b"]):
+            for sy in (["a"], ["b"], ["a", "b"]):
+                cand = {"x": sx, "y": sy}
+                e1 = normalize(["+"] + [c for v in ("x", "y") for c in cand[v]],
+                               AC_PLUS)
+                if e1 == normalize(t2, AC_PLUS):
+                    oracle.add((tuple(sx), tuple(sy)))
+        found = set()
+        for s in au.ac_unify(t1, t2, AC_PLUS):
+            xv = normalize(apply_subst(s, ["?", "x"]), AC_PLUS)
+            yv = normalize(apply_subst(s, ["?", "y"]), AC_PLUS)
+            tx = tuple(xv[1:]) if isinstance(xv, list) else (xv,)
+            ty = tuple(yv[1:]) if isinstance(yv, list) else (yv,)
+            found.add((tx, ty))
+        assert oracle <= found
+
+    def test_ac_match_cross_check(self):
+        from rerum import acmatch
+        t1 = ["+", ["?", "x"], ["?", "y"]]
+        t2 = ["+", "a", "b"]
+        match_keyed = {frozenset((k, _t(v)) for k, v in b.to_dict().items())
+                       for b in acmatch.ac_match(t1, t2, AC_PLUS)}
+        unify_sols = set()
+        for s in au.ac_unify(t1, t2, AC_PLUS):
+            d = {k: apply_subst(s, ["?", k]) for k in ("x", "y")}
+            if all(not _has_var(v) for v in d.values()):
+                unify_sols.add(frozenset((k, _t(v)) for k, v in d.items()))
+        assert match_keyed <= unify_sols
+
+    def test_budget_truncation_sound(self):
+        t1 = ["+", ["?", "x"], ["?", "y"], ["?", "z"]]
+        t2 = ["+", ["?", "p"], ["?", "q"], ["?", "r"]]
+        budget = au.UnifyBudget(steps=3)
+        got = list(au.ac_unify(t1, t2, AC_PLUS, budget=budget))
+        assert budget.truncated is True
+        for s in got:
+            assert normalize(apply_subst(s, t1), AC_PLUS) == \
+                normalize(apply_subst(s, t2), AC_PLUS)
+
+    def test_determinism(self):
+        t1 = ["+", ["?", "x"], ["?", "y"]]
+        t2 = ["+", ["?", "u"], ["?", "v"]]
+        a = [sorted(s.items()) for s in au.ac_unify(t1, t2, AC_PLUS)]
+        b = [sorted(s.items()) for s in au.ac_unify(t1, t2, AC_PLUS)]
+        assert a == b
+
+
+def _has_var(t):
+    if isinstance(t, list) and len(t) == 2 and t[0] == "?":
+        return True
+    if isinstance(t, list):
+        return any(_has_var(s) for s in t)
+    return False
+
+
+def _t(v):
+    return tuple(_t(x) for x in v) if isinstance(v, list) else v
