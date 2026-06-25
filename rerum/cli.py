@@ -238,7 +238,10 @@ class RerumREPL:
             self.history_file = Path.home() / ".rerum_history"
             try:
                 readline.read_history_file(self.history_file)
-            except FileNotFoundError:
+            except OSError:
+                # Missing (FileNotFoundError) or unreadable (e.g. EINVAL on an
+                # invalid/odd history file in some environments) -- the history
+                # is a convenience, never a reason to crash the REPL at startup.
                 pass
             readline.set_history_length(1000)
 
