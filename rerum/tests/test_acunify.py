@@ -124,3 +124,38 @@ class TestStickelAllVariable:
             assert normalize(apply_subst(s, t1), AC_PLUS) == \
                 normalize(apply_subst(s, t2), AC_PLUS)
         assert _count_distinct(t1, t2, AC_PLUS) >= 1
+
+
+class TestStickelNonVariable:
+    def test_x_plus_y_eq_a_plus_b_two_unifiers(self):
+        t1 = ["+", ["?", "x"], ["?", "y"]]
+        t2 = ["+", "a", "b"]
+        assert _count_distinct(t1, t2, AC_PLUS) == 2
+
+    def test_x_eq_a_plus_b_one_unifier(self):
+        assert _count_distinct(["?", "x"], ["+", "a", "b"], AC_PLUS) == 1
+
+    def test_ground_equal_one_unifier(self):
+        assert _count_distinct(["+", "a", "b"], ["+", "a", "b"], AC_PLUS) == 1
+
+    def test_distinct_constants_no_unifier(self):
+        assert _count_distinct("a", "b", AC_PLUS) == 0
+        assert _count_distinct(["+", "a", "b"], ["+", "a", "c"], AC_PLUS) == 0
+
+    def test_nested_free_symbol(self):
+        t1 = ["+", ["f", ["?", "x"]], ["?", "y"]]
+        t2 = ["+", "a", ["f", "b"]]
+        got = list(au.ac_unify(t1, t2, AC_PLUS))
+        assert _count_distinct(t1, t2, AC_PLUS) == 1
+        s = got[0]
+        assert apply_subst(s, ["?", "x"]) == "b"
+        assert apply_subst(s, ["?", "y"]) == "a"
+
+    def test_all_nonvariable_yields_sound(self):
+        for t1, t2 in (
+            (["+", ["?", "x"], ["?", "y"]], ["+", "a", "b"]),
+            (["+", ["f", ["?", "x"]], ["?", "y"]], ["+", "a", ["f", "b"]]),
+        ):
+            for s in au.ac_unify(t1, t2, AC_PLUS):
+                assert normalize(apply_subst(s, t1), AC_PLUS) == \
+                    normalize(apply_subst(s, t2), AC_PLUS)

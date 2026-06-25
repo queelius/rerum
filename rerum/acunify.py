@@ -207,7 +207,9 @@ def _ac_unify_node(a, b, theory, bindings, budget) -> Iterator[Subst]:
 
 def _build_unifier(U, V, u_isv, v_isv, basis, subset, z, op, M, theory,
                    bindings, budget) -> Iterator[Subst]:
-    """Build the unifier(s) for one admissible covering subset."""
+    """Build the unifier(s) for one admissible covering subset. Variable atoms
+    bind to AC-sums of their fresh z's; non-variable atoms sharing a z are
+    recursively ac_unify'd (Stickel-general, multi-valued -> a product)."""
     s: Optional[Subst] = dict(bindings)
     for i in range(len(U)):
         if not u_isv[i]:
@@ -223,8 +225,40 @@ def _build_unifier(U, V, u_isv, v_isv, basis, subset, z, op, M, theory,
         s = _bind_unify(s, V[j], _ac_sum(op, parts))
         if s is None:
             return
-    # Non-variable atoms are handled in Task 4 -- none in the all-variable case.
-    yield s
+    # For each chosen basis vector, collect the NON-VARIABLE atoms it couples
+    # (the fresh z must equal each). Recursively ac_unify all atoms sharing a z;
+    # the product over basis vectors yields the unifier set.
+    couplings = []
+    for k in subset:
+        atoms = [z[k]]
+        for i in range(len(U)):
+            if not u_isv[i] and basis[k][i]:
+                atoms += [U[i]] * basis[k][i]
+        for j in range(len(V)):
+            if not v_isv[j] and basis[k][M + j]:
+                atoms += [V[j]] * basis[k][M + j]
+        if len(atoms) > 1:
+            couplings.append(atoms)
+    yield from _resolve_couplings(couplings, 0, s, theory, budget)
+
+
+def _resolve_couplings(couplings, idx, subst, theory, budget) -> Iterator[Subst]:
+    """Recursively ac_unify every atom within each coupling group against the
+    group's fresh z (atoms[0]); product over groups. Threads the substitution."""
+    if subst is None:
+        return
+    if idx == len(couplings):
+        yield subst
+        return
+    group = couplings[idx]
+
+    def chain(pos, s) -> Iterator[Subst]:
+        if pos == len(group):
+            yield from _resolve_couplings(couplings, idx + 1, s, theory, budget)
+            return
+        for s2 in ac_unify(group[0], group[pos], theory, bindings=s, budget=budget):
+            yield from chain(pos + 1, s2)
+    yield from chain(1, subst)
 
 
 def _bind_unify(subst, term, value):
