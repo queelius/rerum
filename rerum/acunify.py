@@ -135,5 +135,117 @@ def _unify_positional(xs, ys, theory, bindings, budget) -> Iterator[Subst]:
         yield from _unify_positional(xs[1:], ys[1:], theory, s, budget)
 
 
+def _group(atoms):
+    """Group equal atoms; return (terms, multiplicities, is_var flags)."""
+    terms: list = []
+    mult: List[int] = []
+    isv: List[bool] = []
+    for t in atoms:
+        for k, tt in enumerate(terms):
+            if tt == t:
+                mult[k] += 1
+                break
+        else:
+            terms.append(t)
+            mult.append(1)
+            isv.append(_is_var(t))
+    return terms, mult, isv
+
+
+def _ac_sum(op, parts):
+    return parts[0] if len(parts) == 1 else [op] + parts
+
+
 def _ac_unify_node(a, b, theory, bindings, budget) -> Iterator[Subst]:
-    return iter(())  # Stickel core: implemented in Tasks 3-4
+    """Stickel AC-unification of two terms headed by the same AC operator."""
+    op = a[0]
+    left = flatten(a, theory)[1:]
+    right = flatten(b, theory)[1:]
+    # Cancel the multiset intersection (syntactically-equal common args).
+    L = list(left)
+    R = list(right)
+    for item in list(L):
+        if item in R:
+            L.remove(item)
+            R.remove(item)
+    if not L and not R:
+        yield bindings
+        return
+    if not L or not R:
+        return  # pure AC: a non-empty sum cannot equal nothing
+
+    U, a_mult, u_isv = _group(L)
+    V, b_mult, v_isv = _group(R)
+    basis = _hilbert_basis(a_mult, b_mult)
+    M, N = len(U), len(V)
+    avoid: set = set()
+    z = [["?", gensym("z_" + str(k), avoid)] for k in range(len(basis))]
+    for zk in z:
+        avoid.add(zk[1])
+
+    for r in range(1, len(basis) + 1):
+        for subset in combinations(range(len(basis)), r):
+            if budget is not None and not budget.spend():
+                return
+            ok = True
+            for i in range(M):
+                tot = sum(basis[k][i] for k in subset)
+                if (u_isv[i] and tot < 1) or (not u_isv[i] and tot != a_mult[i]):
+                    ok = False
+                    break
+            if ok:
+                for j in range(N):
+                    tot = sum(basis[k][M + j] for k in subset)
+                    if (v_isv[j] and tot < 1) or (not v_isv[j] and tot != b_mult[j]):
+                        ok = False
+                        break
+            if not ok:
+                continue
+            yield from _build_unifier(U, V, u_isv, v_isv, basis, subset, z, op,
+                                      M, theory, bindings, budget)
+
+
+def _build_unifier(U, V, u_isv, v_isv, basis, subset, z, op, M, theory,
+                   bindings, budget) -> Iterator[Subst]:
+    """Build the unifier(s) for one admissible covering subset."""
+    s: Optional[Subst] = dict(bindings)
+    for i in range(len(U)):
+        if not u_isv[i]:
+            continue
+        parts = [z[k] for k in subset for _ in range(basis[k][i])]
+        s = _bind_unify(s, U[i], _ac_sum(op, parts))
+        if s is None:
+            return
+    for j in range(len(V)):
+        if not v_isv[j]:
+            continue
+        parts = [z[k] for k in subset for _ in range(basis[k][M + j])]
+        s = _bind_unify(s, V[j], _ac_sum(op, parts))
+        if s is None:
+            return
+    # Non-variable atoms are handled in Task 4 -- none in the all-variable case.
+    yield s
+
+
+def _bind_unify(subst, term, value):
+    """Unify a single (possibly compound) ``term`` with ``value`` syntactically,
+    threading ``subst``. Returns a Subst or None."""
+    if subst is None:
+        return None
+    term = apply_subst(subst, term)
+    value = apply_subst(subst, value)
+    if _is_var(term):
+        return _bind(subst, term[1], value)
+    if _is_var(value):
+        return _bind(subst, value[1], term)
+    if not compound(term) and not compound(value):
+        return subst if term == value else None
+    if compound(term) and compound(value) and term[0] == value[0] \
+            and len(term) == len(value):
+        s = subst
+        for x, y in zip(term[1:], value[1:]):
+            s = _bind_unify(s, x, y)
+            if s is None:
+                return None
+        return s
+    return None

@@ -78,3 +78,49 @@ class TestDispatchNonAC:
         syn = unify(t1, t2)
         ac = _unifiers(t1, t2, NO_AC)
         assert len(ac) == 1 and ac[0] == syn
+
+
+from rerum.confluence import apply_subst
+
+
+def _orig_vars(t):
+    out = set()
+    def walk(x):
+        if isinstance(x, list) and len(x) == 2 and x[0] == "?":
+            out.add(x[1]); return
+        if isinstance(x, list):
+            for s in x: walk(s)
+    walk(t)
+    return out
+
+
+def _count_distinct(t1, t2, theory):
+    seen = set()
+    orig = _orig_vars(t1) | _orig_vars(t2)
+    for s in au.ac_unify(t1, t2, theory):
+        key = tuple(sorted((k, str(normalize(apply_subst(s, ["?", k]), theory)))
+                           for k in orig))
+        seen.add(key)
+    return len(seen)
+
+
+class TestStickelAllVariable:
+    def test_x_plus_y_eq_u_plus_v_seven_unifiers(self):
+        t1 = ["+", ["?", "x"], ["?", "y"]]
+        t2 = ["+", ["?", "u"], ["?", "v"]]
+        assert _count_distinct(t1, t2, AC_PLUS) == 7
+
+    def test_all_yields_are_sound(self):
+        t1 = ["+", ["?", "x"], ["?", "y"]]
+        t2 = ["+", ["?", "u"], ["?", "v"]]
+        for s in au.ac_unify(t1, t2, AC_PLUS):
+            assert normalize(apply_subst(s, t1), AC_PLUS) == \
+                normalize(apply_subst(s, t2), AC_PLUS)
+
+    def test_x_plus_x_eq_y_plus_y_sound(self):
+        t1 = ["+", ["?", "x"], ["?", "x"]]
+        t2 = ["+", ["?", "y"], ["?", "y"]]
+        for s in au.ac_unify(t1, t2, AC_PLUS):
+            assert normalize(apply_subst(s, t1), AC_PLUS) == \
+                normalize(apply_subst(s, t2), AC_PLUS)
+        assert _count_distinct(t1, t2, AC_PLUS) >= 1
