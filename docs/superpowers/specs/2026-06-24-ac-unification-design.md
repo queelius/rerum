@@ -147,7 +147,13 @@ All That", Ch. 10.
   - Single remaining arg per side -> unify the two args directly (no Diophantine).
   - Nested non-variable args that are AC nodes -> handled by the step-4 recursion.
   - Occurs-check (`sigma(x)` containing `x`) -> reject via `_occurs`.
-  - `RecursionError` on deep nesting -> caught, treated as no result (conservative).
+  - Fresh-variable hygiene: the gensym avoid set is seeded from the current
+    bindings and the free variables of both terms, so a recursive AC node (an AC
+    operator inside a coupled atom) never recaptures the outer node's fresh `z`
+    names.
+  - Non-variable atom multiplicity: a repeated non-variable atom (e.g. `a + a`)
+    is kept as separate weight-1 columns in the Diophantine encoding, not merged
+    into one column of multiplicity 2 (merging would be unsound).
   - No AC op, or node not AC -> never reaches Stickel (dispatch handles it).
 
 ## Testing and verification

@@ -271,3 +271,41 @@ class TestReexportsAndDemo:
                                 ["+", "a", "b"], theory))
         assert sols  # demo problem has solutions
         assert os.path.exists(os.path.join(root, "acunify_demo.rules"))
+
+
+class TestReviewFixes:
+    # Opus holistic review found two BLOCKING soundness bugs the suite missed.
+
+    def test_repeated_nonvar_atom_sound_and_complete(self):
+        # (+ ?x ?y) =? (+ a a): the ONLY unifier is {x:a, y:a}; previously this
+        # yielded 3 wholly-unsound unifiers and dropped the real one. Root cause:
+        # a non-variable atom of multiplicity 2 was merged into one Diophantine
+        # column instead of two weight-1 columns.
+        t1 = ["+", ["?", "x"], ["?", "y"]]
+        t2 = ["+", "a", "a"]
+        for s in au.ac_unify(t1, t2, AC_PLUS):
+            assert normalize(apply_subst(s, t1), AC_PLUS) == \
+                normalize(apply_subst(s, t2), AC_PLUS)
+        assert _count_distinct(t1, t2, AC_PLUS) == 1
+
+    def test_repeated_compound_atom_sound(self):
+        t1 = ["+", ["?", "x"], ["?", "y"]]
+        t2 = ["+", ["*", "a", "b"], ["*", "a", "b"]]
+        for s in au.ac_unify(t1, t2, AC_PLUS):
+            assert normalize(apply_subst(s, t1), AC_PLUS) == \
+                normalize(apply_subst(s, t2), AC_PLUS)
+        assert _count_distinct(t1, t2, AC_PLUS) == 1
+
+    def test_ac_inside_ac_coupling(self):
+        # (+ (* ?x b) c) =? (+ (* a ?y) c): the * coupling must unify modulo AC.
+        # A gensym variable capture across the recursive AC node previously made
+        # this yield NOTHING. Fix: seed the avoid set from bindings + free vars.
+        t1 = ["+", ["*", ["?", "x"], "b"], "c"]
+        t2 = ["+", ["*", "a", ["?", "y"]], "c"]
+        sols = list(au.ac_unify(t1, t2, AC_PLUS))
+        assert sols  # non-empty (was [] before the fix)
+        for s in sols:
+            assert normalize(apply_subst(s, t1), AC_PLUS) == \
+                normalize(apply_subst(s, t2), AC_PLUS)
+        assert any(apply_subst(s, ["?", "x"]) == "a" and
+                   apply_subst(s, ["?", "y"]) == "b" for s in sols)

@@ -34,6 +34,7 @@ from .confluence import (
     _occurs,
     _is_var,
     _unsupported,
+    _variables,
     UnsupportedPattern,
     Subst,
 )
@@ -145,19 +146,31 @@ def _unify_positional(xs, ys, theory, bindings, budget) -> Iterator[Subst]:
 
 
 def _group(atoms):
-    """Group equal atoms; return (terms, multiplicities, is_var flags)."""
+    """Group equal VARIABLE atoms (accumulating multiplicity); keep each
+    NON-VARIABLE occurrence as its OWN weight-1 atom. A non-variable atom (a
+    constant or compound) cannot be 'split' in the Stickel encoding -- it
+    occupies a single coefficient-1 column per occurrence. Merging duplicates
+    (e.g. ``a + a``) into one column of multiplicity 2 lets the variable side
+    absorb that weight more than once and yields UNSOUND unifiers. Variables DO
+    carry multiplicity (``x + x`` is the coefficient-2 atom ``2x``). Returns
+    (terms, multiplicities, is_var flags)."""
     terms: list = []
     mult: List[int] = []
     isv: List[bool] = []
     for t in atoms:
-        for k, tt in enumerate(terms):
-            if tt == t:
-                mult[k] += 1
-                break
+        if _is_var(t):
+            for k, tt in enumerate(terms):
+                if isv[k] and tt == t:
+                    mult[k] += 1
+                    break
+            else:
+                terms.append(t)
+                mult.append(1)
+                isv.append(True)
         else:
             terms.append(t)
             mult.append(1)
-            isv.append(_is_var(t))
+            isv.append(False)
     return terms, mult, isv
 
 
@@ -187,7 +200,13 @@ def _ac_unify_node(a, b, theory, bindings, budget) -> Iterator[Subst]:
     V, b_mult, v_isv = _group(R)
     basis = _hilbert_basis(a_mult, b_mult)
     M, N = len(U), len(V)
-    avoid: set = set()
+    # Seed the fresh-variable avoid set with every name that could collide: the
+    # bound names and the variables in their values, plus the free variables of
+    # both terms. Without this, a recursive AC node (a coupling whose atoms are
+    # themselves AC) re-gensyms the OUTER node's z names and captures them.
+    avoid: set = set(bindings.keys()) | _variables(a) | _variables(b)
+    for val in bindings.values():
+        avoid |= _variables(val)
     z = [["?", gensym("z_" + str(k), avoid)] for k in range(len(basis))]
     for zk in z:
         avoid.add(zk[1])
