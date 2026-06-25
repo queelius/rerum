@@ -182,6 +182,12 @@ from .narrowing import (
     NarrowStep,
 )
 
+# AC-unification
+from .acunify import (
+    ac_unify,
+    UnifyBudget,
+)
+
 # Public API
 __all__ = [
     # Version
@@ -292,4 +298,7 @@ __all__ = [
     "narrow_step",
     "NarrowResult",
     "NarrowStep",
+    # AC-unification
+    "ac_unify",
+    "UnifyBudget",
 ]

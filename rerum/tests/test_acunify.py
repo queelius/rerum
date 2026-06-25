@@ -246,3 +246,28 @@ def _has_var(t):
 
 def _t(v):
     return tuple(_t(x) for x in v) if isinstance(v, list) else v
+
+
+class TestReexportsAndDemo:
+    def test_public_reexports(self):
+        import rerum
+        for name in ("ac_unify", "UnifyBudget"):
+            assert name in rerum.__all__
+            assert hasattr(rerum, name)
+
+    def test_import_smoke_no_cycle(self):
+        import importlib
+        importlib.import_module("rerum.acunify")
+        importlib.import_module("rerum.confluence")
+
+    def test_demo_file_loads_and_problem_solves(self):
+        import os
+        from rerum.normalize import Theory
+        root = os.path.join(os.path.dirname(__file__), "..", "..", "examples")
+        theory = Theory.from_dict({
+            "+": {"ac": True, "identity": 0, "repeat": {"op": "*", "via": "count"}},
+            "*": {"ac": True, "identity": 1}})
+        sols = list(au.ac_unify(["+", ["?", "x"], ["?", "y"]],
+                                ["+", "a", "b"], theory))
+        assert sols  # demo problem has solutions
+        assert os.path.exists(os.path.join(root, "acunify_demo.rules"))

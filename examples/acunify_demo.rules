@@ -1,0 +1,8 @@
+# AC-unification demo (data, not executable rules): under an AC theory for +,
+# unifying two terms that BOTH contain variables has no single mgu -- there is a
+# complete SET of unifiers. e.g. (+ ?x ?y) =? (+ a b) has TWO unifiers:
+#   {x = a, y = b}  and  {x = b, y = a}
+# and (+ ?x ?y) =? (+ ?u ?v) (four variables) has SEVEN.
+# Use rerum.acunify.ac_unify(t1, t2, theory) with a Theory declaring + AC and a
+# repeat clause (multiset / pure-AC semantics; a bare {ac:True} is idempotent).
+@noop: (id ?x) => :x
