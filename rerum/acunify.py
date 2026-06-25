@@ -31,6 +31,8 @@ from typing import Iterator, List, Optional
 
 from .confluence import (
     apply_subst,
+    unify,
+    _compose_bind,
     _occurs,
     _is_var,
     _unsupported,
@@ -85,16 +87,14 @@ def _hilbert_basis(a: List[int], b: List[int]):
 
 
 def _bind(subst: Subst, name: str, value) -> Optional[Subst]:
-    """Add ``name -> value`` (resolved) with an occurs-check, kept fully-applied.
-    Returns the new Subst or None on occurs-check failure."""
+    """Add ``name -> value`` (resolved) with an occurs-check, kept fully-applied
+    via F2's ``_compose_bind``. Returns the new Subst or None on occurs-check
+    failure."""
     if _is_var(value) and value[1] == name:
         return subst
     if _occurs(name, value):
         return None
-    one = {name: value}
-    out = {k: apply_subst(one, v) for k, v in subst.items()}
-    out[name] = value
-    return out
+    return _compose_bind(subst, name, value)
 
 
 def ac_unify(t1, t2, theory, *, bindings: Optional[Subst] = None,
@@ -243,14 +243,14 @@ def _build_unifier(U, V, u_isv, v_isv, basis, subset, z, op, M, theory,
         if not u_isv[i]:
             continue
         parts = [z[k] for k in subset for _ in range(basis[k][i])]
-        s = _bind_unify(s, U[i], _ac_sum(op, parts))
+        s = unify(U[i], _ac_sum(op, parts), s)
         if s is None:
             return
     for j in range(len(V)):
         if not v_isv[j]:
             continue
         parts = [z[k] for k in subset for _ in range(basis[k][M + j])]
-        s = _bind_unify(s, V[j], _ac_sum(op, parts))
+        s = unify(V[j], _ac_sum(op, parts), s)
         if s is None:
             return
     # For each chosen basis vector, collect the NON-VARIABLE atoms it couples
@@ -287,27 +287,3 @@ def _resolve_couplings(couplings, idx, subst, theory, budget) -> Iterator[Subst]
         for s2 in ac_unify(group[0], group[pos], theory, bindings=s, budget=budget):
             yield from chain(pos + 1, s2)
     yield from chain(1, subst)
-
-
-def _bind_unify(subst, term, value):
-    """Unify a single (possibly compound) ``term`` with ``value`` syntactically,
-    threading ``subst``. Returns a Subst or None."""
-    if subst is None:
-        return None
-    term = apply_subst(subst, term)
-    value = apply_subst(subst, value)
-    if _is_var(term):
-        return _bind(subst, term[1], value)
-    if _is_var(value):
-        return _bind(subst, value[1], term)
-    if not compound(term) and not compound(value):
-        return subst if term == value else None
-    if compound(term) and compound(value) and term[0] == value[0] \
-            and len(term) == len(value):
-        s = subst
-        for x, y in zip(term[1:], value[1:]):
-            s = _bind_unify(s, x, y)
-            if s is None:
-                return None
-        return s
-    return None
