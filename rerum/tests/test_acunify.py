@@ -37,3 +37,44 @@ class TestHilbertBasis:
                 assert sum(a[i] * vec[i] for i in range(M)) == \
                     sum(b[j] * vec[M + j] for j in range(len(b)))
                 assert any(vec)
+
+
+from rerum.normalize import Theory, normalize
+
+NO_AC = Theory.from_dict({})
+AC_PLUS = Theory.from_dict({"+": {"ac": True, "identity": 0}})
+
+
+def _unifiers(t1, t2, theory):
+    return list(au.ac_unify(t1, t2, theory))
+
+
+class TestDispatchNonAC:
+    def test_variable_binds(self):
+        got = _unifiers(["?", "x"], ["f", "a"], NO_AC)
+        assert len(got) == 1 and got[0]["x"] == ["f", "a"]
+
+    def test_atoms_equal_and_clash(self):
+        assert _unifiers("a", "a", NO_AC) == [{}]
+        assert _unifiers("a", "b", NO_AC) == []
+
+    def test_occurs_check(self):
+        assert _unifiers(["?", "x"], ["f", ["?", "x"]], NO_AC) == []
+
+    def test_non_ac_compound_positional(self):
+        got = _unifiers(["f", ["?", "x"], "b"], ["f", "a", ["?", "y"]], NO_AC)
+        assert len(got) == 1
+        s = got[0]
+        assert s["x"] == "a" and s["y"] == "b"
+
+    def test_head_or_arity_mismatch(self):
+        assert _unifiers(["f", ["?", "x"]], ["g", "a"], NO_AC) == []
+        assert _unifiers(["f", ["?", "x"]], ["f", "a", "b"], NO_AC) == []
+
+    def test_agrees_with_f2_unify_on_non_ac(self):
+        from rerum.confluence import unify
+        t1 = ["f", ["?", "x"], ["g", ["?", "y"]]]
+        t2 = ["f", "a", ["g", "b"]]
+        syn = unify(t1, t2)
+        ac = _unifiers(t1, t2, NO_AC)
+        assert len(ac) == 1 and ac[0] == syn

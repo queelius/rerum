@@ -72,3 +72,68 @@ def _hilbert_basis(a: List[int], b: List[int]):
         return all(p <= q for p, q in zip(x, y))
 
     return [v for v in found if not any(u != v and leq(u, v) for u in found)]
+
+
+def _bind(subst: Subst, name: str, value) -> Optional[Subst]:
+    """Add ``name -> value`` (resolved) with an occurs-check, kept fully-applied.
+    Returns the new Subst or None on occurs-check failure."""
+    if _is_var(value) and value[1] == name:
+        return subst
+    if _occurs(name, value):
+        return None
+    one = {name: value}
+    out = {k: apply_subst(one, v) for k, v in subst.items()}
+    out[name] = value
+    return out
+
+
+def ac_unify(t1, t2, theory, *, bindings: Optional[Subst] = None,
+             budget: Optional[UnifyBudget] = None) -> Iterator[Subst]:
+    """Yield each AC-unifier of ``t1`` and ``t2`` modulo the AC operators in
+    ``theory``. Multi-valued and lazy. Pure AC. Complete within ``budget``,
+    not necessarily minimal."""
+    if bindings is None:
+        bindings = {}
+    if _unsupported(t1) or _unsupported(t2):
+        raise UnsupportedPattern(f"cannot ac-unify pattern form: {t1!r} ~ {t2!r}")
+    a = apply_subst(bindings, t1)
+    b = apply_subst(bindings, t2)
+
+    if _is_var(a):
+        s = _bind(bindings, a[1], b)
+        if s is not None:
+            yield s
+        return
+    if _is_var(b):
+        s = _bind(bindings, b[1], a)
+        if s is not None:
+            yield s
+        return
+    if not compound(a) and not compound(b):
+        if a == b:
+            yield bindings
+        return
+    if compound(a) and compound(b) and a[0] == b[0] and theory.is_ac(a[0]):
+        yield from _ac_unify_node(a, b, theory, bindings, budget)
+        return
+    if compound(a) and compound(b) and a[0] == b[0] and len(a) == len(b):
+        yield from _unify_positional(a[1:], b[1:], theory, bindings, budget)
+        return
+    return  # head/arity clash, or atom vs compound
+
+
+def _unify_positional(xs, ys, theory, bindings, budget) -> Iterator[Subst]:
+    """Unify two argument lists in lockstep, MULTI-VALUED (a child may be an AC
+    node). The two-sided analog of acmatch._match_positional."""
+    if not xs:
+        if not ys:
+            yield bindings
+        return
+    if not ys:
+        return
+    for s in ac_unify(xs[0], ys[0], theory, bindings=bindings, budget=budget):
+        yield from _unify_positional(xs[1:], ys[1:], theory, s, budget)
+
+
+def _ac_unify_node(a, b, theory, bindings, budget) -> Iterator[Subst]:
+    return iter(())  # Stickel core: implemented in Tasks 3-4
